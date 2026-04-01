@@ -124,7 +124,7 @@ final class AppState {
     private var audioLevelTimer: Timer?
 
     private func startAudioLevelPolling() {
-        audioLevelTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        audioLevelTimer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
                 self.audioLevel = await self.audioCapture.audioLevel

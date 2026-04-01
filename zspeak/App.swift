@@ -31,6 +31,12 @@ final class OverlayController {
         model.audioLevel = appState.audioLevel
         model.isModelReady = appState.isModelReady
 
+        // Atualiza ícone/nome do app em foco
+        if let app = TextInserter.previousApp {
+            model.focusedAppName = app.localizedName ?? ""
+            model.focusedAppIcon = app.icon
+        }
+
         switch appState.state {
         case .recording, .processing:
             if !isShowing {

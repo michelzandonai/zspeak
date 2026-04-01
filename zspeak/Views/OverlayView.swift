@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Modelo observável do overlay — atualizado in-place para evitar recriação de views
 @Observable
@@ -7,87 +8,68 @@ final class OverlayModel {
     var state: AppState.RecordingState = .idle
     var audioLevel: Float = 0
     var isModelReady: Bool = false
+    var focusedAppName: String = ""
+    var focusedAppIcon: NSImage?
 }
 
-/// Overlay visual de feedback durante gravação e transcrição
+/// Overlay visual estilo Spokenly — barra escura com waveform reativa
 struct OverlayView: View {
     let model: OverlayModel
 
     private var state: AppState.RecordingState { model.state }
     private var audioLevel: Float { model.audioLevel }
-    private var isModelReady: Bool { model.isModelReady }
-
-    // Animação do pulsing
-    @State private var isPulsing = false
 
     var body: some View {
-        HStack(spacing: 14) {
-            // Indicador de estado (círculo colorido)
-            statusIndicator
-
-            // Texto + barras de áudio
-            VStack(alignment: .leading, spacing: 4) {
-                Text(statusText)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white)
-
-                if state == .recording {
-                    AudioBarsView(level: audioLevel)
-                        .frame(height: 16)
+        VStack(spacing: 8) {
+            // Linha superior: app em foco + branding (estilo Spokenly)
+            HStack(spacing: 8) {
+                // Ícone + nome do app em foco
+                if let icon = model.focusedAppIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 20, height: 20)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
-            }
 
-            Spacer()
+                Text(model.focusedAppName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .lineLimit(1)
 
-            // Atalho de teclado como dica
-            if state == .recording {
-                Text("⌨ para parar")
-                    .font(.system(size: 10))
+                Spacer()
+
+                // Branding
+                Image(systemName: "waveform")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+                Text("zspeak")
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
             }
+
+            // Waveform estilo Spokenly
+            if state == .recording {
+                WaveformView(model: model)
+                    .frame(height: 20)
+            } else if state == .processing {
+                // Animação de progresso durante transcrição
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white.opacity(0.6))
+                    .frame(height: 20)
+            }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
-        .frame(width: 280, height: 72)
-        .background(.ultraThinMaterial.opacity(0.95))
-        .background(Color.black.opacity(0.6))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(width: 320)
+        .background(.black.opacity(0.85))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(.white.opacity(0.08), lineWidth: 1)
         )
-        .onChange(of: state) { _, newState in
-            isPulsing = newState == .recording
-        }
+        .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
     }
-
-    // MARK: - Indicador de estado
-
-    @ViewBuilder
-    private var statusIndicator: some View {
-        switch state {
-        case .recording:
-            Circle()
-                .fill(.red)
-                .frame(width: 14, height: 14)
-                .scaleEffect(isPulsing ? 1.3 : 1.0)
-                .opacity(isPulsing ? 0.7 : 1.0)
-                .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: isPulsing)
-                .onAppear { isPulsing = true }
-
-        case .processing:
-            ProgressView()
-                .controlSize(.small)
-                .tint(.yellow)
-
-        case .idle:
-            Circle()
-                .fill(.green)
-                .frame(width: 14, height: 14)
-        }
-    }
-
-    // MARK: - Texto de status
 
     private var statusText: String {
         switch state {
@@ -98,44 +80,57 @@ struct OverlayView: View {
     }
 }
 
-/// Barras animadas de nível de áudio
-struct AudioBarsView: View {
-    let level: Float
+/// Waveform estilo Spokenly — barras que rolam da direita pra esquerda como áudio gravando
+struct WaveformView: View {
+    let model: OverlayModel
 
-    private let barCount = 20
+    private let barCount = 30
+    private let barWidth: CGFloat = 4.5
+    private let barSpacing: CGFloat = 2.5
+    private let minHeight: CGFloat = 3
+    private let maxHeight: CGFloat = 20
+
+    @State private var history: [Float] = []
+    @State private var timer: Timer?
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: barSpacing) {
             ForEach(0..<barCount, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(barColor(for: index))
-                    .frame(width: 4, height: barHeight(for: index))
+                RoundedRectangle(cornerRadius: barWidth / 2)
+                    .fill(.white.opacity(barOpacity(for: index)))
+                    .frame(width: barWidth, height: barHeight(for: index))
             }
+        }
+        .onAppear {
+            history = Array(repeating: 0, count: barCount)
+            // Timer a ~80 FPS — lê level direto do model (sempre atualizado)
+            timer = Timer.scheduledTimer(withTimeInterval: 0.022, repeats: true) { [weak model] _ in
+                Task { @MainActor in
+                    guard let model else { return }
+                    let amplified = min(model.audioLevel * 3.5, 1.0)
+                    history.append(amplified)
+                    if history.count > barCount {
+                        history.removeFirst(history.count - barCount)
+                    }
+                }
+            }
+        }
+        .onDisappear {
+            timer?.invalidate()
+            timer = nil
         }
     }
 
     private func barHeight(for index: Int) -> CGFloat {
-        let normalizedIndex = Float(index) / Float(barCount)
-        let threshold = level * 1.2
-
-        if normalizedIndex < threshold {
-            // Barras ativas - altura baseada no nível
-            let height = CGFloat(level) * 16 + CGFloat.random(in: 2...6)
-            return min(max(height, 3), 16)
-        } else {
-            return 3 // Barras inativas
-        }
+        guard index < history.count else { return minHeight }
+        let value = CGFloat(history[index])
+        return minHeight + value * (maxHeight - minHeight)
     }
 
-    private func barColor(for index: Int) -> Color {
-        let normalizedIndex = Float(index) / Float(barCount)
-        if normalizedIndex < level * 0.6 {
-            return .green
-        } else if normalizedIndex < level * 0.85 {
-            return .yellow
-        } else if normalizedIndex < level {
-            return .red
-        }
-        return .white.opacity(0.2)
+    private func barOpacity(for index: Int) -> Double {
+        guard index < history.count else { return 0.2 }
+        let recency = Double(index) / Double(max(barCount - 1, 1))
+        let value = Double(history[index])
+        return 0.25 + recency * 0.3 + value * 0.45
     }
 }

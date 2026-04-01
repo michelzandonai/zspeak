@@ -34,8 +34,8 @@ actor AudioCapture {
                     sum += channelData[i] * channelData[i]
                 }
                 let rms = sqrt(sum / Float(frameLength))
-                // Escalar para 0-1 (microfone tipicamente produz RMS de 0 a 0.3)
-                let scaledLevel = min(rms * 5.0, 1.0)
+                // Escalar para 0-1 com alta sensibilidade (voz normal ~0.02-0.1 RMS)
+                let scaledLevel = min(rms * 12.0, 1.0)
                 Task {
                     await self.updateAudioLevel(scaledLevel)
                 }
