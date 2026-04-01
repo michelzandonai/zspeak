@@ -1,6 +1,40 @@
 import SwiftUI
+import AppKit
 import KeyboardShortcuts
 import LaunchAtLogin
+
+/// Controlador da janela de configurações (abre via NSWindow programaticamente)
+@MainActor
+final class SettingsWindowController {
+    static let shared = SettingsWindowController()
+    private var window: NSWindow?
+
+    func show(appState: AppState) {
+        if let window = window, window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let settingsView = SettingsView(appState: appState)
+        let hostingView = NSHostingView(rootView: settingsView)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 350),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "zspeak — Configurações"
+        window.contentView = hostingView
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        self.window = window
+    }
+}
 
 /// Tela de configurações do zspeak
 struct SettingsView: View {

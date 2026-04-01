@@ -5,12 +5,21 @@ import CoreGraphics
 /// Requer permissão de Acessibilidade (System Settings > Privacy > Accessibility)
 struct TextInserter {
 
+    /// App que estava em foco antes de iniciar a gravação
+    @MainActor static var previousApp: NSRunningApplication?
+
+    /// Salva o app em foco atual (chamar antes de começar gravação)
+    @MainActor static func saveFocusedApp() {
+        previousApp = NSWorkspace.shared.frontmostApplication
+    }
+
     /// Insere texto no app em foco
     /// 1. Salva clipboard atual
     /// 2. Coloca texto novo no clipboard
-    /// 3. Simula Cmd+V
-    /// 4. Restaura clipboard anterior após delay
-    func insert(_ text: String) {
+    /// 3. Reativa o app que estava em foco
+    /// 4. Simula Cmd+V
+    /// 5. Restaura clipboard anterior após delay
+    @MainActor func insert(_ text: String) {
         let pasteboard = NSPasteboard.general
 
         // Salva conteúdo anterior do clipboard
@@ -20,14 +29,19 @@ struct TextInserter {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        // Delay para o clipboard propagar
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        // Reativa o app que estava em foco antes da gravação
+        if let app = Self.previousApp {
+            app.activate()
+        }
+
+        // Delay para o app reativar e clipboard propagar
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             // Simula Cmd+V
             Self.simulatePaste()
 
             // Restaura clipboard anterior após delay
             if let previous = previousContents {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     pasteboard.clearContents()
                     pasteboard.setString(previous, forType: .string)
                 }

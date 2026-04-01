@@ -3,7 +3,7 @@ import KeyboardShortcuts
 /// Define os atalhos de teclado globais do zspeak
 extension KeyboardShortcuts.Name {
     /// Atalho para alternar gravação (toggle on/off)
-    static let toggleRecording = Self("toggleRecording")
+    static let toggleRecording = Self("toggleRecording", default: .init(.space, modifiers: [.command, .shift]))
 }
 
 /// Gerencia o registro de hotkeys globais

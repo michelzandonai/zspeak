@@ -48,8 +48,8 @@ struct MenuBarView: View {
         }
 
         // Configurações e sair
-        SettingsLink {
-            Text("Configurações...")
+        Button("Configurações...") {
+            SettingsWindowController.shared.show(appState: appState)
         }
         .keyboardShortcut(",", modifiers: [.command])
 
