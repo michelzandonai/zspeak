@@ -11,8 +11,13 @@ final class SettingsWindowController {
 
     func show(appState: AppState, microphoneManager: MicrophoneManager) {
         if let window = window, window.isVisible {
+            window.level = .floating
             window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
+            // Voltar nível normal após aparecer (para não ficar always-on-top)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                window.level = .normal
+            }
             return
         }
 
@@ -29,8 +34,13 @@ final class SettingsWindowController {
         window.contentView = hostingView
         window.center()
         window.isReleasedWhenClosed = false
+        window.level = .floating
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
+        // Voltar nível normal após aparecer
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            window.level = .normal
+        }
 
         self.window = window
     }
