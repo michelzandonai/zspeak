@@ -58,6 +58,29 @@ final class AppState {
         }
     }
 
+    /// Inicia gravação se estiver idle — usado pelo modo Hold
+    func startRecordingIfIdle() {
+        guard state == .idle else { return }
+        startRecording()
+    }
+
+    /// Para gravação se estiver gravando — usado pelo modo Hold
+    func stopRecordingIfActive() {
+        guard state == .recording else { return }
+        stopRecording()
+    }
+
+    /// Cancela gravação em andamento — usado pelo Escape
+    func cancelRecording() {
+        guard state == .recording else { return }
+        print("[zspeak] Gravação cancelada pelo usuário")
+        stopAudioLevelPolling()
+        Task {
+            _ = await audioCapture.stop()
+            state = .idle
+        }
+    }
+
     // MARK: - Gravacao
 
     private func startRecording() {

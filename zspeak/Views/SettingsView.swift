@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import KeyboardShortcuts
 import LaunchAtLogin
 
 /// Controlador da janela de configurações (abre via NSWindow programaticamente)
@@ -9,7 +8,7 @@ final class SettingsWindowController {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
 
-    func show(appState: AppState, microphoneManager: MicrophoneManager) {
+    func show(appState: AppState, microphoneManager: MicrophoneManager, activationKeyManager: ActivationKeyManager) {
         if let window = window, window.isVisible {
             window.level = .floating
             window.makeKeyAndOrderFront(nil)
@@ -21,7 +20,7 @@ final class SettingsWindowController {
             return
         }
 
-        let settingsView = SettingsView(appState: appState, microphoneManager: microphoneManager)
+        let settingsView = SettingsView(appState: appState, microphoneManager: microphoneManager, activationKeyManager: activationKeyManager)
         let hostingView = NSHostingView(rootView: settingsView)
 
         let window = NSWindow(
@@ -50,15 +49,41 @@ final class SettingsWindowController {
 struct SettingsView: View {
     let appState: AppState
     @Bindable var microphoneManager: MicrophoneManager
+    @Bindable var activationKeyManager: ActivationKeyManager
 
     var body: some View {
         Form {
-            // Seção: Atalho de teclado
-            Section("Atalho de Teclado") {
-                KeyboardShortcuts.Recorder("Atalho de gravação:", name: .toggleRecording)
-                Text("Pressione o atalho para iniciar/parar a gravação")
+            // Seção: Keyboard Controls
+            Section("Keyboard Controls") {
+                HStack {
+                    Text("Activation Keys")
+                    Spacer()
+                    Picker("", selection: $activationKeyManager.selectedKey) {
+                        ForEach(ActivationKey.allCases) { key in
+                            Text(key.rawValue).tag(key)
+                        }
+                    }
+                    .frame(width: 180)
+                }
+
+                HStack {
+                    Spacer()
+                    Picker("", selection: $activationKeyManager.activationMode) {
+                        ForEach(ActivationMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 250)
+                }
+
+                Text("Configure shortcut keys and how they activate: Toggle (tap to start/stop), Hold (record while pressed), Double Tap (tap twice quickly).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Toggle(isOn: $activationKeyManager.escapeToCancel) {
+                    Label("Use Escape to cancel recording", systemImage: "escape")
+                }
             }
 
             // Seção: Geral

@@ -3,6 +3,7 @@ import SwiftUI
 /// Menu do ícone no menu bar
 struct MenuBarView: View {
     let appState: AppState
+    let activationKeyManager: ActivationKeyManager
 
     var body: some View {
         // Status atual
@@ -49,7 +50,7 @@ struct MenuBarView: View {
 
         // Configurações e sair
         Button("Configurações...") {
-            SettingsWindowController.shared.show(appState: appState, microphoneManager: appState.microphoneManager)
+            SettingsWindowController.shared.show(appState: appState, microphoneManager: appState.microphoneManager, activationKeyManager: activationKeyManager)
         }
         .keyboardShortcut(",", modifiers: [.command])
 

@@ -1,5 +1,4 @@
 import SwiftUI
-import AVFoundation
 
 /// Gerencia o overlay flutuante — precisa ser classe para evitar problemas com struct App
 @MainActor
@@ -64,14 +63,15 @@ final class OverlayController {
 struct ZSpeakApp: App {
 
     @State private var appState = AppState()
-    private let hotkeyManager = HotkeyManager()
+    private let activationKeyManager = ActivationKeyManager()
+    private let hotkeyManager: HotkeyManager
     /// Retém referência estática para evitar desalocação por ARC
     nonisolated(unsafe) private static var overlayController: OverlayController?
 
     var body: some Scene {
         // App vive exclusivamente no menu bar (sem janela principal)
         MenuBarExtra {
-            MenuBarView(appState: appState)
+            MenuBarView(appState: appState, activationKeyManager: activationKeyManager)
         } label: {
             Image(systemName: menuBarIcon)
                 .symbolRenderingMode(.palette)
@@ -80,7 +80,7 @@ struct ZSpeakApp: App {
         // Janela de configurações
         Settings {
             let mgr = appState.microphoneManager
-            SettingsView(appState: appState, microphoneManager: mgr)
+            SettingsView(appState: appState, microphoneManager: mgr, activationKeyManager: activationKeyManager)
         }
     }
 
@@ -97,15 +97,20 @@ struct ZSpeakApp: App {
     }
 
     init() {
+        let keyManager = activationKeyManager
+        self.hotkeyManager = HotkeyManager(activationKeyManager: keyManager)
         let state = appState
 
         // Solicita permissão de Accessibility no startup (abre prompt do sistema)
         TextInserter.requestAccessibilityPermission()
 
-        // Configura hotkey global
-        hotkeyManager.setup {
-            state.toggleRecording()
-        }
+        // Configura hotkey global com 4 callbacks para suportar toggle/hold/doubleTap
+        hotkeyManager.setup(
+            onToggle: { state.toggleRecording() },
+            onStartRecording: { state.startRecordingIfIdle() },
+            onStopRecording: { state.stopRecordingIfActive() },
+            onCancelRecording: { state.cancelRecording() }
+        )
 
         // Carrega modelos no startup
         Task {
