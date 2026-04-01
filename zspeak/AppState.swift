@@ -22,6 +22,7 @@ final class AppState {
 
     // MARK: - Dependencias
 
+    let microphoneManager = MicrophoneManager()
     private let audioCapture = AudioCapture()
     private let vadManager = VADManagerWrapper()
     private let transcriber = Transcriber()
@@ -69,7 +70,10 @@ final class AppState {
 
         Task {
             do {
-                try await audioCapture.start()
+                let preferredDevice = microphoneManager.getPreferredDevice()
+                let deviceUID = preferredDevice?.uniqueID
+                try await audioCapture.start(deviceUID: deviceUID)
+                microphoneManager.activeMicrophoneID = deviceUID
             } catch {
                 state = .idle
                 errorMessage = "Erro ao iniciar gravacao: \(error.localizedDescription)"

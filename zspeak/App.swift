@@ -38,12 +38,8 @@ final class OverlayController {
             model.focusedAppIcon = app.icon
         }
 
-        // Nome do microfone ativo
-        if model.microphoneName.isEmpty {
-            if let device = AVCaptureDevice.default(for: .audio) {
-                model.microphoneName = device.localizedName
-            }
-        }
+        // Nome do microfone ativo (do MicrophoneManager ou default)
+        model.microphoneName = appState.microphoneManager.activeMicrophoneName
 
         switch appState.state {
         case .recording, .processing:
@@ -83,7 +79,8 @@ struct ZSpeakApp: App {
 
         // Janela de configurações
         Settings {
-            SettingsView(appState: appState)
+            let mgr = appState.microphoneManager
+            SettingsView(appState: appState, microphoneManager: mgr)
         }
     }
 

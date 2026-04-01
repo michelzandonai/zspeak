@@ -49,7 +49,7 @@ struct MenuBarView: View {
 
         // Configurações e sair
         Button("Configurações...") {
-            SettingsWindowController.shared.show(appState: appState)
+            SettingsWindowController.shared.show(appState: appState, microphoneManager: appState.microphoneManager)
         }
         .keyboardShortcut(",", modifiers: [.command])
 

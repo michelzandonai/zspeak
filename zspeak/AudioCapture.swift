@@ -1,5 +1,11 @@
 import AVFoundation
+import CoreAudio
 import FluidAudio
+
+enum AudioCaptureError: LocalizedError {
+    case deviceNotFound
+    var errorDescription: String? { "Dispositivo de áudio não encontrado" }
+}
 
 /// Captura de audio do microfone via AVAudioEngine
 /// Converte para 16kHz mono float32 (formato esperado pelo Parakeet TDT)
@@ -13,11 +19,16 @@ actor AudioCapture {
 
     var isCapturing: Bool { isRunning }
 
-    /// Inicia captura do microfone
-    func start() async throws {
+    /// Inicia captura do microfone, opcionalmente usando um device específico pelo uniqueID
+    func start(deviceUID: String? = nil) async throws {
         guard !isRunning else { return }
 
         samples.removeAll()
+
+        // Configurar device específico antes de acessar inputNode
+        if let uid = deviceUID {
+            try setInputDevice(uniqueID: uid)
+        }
 
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
@@ -75,5 +86,60 @@ actor AudioCapture {
     /// Acumula amostras no buffer (chamado pelo tap callback)
     private func appendSamples(_ newSamples: [Float]) {
         samples.append(contentsOf: newSamples)
+    }
+
+    // MARK: - Seleção de device
+
+    /// Configura o AVAudioEngine para usar um device de input específico
+    private func setInputDevice(uniqueID: String) throws {
+        let audioUnit = engine.inputNode.audioUnit!
+        var deviceID = try findAudioDeviceID(for: uniqueID)
+        let size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            size
+        )
+        guard status == noErr else {
+            throw AudioCaptureError.deviceNotFound
+        }
+    }
+
+    /// Busca o AudioDeviceID do CoreAudio pelo uniqueID do AVCaptureDevice
+    private func findAudioDeviceID(for uniqueID: String) throws -> AudioDeviceID {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress, 0, nil, &dataSize
+        )
+        let deviceCount = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var devices = [AudioDeviceID](repeating: 0, count: deviceCount)
+        AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress, 0, nil, &dataSize, &devices
+        )
+
+        for deviceID in devices {
+            var uid: CFString = "" as CFString
+            var uidSize = UInt32(MemoryLayout<CFString>.size)
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, &uid)
+            if uid as String == uniqueID {
+                return deviceID
+            }
+        }
+        throw AudioCaptureError.deviceNotFound
     }
 }
