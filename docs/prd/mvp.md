@@ -69,6 +69,13 @@ App de menubar que:
   - **Gravando**: ícone vermelho — captando áudio
   - **Processando**: ícone amarelo — transcrevendo
 - App escondido do Dock (vive apenas no menu bar)
+- **Overlay flutuante durante gravação** (referência visual: Spokenly)
+  - NSPanel non-activating — não rouba foco do app ativo
+  - Waveform com barras verticais rolando da direita para a esquerda
+  - Barras reagem ao volume da voz em tempo real (sensibilidade alta, scaling 12x)
+  - Exibe ícone e nome do app em foco (capturado antes da gravação)
+  - Branding "zspeak" no canto direito
+  - Animação a ~45 FPS via Timer (22ms interval)
 
 ### 5.5 Detecção de atividade vocal (P0 — Must Have)
 

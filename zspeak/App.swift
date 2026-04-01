@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 /// Gerencia o overlay flutuante — precisa ser classe para evitar problemas com struct App
 @MainActor
@@ -35,6 +36,13 @@ final class OverlayController {
         if let app = TextInserter.previousApp {
             model.focusedAppName = app.localizedName ?? ""
             model.focusedAppIcon = app.icon
+        }
+
+        // Nome do microfone ativo
+        if model.microphoneName.isEmpty {
+            if let device = AVCaptureDevice.default(for: .audio) {
+                model.microphoneName = device.localizedName
+            }
         }
 
         switch appState.state {

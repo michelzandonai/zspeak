@@ -10,6 +10,7 @@ final class OverlayModel {
     var isModelReady: Bool = false
     var focusedAppName: String = ""
     var focusedAppIcon: NSImage?
+    var microphoneName: String = ""
 }
 
 /// Overlay visual estilo Spokenly — barra escura com waveform reativa
@@ -51,6 +52,19 @@ struct OverlayView: View {
             if state == .recording {
                 WaveformView(model: model)
                     .frame(height: 20)
+
+                // Nome do microfone
+                if !model.microphoneName.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "mic.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.white.opacity(0.35))
+                        Text(model.microphoneName)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .lineLimit(1)
+                    }
+                }
             } else if state == .processing {
                 // Animação de progresso durante transcrição
                 ProgressView()
