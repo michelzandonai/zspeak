@@ -64,6 +64,7 @@ struct ZSpeakApp: App {
 
     @State private var appState = AppState()
     private let activationKeyManager = ActivationKeyManager()
+    private let accessibilityManager = AccessibilityManager()
     private let hotkeyManager: HotkeyManager
     /// Retém referência estática para evitar desalocação por ARC
     nonisolated(unsafe) private static var overlayController: OverlayController?
@@ -71,7 +72,7 @@ struct ZSpeakApp: App {
     var body: some Scene {
         // App vive exclusivamente no menu bar (sem janela principal)
         MenuBarExtra {
-            MenuBarView(appState: appState, activationKeyManager: activationKeyManager)
+            MenuBarView(appState: appState, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager)
         } label: {
             Image(systemName: menuBarIcon)
                 .symbolRenderingMode(.palette)
@@ -80,7 +81,7 @@ struct ZSpeakApp: App {
         // Janela de configurações
         Settings {
             let mgr = appState.microphoneManager
-            SettingsView(appState: appState, microphoneManager: mgr, activationKeyManager: activationKeyManager)
+            SettingsView(appState: appState, microphoneManager: mgr, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager)
         }
     }
 
@@ -101,8 +102,23 @@ struct ZSpeakApp: App {
         self.hotkeyManager = HotkeyManager(activationKeyManager: keyManager)
         let state = appState
 
+        // Sincroniza estado inicial de Accessibility com AppState
+        state.accessibilityGranted = accessibilityManager.isGranted
+
+        // Configura callbacks para manter AppState sincronizado com permissão de Accessibility
+        let hotkey = hotkeyManager
+        accessibilityManager.onPermissionGranted = { [hotkey] in
+            state.accessibilityGranted = true
+            hotkey.recreateEventTap()
+        }
+        accessibilityManager.onPermissionRevoked = {
+            state.accessibilityGranted = false
+        }
+
         // Solicita permissão de Accessibility no startup (abre prompt do sistema)
-        TextInserter.requestAccessibilityPermission()
+        if !accessibilityManager.isGranted {
+            accessibilityManager.requestPermission()
+        }
 
         // Configura hotkey global com 4 callbacks para suportar toggle/hold/doubleTap
         hotkeyManager.setup(

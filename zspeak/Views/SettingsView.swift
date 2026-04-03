@@ -8,7 +8,7 @@ final class SettingsWindowController {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
 
-    func show(appState: AppState, microphoneManager: MicrophoneManager, activationKeyManager: ActivationKeyManager) {
+    func show(appState: AppState, microphoneManager: MicrophoneManager, activationKeyManager: ActivationKeyManager, accessibilityManager: AccessibilityManager) {
         if let window = window, window.isVisible {
             window.level = .floating
             window.makeKeyAndOrderFront(nil)
@@ -20,7 +20,7 @@ final class SettingsWindowController {
             return
         }
 
-        let settingsView = SettingsView(appState: appState, microphoneManager: microphoneManager, activationKeyManager: activationKeyManager)
+        let settingsView = SettingsView(appState: appState, microphoneManager: microphoneManager, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager)
         let hostingView = NSHostingView(rootView: settingsView)
 
         let window = NSWindow(
@@ -50,6 +50,7 @@ struct SettingsView: View {
     let appState: AppState
     @Bindable var microphoneManager: MicrophoneManager
     @Bindable var activationKeyManager: ActivationKeyManager
+    var accessibilityManager: AccessibilityManager
 
     var body: some View {
         Form {
@@ -139,25 +140,63 @@ struct SettingsView: View {
             // Seção: Permissões
             Section("Permissões") {
                 HStack {
-                    Image(systemName: TextInserter.hasAccessibilityPermission
+                    Image(systemName: accessibilityManager.isGranted
                           ? "checkmark.circle.fill"
                           : "exclamationmark.triangle.fill")
-                        .foregroundStyle(TextInserter.hasAccessibilityPermission ? .green : .orange)
+                        .foregroundStyle(accessibilityManager.isGranted ? .green : .orange)
 
                     Text("Acessibilidade")
 
                     Spacer()
 
-                    if !TextInserter.hasAccessibilityPermission {
-                        Button("Ativar") {
-                            TextInserter.requestAccessibilityPermission()
+                    if accessibilityManager.isGranted {
+                        Text("Ativo")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                    } else {
+                        Button("Abrir Configurações") {
+                            accessibilityManager.openSystemSettings()
+                        }
+                        Button("Solicitar Permissão") {
+                            accessibilityManager.requestPermission()
                         }
                     }
                 }
 
-                Text("Necessário para inserir texto no app ativo")
-                    .font(.caption)
+                if !accessibilityManager.isGranted {
+                    Text("Permissão necessária para inserir texto no app ativo.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Como ativar:")
+                            .font(.caption)
+                            .bold()
+                        Text("1. Clique em 'Abrir Configurações' acima")
+                            .font(.caption)
+                        Text("2. Encontre 'zspeak' na lista")
+                            .font(.caption)
+                        Text("3. Ative o toggle")
+                            .font(.caption)
+                        Text("Se zspeak não aparece: clique '+', navegue até /Applications/zspeak.app")
+                            .font(.caption)
+                            .italic()
+                    }
                     .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Resolução de problemas:")
+                            .font(.caption)
+                            .bold()
+                        Text("Se o toggle está ativo mas aqui mostra negado: remova zspeak da lista, adicione novamente e reinicie o app.")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(.secondary)
+                } else {
+                    Text("Necessário para inserir texto no app ativo")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             // Seção: Sobre

@@ -22,6 +22,9 @@ final class HotkeyManager {
     private var runLoopSource: CFRunLoopSource?
     private let activationKeyManager: ActivationKeyManager
 
+    /// Indica se o event tap está ativo e monitorando teclas
+    private(set) var isEventTapActive: Bool = false
+
     // Callbacks
     private var onToggle: (@MainActor () -> Void)?
     private var onStartRecording: (@MainActor () -> Void)?
@@ -58,10 +61,22 @@ final class HotkeyManager {
         createEventTap()
     }
 
+    /// Recria o event tap (usado quando a permissão de Accessibility é concedida após o startup)
+    func recreateEventTap() {
+        createEventTap()
+    }
+
     // MARK: - CGEvent Tap
 
     private func createEventTap() {
         removeEventTap()
+
+        // Verificar permissão de Accessibility antes de tentar criar o tap
+        guard AXIsProcessTrusted() else {
+            print("[zspeak] ❌ CGEvent tap não criado — AXIsProcessTrusted() retornou false")
+            isEventTapActive = false
+            return
+        }
 
         // Captura flagsChanged (modificadores) e keyDown (para Escape)
         let eventMask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
@@ -80,6 +95,7 @@ final class HotkeyManager {
 
                 // Se o tap for desabilitado pelo sistema, reabilitar
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    print("[zspeak] ⚠️ Event tap desabilitado pelo sistema (tipo: \(type.rawValue)), reabilitando...")
                     CGEvent.tapEnable(tap: manager.eventTap!, enable: true)
                     return Unmanaged.passUnretained(event)
                 }
@@ -89,7 +105,8 @@ final class HotkeyManager {
             },
             userInfo: refcon
         ) else {
-            print("[zspeak] Falha ao criar CGEvent tap — verifique permissão de Accessibility")
+            print("[zspeak] ❌ CGEvent tap falhou — sem permissão de Accessibility")
+            isEventTapActive = false
             return
         }
 
@@ -97,6 +114,7 @@ final class HotkeyManager {
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        isEventTapActive = true
         print("[zspeak] CGEvent tap ativo")
     }
 
@@ -107,8 +125,10 @@ final class HotkeyManager {
         }
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
             eventTap = nil
         }
+        isEventTapActive = false
     }
 
     // MARK: - Event Handling (chamado da callback C — NÃO é @MainActor)

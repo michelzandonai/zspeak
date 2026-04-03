@@ -22,6 +22,8 @@
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>zspeak precisa de permissão de Acessibilidade para inserir texto transcrito no app ativo via atalho de teclado.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>zspeak precisa de acesso ao microfone para transcrever sua voz em texto.</string>
 </dict>

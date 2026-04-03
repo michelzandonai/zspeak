@@ -4,6 +4,7 @@ import SwiftUI
 struct MenuBarView: View {
     let appState: AppState
     let activationKeyManager: ActivationKeyManager
+    let accessibilityManager: AccessibilityManager
 
     var body: some View {
         // Status atual
@@ -15,6 +16,16 @@ struct MenuBarView: View {
         }
         .padding(.horizontal)
 
+        // Aviso de acessibilidade
+        if !accessibilityManager.isGranted {
+            Label("Acessibilidade necessária", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+                .font(.caption)
+            Button("Configurar Acessibilidade...") {
+                accessibilityManager.openSystemSettings()
+            }
+        }
+
         Divider()
 
         // Toggle de gravação
@@ -22,7 +33,7 @@ struct MenuBarView: View {
             appState.toggleRecording()
         }
         .keyboardShortcut("r", modifiers: [.command])
-        .disabled(appState.state == .processing || !appState.isModelReady)
+        .disabled(appState.state == .processing || !appState.isModelReady || !accessibilityManager.isGranted)
 
         Divider()
 
@@ -50,7 +61,7 @@ struct MenuBarView: View {
 
         // Configurações e sair
         Button("Configurações...") {
-            SettingsWindowController.shared.show(appState: appState, microphoneManager: appState.microphoneManager, activationKeyManager: activationKeyManager)
+            SettingsWindowController.shared.show(appState: appState, microphoneManager: appState.microphoneManager, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager)
         }
         .keyboardShortcut(",", modifiers: [.command])
 
@@ -62,13 +73,16 @@ struct MenuBarView: View {
 
     private var statusColor: Color {
         switch appState.state {
-        case .idle: return appState.isModelReady ? .green : .gray
+        case .idle:
+            if !accessibilityManager.isGranted { return .orange }
+            return appState.isModelReady ? .green : .gray
         case .recording: return .red
         case .processing: return .yellow
         }
     }
 
     private var statusText: String {
+        if !accessibilityManager.isGranted { return "Acessibilidade necessária" }
         if !appState.isModelReady { return "Carregando modelo..." }
         switch appState.state {
         case .idle: return "Pronto"
