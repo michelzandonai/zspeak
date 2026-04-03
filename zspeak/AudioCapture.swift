@@ -13,14 +13,48 @@ enum AudioCaptureError: LocalizedError {
     }
 }
 
+/// Buffer thread-safe para acumular amostras de áudio do tap callback
+/// Necessário porque o tap roda na audio render thread, fora do actor
+final class SynchronizedBuffer: @unchecked Sendable {
+    private var samples: [Float] = []
+    private let lock = NSLock()
+
+    func append(_ newSamples: [Float]) {
+        lock.lock()
+        samples.append(contentsOf: newSamples)
+        lock.unlock()
+    }
+
+    func drain() -> [Float] {
+        lock.lock()
+        let result = samples
+        samples.removeAll()
+        lock.unlock()
+        return result
+    }
+
+    func clear() {
+        lock.lock()
+        samples.removeAll()
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return samples.count
+    }
+}
+
 /// Captura de audio do microfone via AVAudioEngine
 /// Converte para 16kHz mono float32 (formato esperado pelo Parakeet TDT)
 actor AudioCapture {
 
     private let engine = AVAudioEngine()
-    private var samples: [Float] = []
+    private let samplesBuffer = SynchronizedBuffer()
     private var isRunning = false
     nonisolated(unsafe) private let converter = AudioConverter()
+    nonisolated(unsafe) private var resampleErrors = 0
     private(set) var audioLevel: Float = 0
     private var configObserver: NSObjectProtocol?
     private var currentDeviceUID: String?
@@ -31,7 +65,8 @@ actor AudioCapture {
     func start(deviceUID: String? = nil) async throws {
         guard !isRunning else { return }
 
-        samples.removeAll()
+        samplesBuffer.clear()
+        resampleErrors = 0
         currentDeviceUID = deviceUID
 
         try startEngine(deviceUID: deviceUID)
@@ -85,11 +120,10 @@ actor AudioCapture {
             // Converte para 16kHz mono float32 usando FluidAudio AudioConverter
             do {
                 let resampled = try self.converter.resampleBuffer(buffer)
-                Task {
-                    await self.appendSamples(resampled)
-                }
+                self.samplesBuffer.append(resampled)
             } catch {
-                print("[zspeak] ❌ Erro no resampleBuffer: \(error)")
+                self.resampleErrors += 1
+                print("[zspeak] ❌ Erro no resampleBuffer (#\(self.resampleErrors)): \(error)")
             }
         }
 
@@ -111,21 +145,18 @@ actor AudioCapture {
         engine.stop()
         isRunning = false
 
-        let result = samples
+        let result = samplesBuffer.drain()
         let duration = Float(result.count) / 16000.0
         print("[zspeak] AudioCapture.stop(): \(result.count) samples (\(String(format: "%.1f", duration))s)")
-        samples.removeAll()
+        if resampleErrors > 0 {
+            print("[zspeak] ⚠️ \(resampleErrors) erros de resample durante gravação")
+        }
         return result
     }
 
     /// Atualiza nível de áudio para feedback visual
     private func updateAudioLevel(_ level: Float) {
         audioLevel = level
-    }
-
-    /// Acumula amostras no buffer (chamado pelo tap callback)
-    private func appendSamples(_ newSamples: [Float]) {
-        samples.append(contentsOf: newSamples)
     }
 
     // MARK: - Observação de configuração do engine

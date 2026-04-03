@@ -19,6 +19,8 @@ final class AppState {
     var isModelReady: Bool = false
     var errorMessage: String?
     var audioLevel: Float = 0
+    /// Estado da permissão de acessibilidade — setado externamente pelo App.swift
+    var accessibilityGranted: Bool = false
 
     // MARK: - Dependencias
 
@@ -27,6 +29,7 @@ final class AppState {
     private let vadManager = VADManagerWrapper()
     private let transcriber = Transcriber()
     private let textInserter = TextInserter()
+    private var recordingTask: Task<Void, Never>?
 
     // MARK: - Inicializacao
 
@@ -75,29 +78,41 @@ final class AppState {
         guard state == .recording else { return }
         print("[zspeak] Gravação cancelada pelo usuário")
         stopAudioLevelPolling()
+        state = .idle
         Task {
+            await recordingTask?.value
+            recordingTask = nil
             _ = await audioCapture.stop()
-            state = .idle
         }
     }
 
     // MARK: - Gravacao
 
     private func startRecording() {
-        guard isModelReady else { return }
+        guard isModelReady else {
+            print("[zspeak] Modelo ainda carregando, ignorando gravação")
+            errorMessage = "Modelo ainda carregando, aguarde..."
+            return
+        }
+        guard accessibilityGranted else {
+            print("[zspeak] Acessibilidade não concedida, bloqueando gravação")
+            errorMessage = "Acessibilidade necessária para inserir texto. Ative em Ajustes do Sistema → Privacidade → Acessibilidade."
+            return
+        }
         state = .recording
         errorMessage = nil
         TextInserter.saveFocusedApp()
         print("[zspeak] Gravação iniciada")
-        startAudioLevelPolling()
 
-        Task {
+        recordingTask = Task {
             do {
                 let preferredDevice = microphoneManager.getPreferredDevice()
                 let deviceUID = preferredDevice?.uniqueID
                 try await audioCapture.start(deviceUID: deviceUID)
                 microphoneManager.activeMicrophoneID = deviceUID
+                startAudioLevelPolling()
             } catch {
+                stopAudioLevelPolling()
                 state = .idle
                 errorMessage = "Erro ao iniciar gravacao: \(error.localizedDescription)"
             }
@@ -110,7 +125,10 @@ final class AppState {
 
         Task {
             do {
-                // Para a captura e obtem as amostras de audio
+                // Aguarda engine iniciar completamente antes de parar
+                await recordingTask?.value
+                recordingTask = nil
+
                 let samples = await audioCapture.stop()
                 print("[zspeak] Amostras capturadas: \(samples.count) (\(Float(samples.count)/16000)s)")
 
@@ -135,7 +153,10 @@ final class AppState {
                 // Insere o texto no app ativo
                 lastTranscription = text
                 print("[zspeak] Inserindo texto no app ativo")
-                textInserter.insert(text)
+                let inserted = textInserter.insert(text)
+                if !inserted {
+                    errorMessage = "Falha ao inserir texto — verifique a permissão de Acessibilidade"
+                }
 
                 state = .idle
             } catch {
