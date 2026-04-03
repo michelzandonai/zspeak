@@ -4,7 +4,13 @@ import FluidAudio
 
 enum AudioCaptureError: LocalizedError {
     case deviceNotFound
-    var errorDescription: String? { "Dispositivo de áudio não encontrado" }
+    case invalidFormat
+    var errorDescription: String? {
+        switch self {
+        case .deviceNotFound: "Dispositivo de áudio não encontrado"
+        case .invalidFormat: "Formato de áudio inválido"
+        }
+    }
 }
 
 /// Captura de audio do microfone via AVAudioEngine
@@ -16,6 +22,8 @@ actor AudioCapture {
     private var isRunning = false
     nonisolated(unsafe) private let converter = AudioConverter()
     private(set) var audioLevel: Float = 0
+    private var configObserver: NSObjectProtocol?
+    private var currentDeviceUID: String?
 
     var isCapturing: Bool { isRunning }
 
@@ -24,17 +32,40 @@ actor AudioCapture {
         guard !isRunning else { return }
 
         samples.removeAll()
+        currentDeviceUID = deviceUID
 
+        try startEngine(deviceUID: deviceUID)
+        observeConfigurationChanges()
+
+        isRunning = true
+        print("[zspeak] AudioCapture iniciado")
+    }
+
+    /// Configura e inicia o engine (usado no start e na reconexão)
+    private func startEngine(deviceUID: String?) throws {
         // Configurar device específico antes de acessar inputNode
         if let uid = deviceUID {
             try setInputDevice(uniqueID: uid)
         }
 
         let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
 
-        // installTap captura audio bruto do microfone
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+        // outputFormat é o formato real que o inputNode entrega ao tap
+        let hwFormat = inputNode.outputFormat(forBus: 0)
+        // Fallback para 44100 se sampleRate for 0 (device ainda sendo configurado)
+        let sampleRate = hwFormat.sampleRate > 0 ? hwFormat.sampleRate : 44100.0
+        print("[zspeak] AudioCapture formato: \(sampleRate)Hz, \(hwFormat.channelCount)ch")
+
+        guard let tapFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 1,
+            interleaved: false
+        ) else {
+            throw AudioCaptureError.invalidFormat
+        }
+
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, _ in
             guard let self else { return }
 
             // Calcular nível de áudio (RMS) para feedback visual
@@ -45,7 +76,6 @@ actor AudioCapture {
                     sum += channelData[i] * channelData[i]
                 }
                 let rms = sqrt(sum / Float(frameLength))
-                // Escalar para 0-1 com alta sensibilidade (voz normal ~0.02-0.1 RMS)
                 let scaledLevel = min(rms * 12.0, 1.0)
                 Task {
                     await self.updateAudioLevel(scaledLevel)
@@ -53,27 +83,37 @@ actor AudioCapture {
             }
 
             // Converte para 16kHz mono float32 usando FluidAudio AudioConverter
-            if let resampled = try? self.converter.resampleBuffer(buffer) {
+            do {
+                let resampled = try self.converter.resampleBuffer(buffer)
                 Task {
                     await self.appendSamples(resampled)
                 }
+            } catch {
+                print("[zspeak] ❌ Erro no resampleBuffer: \(error)")
             }
         }
 
         engine.prepare()
         try engine.start()
-        isRunning = true
     }
 
     /// Para a captura e retorna todas as amostras acumuladas
     func stop() -> [Float] {
         guard isRunning else { return [] }
 
+        // Remover observer de configuração
+        if let observer = configObserver {
+            NotificationCenter.default.removeObserver(observer)
+            configObserver = nil
+        }
+
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRunning = false
 
         let result = samples
+        let duration = Float(result.count) / 16000.0
+        print("[zspeak] AudioCapture.stop(): \(result.count) samples (\(String(format: "%.1f", duration))s)")
         samples.removeAll()
         return result
     }
@@ -86,6 +126,53 @@ actor AudioCapture {
     /// Acumula amostras no buffer (chamado pelo tap callback)
     private func appendSamples(_ newSamples: [Float]) {
         samples.append(contentsOf: newSamples)
+    }
+
+    // MARK: - Observação de configuração do engine
+
+    /// Observa mudanças de configuração do AVAudioEngine (device desconectado, route change, etc.)
+    /// Remove tap, reinstala com formato atualizado e reinicia o engine
+    private func observeConfigurationChanges() {
+        if let observer = configObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self] _ in
+            print("[zspeak] AVAudioEngine configuração mudou")
+            guard let self else { return }
+            Task {
+                await self.handleConfigurationChange()
+            }
+        }
+    }
+
+    /// Tenta reiniciar o engine após mudança de configuração
+    /// Remove o tap e reinstala via startEngine para garantir formato compatível com novo device
+    private func handleConfigurationChange() {
+        guard isRunning else { return }
+
+        print("[zspeak] Config change detectado, reinstalando tap e reiniciando engine...")
+
+        // Parar engine e remover tap existente (seguro mesmo se não há tap)
+        engine.stop()
+        engine.inputNode.removeTap(onBus: 0)
+
+        do {
+            try startEngine(deviceUID: currentDeviceUID)
+            print("[zspeak] Engine reiniciado com sucesso após config change")
+        } catch {
+            print("[zspeak] ❌ Falha ao reiniciar engine: \(error)")
+            isRunning = false
+        }
+    }
+
+    /// Exposto para testes — simula uma mudança de configuração do engine
+    func simulateConfigurationChange() {
+        handleConfigurationChange()
     }
 
     // MARK: - Seleção de device
