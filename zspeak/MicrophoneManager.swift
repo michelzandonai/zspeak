@@ -49,7 +49,10 @@ final class MicrophoneManager {
             mediaType: .audio,
             position: .unspecified
         )
-        let connectedDevices = session.devices
+        // Filtra dispositivos agregados internos do CoreAudio (criados por Teams, Zoom, etc.)
+        let connectedDevices = session.devices.filter { device in
+            !device.uniqueID.hasPrefix("CADefaultDeviceAggregate")
+        }
 
         let savedOrder = UserDefaults.standard.stringArray(forKey: "microphonePriorityOrder") ?? []
 
@@ -85,7 +88,9 @@ final class MicrophoneManager {
     func getPreferredDevice() -> AVCaptureDevice? {
         guard !useSystemDefault else { return nil }
         for mic in microphones where mic.isConnected {
-            return AVCaptureDevice(uniqueID: mic.id)
+            if let device = AVCaptureDevice(uniqueID: mic.id) {
+                return device
+            }
         }
         return nil
     }
