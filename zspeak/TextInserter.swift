@@ -71,6 +71,15 @@ struct TextInserter {
         return true
     }
 
+    /// Copia texto para o clipboard sem restaurar o conteúdo anterior.
+    /// Usado como fallback quando a colagem automática não está disponível.
+    @MainActor func copyToClipboard(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        logger.debug("Texto copiado para o clipboard (\(text.count) chars)")
+    }
+
     /// Simula pressionamento de Cmd+V via CGEvent
     /// Retorna false se CGEvent não pôde ser criado (sem permissão)
     private static func simulatePaste() -> Bool {

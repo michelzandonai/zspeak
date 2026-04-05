@@ -1,3 +1,4 @@
+import AppKit
 import Testing
 @testable import zspeak
 
@@ -36,5 +37,12 @@ struct TextInserterTests {
         let result = inserter.insert("")
         // Sem permissão, qualquer insert retorna false
         #expect(result == false)
+    }
+
+    @Test("copyToClipboard atualiza o clipboard")
+    func testCopyToClipboard() {
+        let inserter = TextInserter()
+        inserter.copyToClipboard("zspeak teste")
+        #expect(NSPasteboard.general.string(forType: .string) == "zspeak teste")
     }
 }

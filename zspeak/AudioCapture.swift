@@ -5,10 +5,12 @@ import FluidAudio
 enum AudioCaptureError: LocalizedError {
     case deviceNotFound
     case invalidFormat
+    case audioUnitUnavailable
     var errorDescription: String? {
         switch self {
         case .deviceNotFound: "Dispositivo de áudio não encontrado"
         case .invalidFormat: "Formato de áudio inválido"
+        case .audioUnitUnavailable: "AudioUnit de entrada não está disponível"
         }
     }
 }
@@ -50,7 +52,7 @@ final class SynchronizedBuffer: @unchecked Sendable {
 /// Converte para 16kHz mono float32 (formato esperado pelo Parakeet TDT)
 actor AudioCapture {
 
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
     private let samplesBuffer = SynchronizedBuffer()
     private var isRunning = false
     nonisolated(unsafe) private let converter = AudioConverter()
@@ -63,11 +65,18 @@ actor AudioCapture {
 
     /// Inicia captura do microfone, opcionalmente usando um device específico pelo uniqueID
     func start(deviceUID: String? = nil) async throws {
-        guard !isRunning else { return }
+        // Recria engine limpo (necessário após setInputDevice com device incompatível)
+        if isRunning {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            isRunning = false
+        }
+        engine = AVAudioEngine()
 
         samplesBuffer.clear()
         resampleErrors = 0
         currentDeviceUID = deviceUID
+        audioLevel = 0
 
         try startEngine(deviceUID: deviceUID)
         observeConfigurationChanges()
@@ -78,46 +87,57 @@ actor AudioCapture {
 
     /// Configura e inicia o engine (usado no start e na reconexão)
     private func startEngine(deviceUID: String?) throws {
-        // Configurar device específico antes de acessar inputNode
+        do {
+            try configureAndStartEngine(deviceUID: deviceUID)
+        } catch {
+            // Se falhou com device específico, tenta fallback pro system default
+            if deviceUID != nil {
+                print("[zspeak] ⚠️ Falha com device \(deviceUID ?? "?"), tentando system default: \(error.localizedDescription)")
+                engine.stop()
+                engine.inputNode.removeTap(onBus: 0)
+                engine.reset()
+                currentDeviceUID = nil
+                try configureAndStartEngine(deviceUID: nil)
+                return
+            }
+            throw error
+        }
+    }
+
+    /// Configura device, instala tap e inicia engine — pode lançar erro
+    private func configureAndStartEngine(deviceUID: String?) throws {
         if let uid = deviceUID {
             try setInputDevice(uniqueID: uid)
         }
 
         let inputNode = engine.inputNode
+        inputNode.removeTap(onBus: 0)
 
-        // outputFormat é o formato real que o inputNode entrega ao tap
         let hwFormat = inputNode.outputFormat(forBus: 0)
-        // Fallback para 44100 se sampleRate for 0 (device ainda sendo configurado)
-        let sampleRate = hwFormat.sampleRate > 0 ? hwFormat.sampleRate : 44100.0
-        print("[zspeak] AudioCapture formato: \(sampleRate)Hz, \(hwFormat.channelCount)ch")
+        print("[zspeak] AudioCapture formato do hardware: \(hwFormat.sampleRate)Hz, \(hwFormat.channelCount)ch")
 
-        guard let tapFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: sampleRate,
-            channels: 1,
-            interleaved: false
-        ) else {
+        guard hwFormat.channelCount > 0, hwFormat.sampleRate > 0 else {
             throw AudioCaptureError.invalidFormat
         }
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
             guard let self else { return }
 
-            // Calcular nível de áudio (RMS) para feedback visual
             if let channelData = buffer.floatChannelData?[0] {
                 let frameLength = Int(buffer.frameLength)
-                var sum: Float = 0
-                for i in 0..<frameLength {
-                    sum += channelData[i] * channelData[i]
-                }
-                let rms = sqrt(sum / Float(frameLength))
-                let scaledLevel = min(rms * 12.0, 1.0)
-                Task {
-                    await self.updateAudioLevel(scaledLevel)
+                if frameLength > 0 {
+                    var sum: Float = 0
+                    for i in 0..<frameLength {
+                        sum += channelData[i] * channelData[i]
+                    }
+                    let rms = sqrt(sum / Float(frameLength))
+                    let scaledLevel = min(rms * 12.0, 1.0)
+                    Task {
+                        await self.updateAudioLevel(scaledLevel)
+                    }
                 }
             }
 
-            // Converte para 16kHz mono float32 usando FluidAudio AudioConverter
             do {
                 let resampled = try self.converter.resampleBuffer(buffer)
                 self.samplesBuffer.append(resampled)
@@ -144,6 +164,7 @@ actor AudioCapture {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRunning = false
+        audioLevel = 0
 
         let result = samplesBuffer.drain()
         let duration = Float(result.count) / 16000.0
@@ -181,24 +202,19 @@ actor AudioCapture {
         }
     }
 
-    /// Tenta reiniciar o engine após mudança de configuração
-    /// Remove o tap e reinstala via startEngine para garantir formato compatível com novo device
+    /// Para captura graciosamente após mudança de configuração do engine
+    /// Não tenta reinstalar tap — installTap lança NSException (não capturável em Swift)
+    /// se o formato for incompatível após config change. O fluxo do AppState trata
+    /// amostras vazias como "áudio curto" e volta para idle.
     private func handleConfigurationChange() {
         guard isRunning else { return }
 
-        print("[zspeak] Config change detectado, reinstalando tap e reiniciando engine...")
+        print("[zspeak] Config change detectado, parando captura graciosamente...")
 
-        // Parar engine e remover tap existente (seguro mesmo se não há tap)
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
-
-        do {
-            try startEngine(deviceUID: currentDeviceUID)
-            print("[zspeak] Engine reiniciado com sucesso após config change")
-        } catch {
-            print("[zspeak] ❌ Falha ao reiniciar engine: \(error)")
-            isRunning = false
-        }
+        isRunning = false
+        audioLevel = 0
     }
 
     /// Exposto para testes — simula uma mudança de configuração do engine
@@ -210,7 +226,9 @@ actor AudioCapture {
 
     /// Configura o AVAudioEngine para usar um device de input específico
     private func setInputDevice(uniqueID: String) throws {
-        let audioUnit = engine.inputNode.audioUnit!
+        guard let audioUnit = engine.inputNode.audioUnit else {
+            throw AudioCaptureError.audioUnitUnavailable
+        }
         var deviceID = try findAudioDeviceID(for: uniqueID)
         let size = UInt32(MemoryLayout<AudioDeviceID>.size)
         let status = AudioUnitSetProperty(
@@ -246,14 +264,17 @@ actor AudioCapture {
         )
 
         for deviceID in devices {
-            var uid: CFString = "" as CFString
-            var uidSize = UInt32(MemoryLayout<CFString>.size)
+            var uidRef: Unmanaged<CFString>?
+            var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
             var uidAddress = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyDeviceUID,
                 mScope: kAudioObjectPropertyScopeGlobal,
                 mElement: kAudioObjectPropertyElementMain
             )
-            AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, &uid)
+            let status = withUnsafeMutablePointer(to: &uidRef) { ptr in
+                AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, ptr)
+            }
+            guard status == noErr, let uid = uidRef?.takeUnretainedValue() else { continue }
             if uid as String == uniqueID {
                 return deviceID
             }

@@ -9,7 +9,7 @@ final class SettingsWindowController {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
 
-    func show(appState: AppState, microphoneManager: MicrophoneManager, activationKeyManager: ActivationKeyManager, accessibilityManager: AccessibilityManager) {
+    func show(appState: AppState, microphoneManager: MicrophoneManager, activationKeyManager: ActivationKeyManager, accessibilityManager: AccessibilityManager, store: TranscriptionStore, benchmarkStore: BenchmarkStore, vocabularyStore: VocabularyStore) {
         if let window = window, window.isVisible {
             window.level = .floating
             window.makeKeyAndOrderFront(nil)
@@ -24,7 +24,10 @@ final class SettingsWindowController {
             appState: appState,
             microphoneManager: microphoneManager,
             activationKeyManager: activationKeyManager,
-            accessibilityManager: accessibilityManager
+            accessibilityManager: accessibilityManager,
+            store: store,
+            benchmarkStore: benchmarkStore,
+            vocabularyStore: vocabularyStore
         )
         let hostingView = NSHostingView(rootView: settingsView)
 
@@ -53,6 +56,9 @@ final class SettingsWindowController {
 // MARK: - Sidebar navigation
 
 private enum SettingsPage: String, CaseIterable, Identifiable {
+    case history = "Histórico"
+    case benchmark = "Benchmark"
+    case vocabulary = "Vocabulário"
     case keyboard = "Atalhos de Teclado"
     case microphone = "Microfone"
     case general = "Geral"
@@ -63,6 +69,9 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .history: "clock.arrow.circlepath"
+        case .benchmark: "gauge.with.needle"
+        case .vocabulary: "text.book.closed"
         case .keyboard: "keyboard"
         case .microphone: "mic.fill"
         case .general: "gearshape"
@@ -79,8 +88,11 @@ struct SettingsView: View {
     @Bindable var microphoneManager: MicrophoneManager
     @Bindable var activationKeyManager: ActivationKeyManager
     var accessibilityManager: AccessibilityManager
+    let store: TranscriptionStore
+    @Bindable var benchmarkStore: BenchmarkStore
+    @Bindable var vocabularyStore: VocabularyStore
 
-    @State private var selectedPage: SettingsPage = .keyboard
+    @State private var selectedPage: SettingsPage = .history
 
     var body: some View {
         NavigationSplitView {
@@ -98,6 +110,12 @@ struct SettingsView: View {
     @ViewBuilder
     private func detailView(for page: SettingsPage) -> some View {
         switch page {
+        case .history:
+            HistoryView(store: store)
+        case .benchmark:
+            BenchmarkView(appState: appState, store: benchmarkStore, historyStore: store)
+        case .vocabulary:
+            VocabularyView(appState: appState, store: vocabularyStore)
         case .keyboard:
             keyboardPage
         case .microphone:
@@ -204,6 +222,40 @@ struct SettingsView: View {
             Section {
                 HStack {
                     Label {
+                        Text("Microfone")
+                    } icon: {
+                        Image(systemName: microphoneStatusIcon)
+                            .foregroundStyle(microphoneStatusColor)
+                    }
+
+                    Spacer()
+
+                    if microphoneManager.isPermissionGranted {
+                        Text("Ativo")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(.green.opacity(0.1), in: Capsule())
+                    } else if microphoneManager.permissionState == .notDetermined {
+                        Button("Solicitar Permissão") {
+                            Task {
+                                _ = await microphoneManager.requestPermissionIfNeeded()
+                            }
+                        }
+                    } else if microphoneManager.permissionState != .unavailable {
+                        Button("Abrir Ajustes do Sistema") {
+                            microphoneManager.openSystemSettings()
+                        }
+                    }
+                }
+            } footer: {
+                Text(microphonePermissionFooter)
+            }
+
+            Section {
+                HStack {
+                    Label {
                         Text("Acessibilidade")
                     } icon: {
                         Image(systemName: accessibilityManager.isGranted
@@ -228,7 +280,23 @@ struct SettingsView: View {
                     }
                 }
             } footer: {
-                Text("Necessário para inserir texto transcrito no app ativo via atalho de teclado.")
+                Text("Necessário para colar no app ativo e para a hotkey global. Sem isso, a transcrição continua funcionando com cópia para o clipboard.")
+            }
+
+            if microphoneManager.permissionState == .unavailable {
+                Section("Bundle") {
+                    Text("O produto atual está sendo gerado como executável SwiftPM, sem `Info.plist` embutido. Nesse modo, o macOS não expõe a permissão de microfone de forma confiável.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if !microphoneManager.isPermissionGranted && microphoneManager.permissionState != .unavailable {
+                Section("Como ativar o microfone") {
+                    Label("Clique em \"Solicitar Permissão\" ou inicie uma gravação", systemImage: "1.circle")
+                    Label("Se o macOS negar, abra Ajustes do Sistema", systemImage: "2.circle")
+                    Label("Ative zspeak em Privacidade → Microfone", systemImage: "3.circle")
+                }
             }
 
             if !accessibilityManager.isGranted {
@@ -269,5 +337,40 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Sobre")
+    }
+
+    private var microphoneStatusIcon: String {
+        switch microphoneManager.permissionState {
+        case .authorized:
+            return "checkmark.circle.fill"
+        case .notDetermined:
+            return "questionmark.circle.fill"
+        case .denied, .restricted, .unavailable:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var microphoneStatusColor: Color {
+        switch microphoneManager.permissionState {
+        case .authorized:
+            return .green
+        case .notDetermined:
+            return .yellow
+        case .denied, .restricted, .unavailable:
+            return .orange
+        }
+    }
+
+    private var microphonePermissionFooter: String {
+        switch microphoneManager.permissionState {
+        case .authorized:
+            return "Obrigatório para capturar sua voz e iniciar a transcrição."
+        case .notDetermined:
+            return "A primeira gravação vai solicitar acesso ao microfone."
+        case .denied, .restricted:
+            return "Sem acesso ao microfone a gravação não inicia."
+        case .unavailable:
+            return "O bundle atual não expõe `NSMicrophoneUsageDescription`, então o macOS não consegue liberar o microfone."
+        }
     }
 }

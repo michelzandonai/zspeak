@@ -6,11 +6,12 @@ import AppKit
 @MainActor
 final class OverlayModel {
     var state: AppState.RecordingState = .idle
-    var audioLevel: Float = 0
     var isModelReady: Bool = false
     var focusedAppName: String = ""
     var focusedAppIcon: NSImage?
     var microphoneName: String = ""
+    /// Closure para ler audioLevel direto do AudioCapture (evita pipeline redundante)
+    var getAudioLevel: (@Sendable () async -> Float)?
 }
 
 /// Overlay visual estilo Spokenly — barra escura com waveform reativa
@@ -18,7 +19,6 @@ struct OverlayView: View {
     let model: OverlayModel
 
     private var state: AppState.RecordingState { model.state }
-    private var audioLevel: Float { model.audioLevel }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -117,11 +117,12 @@ struct WaveformView: View {
         }
         .onAppear {
             history = Array(repeating: 0, count: barCount)
-            // Timer a ~80 FPS — lê level direto do model (sempre atualizado)
-            timer = Timer.scheduledTimer(withTimeInterval: 0.022, repeats: true) { [weak model] _ in
+            // Timer a ~30 FPS — lê level direto do AudioCapture via closure (sem pipeline intermediária)
+            timer = Timer.scheduledTimer(withTimeInterval: 0.033, repeats: true) { [weak model] _ in
                 Task { @MainActor in
                     guard let model else { return }
-                    let amplified = min(model.audioLevel * 3.5, 1.0)
+                    let level = await model.getAudioLevel?() ?? 0
+                    let amplified = min(level * 3.5, 1.0)
                     history.append(amplified)
                     if history.count > barCount {
                         history.removeFirst(history.count - barCount)

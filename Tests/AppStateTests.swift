@@ -17,7 +17,6 @@ struct AppStateTests {
         #expect(appState.accessibilityGranted == false)
         #expect(appState.lastTranscription == "")
         #expect(appState.errorMessage == nil)
-        #expect(appState.audioLevel == 0)
     }
 
     // MARK: - Toggle sem pre-requisitos
@@ -35,7 +34,7 @@ struct AppStateTests {
         #expect(appState.errorMessage?.contains("carregando") == true)
     }
 
-    @Test("Toggle com modelo pronto mas sem acessibilidade deve setar errorMessage")
+    @Test("Toggle com modelo pronto mas sem acessibilidade não deve falhar por acessibilidade")
     func testToggleRecordingWithoutAccessibility() {
         let appState = AppState()
         appState.isModelReady = true
@@ -43,9 +42,8 @@ struct AppStateTests {
 
         appState.toggleRecording()
 
-        #expect(appState.state == .idle)
-        #expect(appState.errorMessage != nil)
-        #expect(appState.errorMessage?.contains("Acessibilidade") == true)
+        #expect(appState.errorMessage?.contains("Acessibilidade") != true)
+        #expect(appState.state != .processing)
     }
 
     @Test("Toggle sem modelo nem acessibilidade nao deve mudar state")

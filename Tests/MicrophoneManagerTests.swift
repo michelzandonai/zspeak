@@ -2,10 +2,23 @@ import Foundation
 import Testing
 @testable import zspeak
 
+private let kUseSystemDefaultMic = "useSystemDefaultMic"
+
+private func cleanMicrophoneDefaults() {
+    UserDefaults.standard.removeObject(forKey: kUseSystemDefaultMic)
+}
+
 // Testes de MicrophoneInfo e logica do MicrophoneManager — sem dependencias de hardware
 @MainActor
 @Suite("MicrophoneManager - Logica de microfone")
 struct MicrophoneManagerTests {
+
+    @Test("Default de useSystemDefault deve ser true")
+    func testUseSystemDefaultDefaultsToTrue() {
+        cleanMicrophoneDefaults()
+        let manager = MicrophoneManager()
+        #expect(manager.useSystemDefault == true)
+    }
 
     // MARK: - MicrophoneInfo: Equatable
 

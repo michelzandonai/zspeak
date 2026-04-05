@@ -14,8 +14,8 @@ final class AccessibilityManager {
     /// Callback disparado quando a permissão transiciona de true → false
     var onPermissionRevoked: (() -> Void)?
 
-    /// Referência ao timer guardada fora do MainActor para invalidar no deinit
-    nonisolated(unsafe) private var timer: Timer?
+    /// Timer usado para revalidar o estado da permissão ao longo da execução
+    private var timer: Timer?
 
     init() {
         isGranted = AXIsProcessTrusted()
@@ -23,20 +23,22 @@ final class AccessibilityManager {
         startPolling()
     }
 
-    deinit {
-        timer?.invalidate()
-        timer = nil
-    }
-
     // MARK: - Polling
 
-    /// Verifica permissão a cada 1 segundo
+    /// Inicia polling adaptativo: 1s enquanto aguarda permissão, 30s após concedida
     private func startPolling() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        let interval: TimeInterval = isGranted ? 30.0 : 1.0
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.checkPermission()
             }
         }
+    }
+
+    /// Recria timer com novo intervalo (chamado nas transições de estado)
+    private func restartPolling() {
+        timer?.invalidate()
+        startPolling()
     }
 
     private func checkPermission() {
@@ -48,12 +50,14 @@ final class AccessibilityManager {
         if granted && !wasGranted {
             print("[zspeak] Accessibility: permissão concedida")
             onPermissionGranted?()
+            restartPolling() // Reduz para 30s
         }
 
         // Transição true → false: permissão revogada
         if !granted && wasGranted {
             print("[zspeak] Accessibility: permissão revogada")
             onPermissionRevoked?()
+            restartPolling() // Aumenta para 1s
         }
     }
 

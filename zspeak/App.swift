@@ -10,6 +10,10 @@ final class OverlayController {
 
     init(appState: AppState) {
         self.appState = appState
+        // Closure direta: WaveformView lê audioLevel do AudioCapture sem intermediários
+        model.getAudioLevel = { [weak appState] in
+            await appState?.currentAudioLevel() ?? 0
+        }
         panel.setupContent(model: model)
         startObserving()
     }
@@ -17,7 +21,6 @@ final class OverlayController {
     private func startObserving() {
         withObservationTracking {
             _ = appState.state
-            _ = appState.audioLevel
         } onChange: { [weak self] in
             Task { @MainActor in
                 self?.update()
@@ -28,7 +31,6 @@ final class OverlayController {
     private func update() {
         // Atualiza modelo in-place — SwiftUI reage via @Observable sem recriar views
         model.state = appState.state
-        model.audioLevel = appState.audioLevel
         model.isModelReady = appState.isModelReady
 
         // Atualiza ícone/nome do app em foco
@@ -63,6 +65,9 @@ final class OverlayController {
 struct ZSpeakApp: App {
 
     @State private var appState = AppState()
+    @State private var store = TranscriptionStore()
+    @State private var benchmarkStore = BenchmarkStore()
+    @State private var vocabularyStore = VocabularyStore()
     private let activationKeyManager = ActivationKeyManager()
     private let accessibilityManager = AccessibilityManager()
     private let hotkeyManager: HotkeyManager
@@ -72,7 +77,7 @@ struct ZSpeakApp: App {
     var body: some Scene {
         // App vive exclusivamente no menu bar (sem janela principal)
         MenuBarExtra {
-            MenuBarView(appState: appState, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager)
+            MenuBarView(appState: appState, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore)
         } label: {
             Image(systemName: menuBarIcon)
                 .symbolRenderingMode(.palette)
@@ -81,7 +86,7 @@ struct ZSpeakApp: App {
         // Janela de configurações
         Settings {
             let mgr = appState.microphoneManager
-            SettingsView(appState: appState, microphoneManager: mgr, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager)
+            SettingsView(appState: appState, microphoneManager: mgr, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore)
         }
     }
 
@@ -101,6 +106,12 @@ struct ZSpeakApp: App {
         let keyManager = activationKeyManager
         self.hotkeyManager = HotkeyManager(activationKeyManager: keyManager)
         let state = appState
+
+        // Conecta stores ao AppState
+        state.store = store
+        state.benchmarkStore = benchmarkStore
+        state.vocabularyStore = vocabularyStore
+        benchmarkStore.importFromHistory(historyStore: store)
 
         // Sincroniza estado inicial de Accessibility com AppState
         state.accessibilityGranted = accessibilityManager.isGranted

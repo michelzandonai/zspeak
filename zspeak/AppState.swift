@@ -1,5 +1,8 @@
 import SwiftUI
 import FluidAudio
+import os.log
+
+private let logger = Logger(subsystem: "com.zspeak", category: "AppState")
 
 /// Estado global da aplicacao — controla o fluxo de gravacao e transcricao
 @MainActor
@@ -18,18 +21,50 @@ final class AppState {
     var lastTranscription: String = ""
     var isModelReady: Bool = false
     var errorMessage: String?
-    var audioLevel: Float = 0
     /// Estado da permissão de acessibilidade — setado externamente pelo App.swift
     var accessibilityGranted: Bool = false
+    /// Store para persistir histórico de transcrições — setado externamente pelo App.swift
+    var store: TranscriptionStore?
+    /// Store de benchmark — setado externamente pelo App.swift
+    var benchmarkStore: BenchmarkStore?
+    /// Store de vocabulário customizado — setado externamente pelo App.swift
+    var vocabularyStore: VocabularyStore?
 
     // MARK: - Dependencias
 
-    let microphoneManager = MicrophoneManager()
+    let microphoneManager: MicrophoneManager
     private let audioCapture = AudioCapture()
     private let vadManager = VADManagerWrapper()
     private let transcriber = Transcriber()
     private let textInserter = TextInserter()
+
+    /// Expõe transcrição para uso externo (benchmark)
+    func transcribe(_ samples: [Float]) async throws -> String {
+        try await transcriber.transcribe(samples)
+    }
+
+    /// Aplica vocabulário customizado ao Transcriber (context biasing nativo)
+    func applyVocabulary() async throws {
+        guard let store = vocabularyStore else { return }
+        let enabledEntries = store.entries.filter(\.isEnabled)
+        if enabledEntries.isEmpty {
+            await transcriber.disableVocabulary()
+        } else {
+            let context = store.buildVocabularyContext()
+            try await transcriber.configureVocabulary(context)
+        }
+    }
     private var recordingTask: Task<Void, Never>?
+    private var isRequestingMicrophonePermission = false
+
+    init(skipBundlePermissionCheck: Bool = false) {
+        self.microphoneManager = MicrophoneManager(skipBundlePermissionCheck: skipBundlePermissionCheck)
+    }
+
+    /// Lê nível de áudio direto do AudioCapture (usado pelo WaveformView)
+    func currentAudioLevel() async -> Float {
+        await audioCapture.audioLevel
+    }
 
     // MARK: - Inicializacao
 
@@ -42,6 +77,9 @@ final class AppState {
             try await asrInit
             try await vadInit
             isModelReady = true
+
+            // Aplica vocabulário customizado se configurado
+            try? await applyVocabulary()
         } catch {
             errorMessage = "Erro ao carregar modelos: \(error.localizedDescription)"
         }
@@ -51,13 +89,14 @@ final class AppState {
 
     /// Alterna entre gravar e parar — chamado pela hotkey
     func toggleRecording() {
+        logger.info("toggleRecording: estado atual = \(String(describing: self.state))")
         switch state {
         case .idle:
             startRecording()
         case .recording:
             stopRecording()
         case .processing:
-            print("[zspeak] Ignorando toggle durante processamento")
+            logger.info("toggleRecording: ignorado durante processing")
         }
     }
 
@@ -77,7 +116,6 @@ final class AppState {
     func cancelRecording() {
         guard state == .recording else { return }
         print("[zspeak] Gravação cancelada pelo usuário")
-        stopAudioLevelPolling()
         state = .idle
         Task {
             await recordingTask?.value
@@ -90,29 +128,43 @@ final class AppState {
 
     private func startRecording() {
         guard isModelReady else {
-            print("[zspeak] Modelo ainda carregando, ignorando gravação")
+            logger.error("startRecording: modelo não pronto")
             errorMessage = "Modelo ainda carregando, aguarde..."
             return
         }
-        guard accessibilityGranted else {
-            print("[zspeak] Acessibilidade não concedida, bloqueando gravação")
-            errorMessage = "Acessibilidade necessária para inserir texto. Ative em Ajustes do Sistema → Privacidade → Acessibilidade."
+
+        microphoneManager.refreshPermissionState()
+        logger.info("startRecording: permissão mic = \(self.microphoneManager.permissionState == .authorized ? "OK" : "NEGADA", privacy: .public)")
+        guard microphoneManager.isPermissionGranted else {
+            logger.error("startRecording: sem permissão de microfone, estado = \(String(describing: self.microphoneManager.permissionState))")
+            resolveMicrophonePermission()
             return
         }
+
         state = .recording
         errorMessage = nil
         TextInserter.saveFocusedApp()
-        print("[zspeak] Gravação iniciada")
+        logger.info("startRecording: estado → recording")
 
         recordingTask = Task {
             do {
                 let preferredDevice = microphoneManager.getPreferredDevice()
                 let deviceUID = preferredDevice?.uniqueID
-                try await audioCapture.start(deviceUID: deviceUID)
-                microphoneManager.activeMicrophoneID = deviceUID
-                startAudioLevelPolling()
+                logger.error("startRecording: device = \(deviceUID ?? "system default", privacy: .public), useSystemDefault = \(self.microphoneManager.useSystemDefault, privacy: .public)")
+                microphoneManager.activeMicrophoneID = microphoneManager.useSystemDefault ? nil : deviceUID
+
+                do {
+                    try await audioCapture.start(deviceUID: deviceUID)
+                } catch where deviceUID != nil {
+                    // Fallback: se o device específico falhou, tenta system default
+                    logger.error("startRecording: fallback para system default após erro: \(String(describing: error), privacy: .public)")
+                    microphoneManager.activeMicrophoneID = nil
+                    try await audioCapture.start(deviceUID: nil)
+                }
+                logger.error("startRecording: audioCapture.start() OK")
             } catch {
-                stopAudioLevelPolling()
+                logger.error("startRecording: ERRO final → \(String(describing: error), privacy: .public)")
+                microphoneManager.activeMicrophoneID = nil
                 state = .idle
                 errorMessage = "Erro ao iniciar gravacao: \(error.localizedDescription)"
             }
@@ -120,7 +172,6 @@ final class AppState {
     }
 
     private func stopRecording() {
-        stopAudioLevelPolling()
         state = .processing
 
         Task {
@@ -150,12 +201,27 @@ final class AppState {
                     return
                 }
 
-                // Insere o texto no app ativo
+                // Persiste no histórico
                 lastTranscription = text
-                print("[zspeak] Inserindo texto no app ativo")
-                let inserted = textInserter.insert(text)
-                if !inserted {
-                    errorMessage = "Falha ao inserir texto — verifique a permissão de Acessibilidade"
+                store?.addRecord(
+                    text: text,
+                    modelName: "Parakeet TDT 0.6B V3",
+                    duration: Double(samples.count) / 16000.0,
+                    targetAppName: TextInserter.previousApp?.localizedName,
+                    samples: samples
+                )
+
+                if accessibilityGranted {
+                    // Insere o texto no app ativo
+                    print("[zspeak] Inserindo texto no app ativo")
+                    let inserted = textInserter.insert(text)
+                    if !inserted {
+                        textInserter.copyToClipboard(text)
+                        errorMessage = "Falha ao inserir automaticamente. Texto copiado para o clipboard."
+                    }
+                } else {
+                    textInserter.copyToClipboard(text)
+                    errorMessage = "Transcrição copiada para o clipboard. Ative Acessibilidade para colar automaticamente."
                 }
 
                 state = .idle
@@ -167,22 +233,45 @@ final class AppState {
         }
     }
 
-    // MARK: - Nível de áudio para overlay
+    private func resolveMicrophonePermission() {
+        switch microphoneManager.permissionState {
+        case .authorized:
+            startRecording()
 
-    private var audioLevelTimer: Timer?
+        case .notDetermined:
+            guard !isRequestingMicrophonePermission else { return }
+            isRequestingMicrophonePermission = true
+            errorMessage = "Solicitando acesso ao microfone..."
 
-    private func startAudioLevelPolling() {
-        audioLevelTimer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                self.audioLevel = await self.audioCapture.audioLevel
+            Task {
+                let granted = await microphoneManager.requestPermissionIfNeeded()
+                isRequestingMicrophonePermission = false
+
+                guard state == .idle else { return }
+
+                if granted {
+                    startRecording()
+                } else {
+                    updateMicrophonePermissionError()
+                }
             }
+
+        case .denied, .restricted, .unavailable:
+            updateMicrophonePermissionError()
         }
     }
 
-    private func stopAudioLevelPolling() {
-        audioLevelTimer?.invalidate()
-        audioLevelTimer = nil
-        audioLevel = 0
+    private func updateMicrophonePermissionError() {
+        switch microphoneManager.permissionState {
+        case .unavailable:
+            errorMessage = "O build atual não expõe NSMicrophoneUsageDescription. Rode zspeak como app bundle para liberar o microfone."
+        case .denied, .restricted:
+            errorMessage = "Microfone necessário para gravar. Ative em Ajustes do Sistema → Privacidade → Microfone."
+        case .notDetermined:
+            errorMessage = "Solicitando acesso ao microfone..."
+        case .authorized:
+            errorMessage = nil
+        }
     }
+
 }

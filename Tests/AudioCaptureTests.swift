@@ -101,4 +101,29 @@ struct AudioCaptureTests {
         let result = await capture.stop()
         #expect(result.isEmpty)
     }
+
+    // MARK: - Regressão: crash SIGABRT em installTap após config change (#8)
+
+    @Test("simulateConfigurationChange múltiplas vezes sem engine rodando não crasheia")
+    func testMultipleConfigChangesWhenNotRunning() async {
+        let capture = AudioCapture()
+
+        // Config change disparado múltiplas vezes — guard isRunning deve proteger
+        await capture.simulateConfigurationChange()
+        await capture.simulateConfigurationChange()
+        await capture.simulateConfigurationChange()
+
+        #expect(await capture.isCapturing == false)
+    }
+
+    @Test("simulateConfigurationChange seguido de stop não crasheia")
+    func testConfigChangeThenStopNoCrash() async {
+        let capture = AudioCapture()
+
+        await capture.simulateConfigurationChange()
+        let samples = await capture.stop()
+
+        #expect(samples.isEmpty)
+        #expect(await capture.isCapturing == false)
+    }
 }

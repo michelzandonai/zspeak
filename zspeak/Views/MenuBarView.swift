@@ -5,6 +5,9 @@ struct MenuBarView: View {
     let appState: AppState
     let activationKeyManager: ActivationKeyManager
     let accessibilityManager: AccessibilityManager
+    let store: TranscriptionStore
+    let benchmarkStore: BenchmarkStore
+    let vocabularyStore: VocabularyStore
 
     var body: some View {
         // Status atual
@@ -16,9 +19,28 @@ struct MenuBarView: View {
         }
         .padding(.horizontal)
 
-        // Aviso de acessibilidade
+        if appState.microphoneManager.permissionState != .authorized {
+            Label(microphonePermissionTitle, systemImage: "mic.slash")
+                .foregroundStyle(.orange)
+                .font(.caption)
+
+            if appState.microphoneManager.permissionState == .notDetermined {
+                Text("A permissão será solicitada na primeira gravação.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if appState.microphoneManager.permissionState == .unavailable {
+                Text("Esse build precisa ser executado como app bundle para usar o microfone.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Button("Configurar Microfone...") {
+                    appState.microphoneManager.openSystemSettings()
+                }
+            }
+        }
+
         if !accessibilityManager.isGranted {
-            Label("Acessibilidade necessária", systemImage: "exclamationmark.triangle")
+            Label("Acessibilidade ausente: sem colagem automática", systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.orange)
                 .font(.caption)
             Button("Configurar Acessibilidade...") {
@@ -33,12 +55,23 @@ struct MenuBarView: View {
             appState.toggleRecording()
         }
         .keyboardShortcut("r", modifiers: [.command])
-        .disabled(appState.state == .processing || !appState.isModelReady || !accessibilityManager.isGranted)
+        .disabled(appState.state == .processing || !appState.isModelReady)
 
         Divider()
 
-        // Última transcrição
-        if !appState.lastTranscription.isEmpty {
+        // Última transcrição (do store ou fallback para appState)
+        if let lastRecord = store.records.first {
+            Text("Última transcrição:")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button(lastRecord.text.prefix(100) + (lastRecord.text.count > 100 ? "..." : "")) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(lastRecord.text, forType: .string)
+            }
+
+            Divider()
+        } else if !appState.lastTranscription.isEmpty {
             Text("Última transcrição:")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -61,7 +94,7 @@ struct MenuBarView: View {
 
         // Configurações e sair
         Button("Configurações...") {
-            SettingsWindowController.shared.show(appState: appState, microphoneManager: appState.microphoneManager, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager)
+            SettingsWindowController.shared.show(appState: appState, microphoneManager: appState.microphoneManager, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore)
         }
         .keyboardShortcut(",", modifiers: [.command])
 
@@ -74,7 +107,7 @@ struct MenuBarView: View {
     private var statusColor: Color {
         switch appState.state {
         case .idle:
-            if !accessibilityManager.isGranted { return .orange }
+            if appState.microphoneManager.permissionState != .authorized { return .orange }
             return appState.isModelReady ? .green : .gray
         case .recording: return .red
         case .processing: return .yellow
@@ -82,12 +115,25 @@ struct MenuBarView: View {
     }
 
     private var statusText: String {
-        if !accessibilityManager.isGranted { return "Acessibilidade necessária" }
+        if appState.microphoneManager.permissionState != .authorized { return microphonePermissionTitle }
         if !appState.isModelReady { return "Carregando modelo..." }
         switch appState.state {
         case .idle: return "Pronto"
         case .recording: return "Gravando..."
         case .processing: return "Transcrevendo..."
+        }
+    }
+
+    private var microphonePermissionTitle: String {
+        switch appState.microphoneManager.permissionState {
+        case .unavailable:
+            return "Build sem acesso ao microfone"
+        case .notDetermined:
+            return "Permissão de microfone pendente"
+        case .denied, .restricted:
+            return "Microfone necessário"
+        case .authorized:
+            return "Pronto"
         }
     }
 }
