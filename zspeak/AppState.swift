@@ -34,7 +34,6 @@ final class AppState {
 
     let microphoneManager: MicrophoneManager
     private let audioCapture = AudioCapture()
-    private let vadManager = VADManagerWrapper()
     private let transcriber = Transcriber()
     private let textInserter = TextInserter()
 
@@ -68,14 +67,10 @@ final class AppState {
 
     // MARK: - Inicializacao
 
-    /// Carrega modelos (ASR + VAD) — chamado no startup do app
+    /// Carrega modelo ASR — chamado no startup do app
     func initialize() async {
         do {
-            // Carrega modelos em paralelo
-            async let asrInit: () = transcriber.initialize()
-            async let vadInit: () = vadManager.initialize()
-            try await asrInit
-            try await vadInit
+            try await transcriber.initialize()
             isModelReady = true
 
             // Aplica vocabulário customizado se configurado
@@ -115,7 +110,6 @@ final class AppState {
     /// Cancela gravação em andamento — usado pelo Escape
     func cancelRecording() {
         guard state == .recording else { return }
-        print("[zspeak] Gravação cancelada pelo usuário")
         state = .idle
         Task {
             await recordingTask?.value
@@ -181,22 +175,18 @@ final class AppState {
                 recordingTask = nil
 
                 let samples = await audioCapture.stop()
-                print("[zspeak] Amostras capturadas: \(samples.count) (\(Float(samples.count)/16000)s)")
 
                 // Se nao ha audio suficiente, volta para idle
                 guard samples.count > 8000 else { // Menos de 0.5s de audio
-                    print("[zspeak] Áudio muito curto, descartando")
                     state = .idle
                     return
                 }
 
                 // Transcreve o audio
                 let text = try await transcriber.transcribe(samples)
-                print("[zspeak] Transcrição: '\(text)'")
 
                 // Se o texto esta vazio (silencio), volta para idle
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    print("[zspeak] Texto vazio (silêncio), ignorando")
                     state = .idle
                     return
                 }
@@ -212,8 +202,6 @@ final class AppState {
                 )
 
                 if accessibilityGranted {
-                    // Insere o texto no app ativo
-                    print("[zspeak] Inserindo texto no app ativo")
                     let inserted = textInserter.insert(text)
                     if !inserted {
                         textInserter.copyToClipboard(text)
@@ -226,7 +214,6 @@ final class AppState {
 
                 state = .idle
             } catch {
-                print("[zspeak] ERRO: \(error)")
                 state = .idle
                 errorMessage = "Erro na transcricao: \(error.localizedDescription)"
             }

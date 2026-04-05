@@ -73,7 +73,6 @@ final class HotkeyManager {
 
         // Verificar permissão de Accessibility antes de tentar criar o tap
         guard AXIsProcessTrusted() else {
-            print("[zspeak] ❌ CGEvent tap não criado — AXIsProcessTrusted() retornou false")
             isEventTapActive = false
             return
         }
@@ -95,7 +94,6 @@ final class HotkeyManager {
 
                 // Se o tap for desabilitado pelo sistema, reabilitar
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-                    print("[zspeak] ⚠️ Event tap desabilitado pelo sistema (tipo: \(type.rawValue)), reabilitando...")
                     CGEvent.tapEnable(tap: manager.eventTap!, enable: true)
                     return Unmanaged.passUnretained(event)
                 }
@@ -105,7 +103,6 @@ final class HotkeyManager {
             },
             userInfo: refcon
         ) else {
-            print("[zspeak] ❌ CGEvent tap falhou — sem permissão de Accessibility")
             isEventTapActive = false
             return
         }
@@ -115,7 +112,6 @@ final class HotkeyManager {
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         isEventTapActive = true
-        print("[zspeak] CGEvent tap ativo")
     }
 
     private func removeEventTap() {

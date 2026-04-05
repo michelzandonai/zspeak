@@ -82,7 +82,6 @@ actor AudioCapture {
         observeConfigurationChanges()
 
         isRunning = true
-        print("[zspeak] AudioCapture iniciado")
     }
 
     /// Configura e inicia o engine (usado no start e na reconexão)
@@ -92,7 +91,6 @@ actor AudioCapture {
         } catch {
             // Se falhou com device específico, tenta fallback pro system default
             if deviceUID != nil {
-                print("[zspeak] ⚠️ Falha com device \(deviceUID ?? "?"), tentando system default: \(error.localizedDescription)")
                 engine.stop()
                 engine.inputNode.removeTap(onBus: 0)
                 engine.reset()
@@ -114,7 +112,6 @@ actor AudioCapture {
         inputNode.removeTap(onBus: 0)
 
         let hwFormat = inputNode.outputFormat(forBus: 0)
-        print("[zspeak] AudioCapture formato do hardware: \(hwFormat.sampleRate)Hz, \(hwFormat.channelCount)ch")
 
         guard hwFormat.channelCount > 0, hwFormat.sampleRate > 0 else {
             throw AudioCaptureError.invalidFormat
@@ -143,7 +140,6 @@ actor AudioCapture {
                 self.samplesBuffer.append(resampled)
             } catch {
                 self.resampleErrors += 1
-                print("[zspeak] ❌ Erro no resampleBuffer (#\(self.resampleErrors)): \(error)")
             }
         }
 
@@ -167,11 +163,6 @@ actor AudioCapture {
         audioLevel = 0
 
         let result = samplesBuffer.drain()
-        let duration = Float(result.count) / 16000.0
-        print("[zspeak] AudioCapture.stop(): \(result.count) samples (\(String(format: "%.1f", duration))s)")
-        if resampleErrors > 0 {
-            print("[zspeak] ⚠️ \(resampleErrors) erros de resample durante gravação")
-        }
         return result
     }
 
@@ -194,7 +185,6 @@ actor AudioCapture {
             object: engine,
             queue: nil
         ) { [weak self] _ in
-            print("[zspeak] AVAudioEngine configuração mudou")
             guard let self else { return }
             Task {
                 await self.handleConfigurationChange()
@@ -208,8 +198,6 @@ actor AudioCapture {
     /// amostras vazias como "áudio curto" e volta para idle.
     private func handleConfigurationChange() {
         guard isRunning else { return }
-
-        print("[zspeak] Config change detectado, parando captura graciosamente...")
 
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)

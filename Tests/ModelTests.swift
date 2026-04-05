@@ -1,9 +1,9 @@
 import Testing
 @testable import zspeak
 
-// Testes de estado e erros do Transcriber e VADManagerWrapper
+// Testes de estado e erros do Transcriber
 // SEM inicializacao de modelos reais (evita download de ~500MB)
-@Suite("Models - Transcriber e VAD")
+@Suite("Models - Transcriber")
 struct ModelTests {
 
     // MARK: - Transcriber estado inicial
@@ -47,28 +47,5 @@ struct ModelTests {
 
         #expect(error.errorDescription != nil)
         #expect(error.errorDescription?.isEmpty == false)
-    }
-
-    // MARK: - VADEvent cases
-
-    @Test("VADEvent deve ter cases speechStart e speechEnd")
-    func testVADEventCases() {
-        let start = VADManagerWrapper.VADEvent.speechStart
-        let end = VADManagerWrapper.VADEvent.speechEnd
-
-        // Verificar que os cases existem e sao distintos via pattern matching
-        switch start {
-        case .speechStart:
-            #expect(true)
-        case .speechEnd:
-            #expect(Bool(false), "speechStart nao deve ser speechEnd")
-        }
-
-        switch end {
-        case .speechEnd:
-            #expect(true)
-        case .speechStart:
-            #expect(Bool(false), "speechEnd nao deve ser speechStart")
-        }
     }
 }

@@ -19,7 +19,6 @@ final class AccessibilityManager {
 
     init() {
         isGranted = AXIsProcessTrusted()
-        print("[zspeak] Accessibility: estado inicial = \(isGranted)")
         startPolling()
     }
 
@@ -48,14 +47,12 @@ final class AccessibilityManager {
 
         // Transição false → true: permissão concedida
         if granted && !wasGranted {
-            print("[zspeak] Accessibility: permissão concedida")
             onPermissionGranted?()
             restartPolling() // Reduz para 30s
         }
 
         // Transição true → false: permissão revogada
         if !granted && wasGranted {
-            print("[zspeak] Accessibility: permissão revogada")
             onPermissionRevoked?()
             restartPolling() // Aumenta para 1s
         }
