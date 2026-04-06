@@ -39,3 +39,10 @@ Packages/
 *.dSYM.zip
 *.dSYM
 *.xcarchive
+
+# Build artifacts
+*.dmg
+*.profraw
+
+# Temp files
+Untitled-*
