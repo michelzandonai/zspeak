@@ -9,7 +9,7 @@ final class SettingsWindowController {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
 
-    func show(appState: AppState, microphoneManager: MicrophoneManager, activationKeyManager: ActivationKeyManager, accessibilityManager: AccessibilityManager, store: TranscriptionStore, benchmarkStore: BenchmarkStore, vocabularyStore: VocabularyStore) {
+    func show(appState: AppState, microphoneManager: MicrophoneManager, activationKeyManager: ActivationKeyManager, accessibilityManager: AccessibilityManager, store: TranscriptionStore, benchmarkStore: BenchmarkStore, vocabularyStore: VocabularyStore, correctionPromptStore: CorrectionPromptStore) {
         if let window = window, window.isVisible {
             window.level = .floating
             window.makeKeyAndOrderFront(nil)
@@ -27,7 +27,8 @@ final class SettingsWindowController {
             accessibilityManager: accessibilityManager,
             store: store,
             benchmarkStore: benchmarkStore,
-            vocabularyStore: vocabularyStore
+            vocabularyStore: vocabularyStore,
+            correctionPromptStore: correctionPromptStore
         )
         let hostingView = NSHostingView(rootView: settingsView)
 
@@ -59,6 +60,7 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
     case history = "Histórico"
     case benchmark = "Benchmark"
     case vocabulary = "Vocabulário"
+    case correction = "Correção LLM"
     case keyboard = "Atalhos de Teclado"
     case microphone = "Microfone"
     case general = "Geral"
@@ -72,6 +74,7 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
         case .history: "clock.arrow.circlepath"
         case .benchmark: "gauge.with.needle"
         case .vocabulary: "text.book.closed"
+        case .correction: "sparkles"
         case .keyboard: "keyboard"
         case .microphone: "mic.fill"
         case .general: "gearshape"
@@ -91,6 +94,7 @@ struct SettingsView: View {
     let store: TranscriptionStore
     @Bindable var benchmarkStore: BenchmarkStore
     @Bindable var vocabularyStore: VocabularyStore
+    @Bindable var correctionPromptStore: CorrectionPromptStore
 
     @State private var selectedPage: SettingsPage = .history
 
@@ -116,6 +120,8 @@ struct SettingsView: View {
             BenchmarkView(appState: appState, store: benchmarkStore, historyStore: store)
         case .vocabulary:
             VocabularyView(appState: appState, store: vocabularyStore)
+        case .correction:
+            CorrectionPromptsView(appState: appState, store: correctionPromptStore)
         case .keyboard:
             keyboardPage
         case .microphone:
@@ -148,6 +154,13 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
             }
 
+            Section("Correção LLM") {
+                LabeledContent("Aplicar prompt") {
+                    Text("⇧ Shift + tecla de ativação")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section {
                 Toggle("Escape cancela gravação", isOn: $activationKeyManager.escapeToCancel)
             } footer: {
@@ -160,6 +173,16 @@ struct SettingsView: View {
 
     // MARK: - Microfone
 
+    /// ID do microfone que será usado na próxima gravação
+    private var preferredMicrophoneID: String? {
+        // Durante gravação, mostra o mic realmente ativo
+        if let activeID = microphoneManager.activeMicrophoneID {
+            return activeID
+        }
+        // Fora de gravação, mostra o primeiro conectado na ordem de prioridade
+        return microphoneManager.microphones.first(where: \.isConnected)?.id
+    }
+
     private var microphonePage: some View {
         Form {
             Section {
@@ -168,25 +191,13 @@ struct SettingsView: View {
 
             if !microphoneManager.useSystemDefault {
                 Section {
-                    ForEach(Array(microphoneManager.microphones.enumerated()), id: \.element.id) { index, mic in
+                    ForEach(microphoneManager.microphones) { mic in
                         HStack {
-                            if mic.isConnected {
-                                Label(mic.name, systemImage: "mic")
-                            } else {
-                                Label(mic.name, systemImage: "mic.slash")
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            if mic.id == microphoneManager.activeMicrophoneID {
-                                Text("Ativo")
-                                    .font(.caption)
-                                    .foregroundStyle(.green)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 2)
-                                    .background(.green.opacity(0.1), in: Capsule())
-                            }
+                            let isPreferred = mic.id == preferredMicrophoneID
+                            Image(systemName: isPreferred ? "mic.circle.fill" : (mic.isConnected ? "mic" : "mic.slash"))
+                                .foregroundStyle(isPreferred ? .green : (mic.isConnected ? .primary : .secondary))
+                            Text(mic.name)
+                                .foregroundStyle(mic.isConnected ? .primary : .secondary)
                         }
                     }
                     .onMove { source, destination in

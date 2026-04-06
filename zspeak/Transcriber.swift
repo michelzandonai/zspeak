@@ -49,8 +49,31 @@ actor Transcriber {
             ctcModels = try await CtcModels.downloadAndLoad(to: Self.modelsDirectory, variant: .ctc110m)
         }
 
+        // Tokeniza termos com CTC tokenizer — sem ctcTokenIds o rescorer pula o termo
+        let ctcModelDir = CtcModels.defaultCacheDirectory(for: ctcModels!.variant)
+        let tokenizer = try await CtcTokenizer.load(from: ctcModelDir)
+
+        let tokenizedTerms = context.terms.map { term in
+            let ids = tokenizer.encode(term.text)
+            return CustomVocabularyTerm(
+                text: term.text,
+                weight: term.weight,
+                aliases: term.aliases,
+                ctcTokenIds: ids.isEmpty ? nil : ids
+            )
+        }
+
+        let tokenizedContext = CustomVocabularyContext(
+            terms: tokenizedTerms,
+            alpha: context.alpha,
+            minCtcScore: context.minCtcScore,
+            minSimilarity: context.minSimilarity,
+            minCombinedConfidence: context.minCombinedConfidence,
+            minTermLength: context.minTermLength
+        )
+
         try await manager.configureVocabularyBoosting(
-            vocabulary: context,
+            vocabulary: tokenizedContext,
             ctcModels: ctcModels!
         )
     }

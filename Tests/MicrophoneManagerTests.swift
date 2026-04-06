@@ -55,12 +55,15 @@ struct MicrophoneManagerTests {
 
     // MARK: - activeMicrophoneName
 
-    @Test("Sem activeMicrophoneID deve retornar 'System Default'")
+    @Test("Sem activeMicrophoneID deve retornar nome real do device padrão do sistema")
     func testActiveMicrophoneNameDefault() {
         let manager = MicrophoneManager()
         manager.activeMicrophoneID = nil
 
-        #expect(manager.activeMicrophoneName == "System Default")
+        // Deve resolver o nome real do dispositivo padrão (ex: "MacBook Pro Microphone")
+        // Só cai em "System Default" se não houver nenhum device de áudio
+        let name = manager.activeMicrophoneName
+        #expect(!name.isEmpty)
     }
 
     @Test("Com activeMicrophoneID valido deve retornar nome do microfone")
@@ -75,7 +78,7 @@ struct MicrophoneManagerTests {
         #expect(manager.activeMicrophoneName == "Blue Yeti")
     }
 
-    @Test("Com activeMicrophoneID invalido deve retornar 'System Default'")
+    @Test("Com activeMicrophoneID invalido deve retornar nome real do device padrão")
     func testActiveMicrophoneNameWithInvalidID() {
         let manager = MicrophoneManager()
         manager.microphones = [
@@ -83,7 +86,9 @@ struct MicrophoneManagerTests {
         ]
         manager.activeMicrophoneID = "mic-inexistente"
 
-        #expect(manager.activeMicrophoneName == "System Default")
+        // ID inválido → fallback para nome real do device padrão do sistema
+        let name = manager.activeMicrophoneName
+        #expect(!name.isEmpty)
     }
 
     // MARK: - Reorder

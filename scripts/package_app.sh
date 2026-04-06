@@ -33,6 +33,20 @@ cp "$INFO_PLIST" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP_NAME" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$CONTENTS_DIR/Info.plist"
 
+echo "==> Compilando Metal shaders do MLX"
+METAL_DIR="$ROOT_DIR/.build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
+if [ -d "$METAL_DIR" ]; then
+  MLX_AIR_DIR="$(mktemp -d)"
+  find "$METAL_DIR" -name "*.metal" -exec sh -c '
+    xcrun -sdk macosx metal -c "$1" -I "$2" -o "$3/$(basename "$1" .metal).air" 2>/dev/null
+  ' _ {} "$METAL_DIR" "$MLX_AIR_DIR" \;
+  xcrun -sdk macosx metallib "$MLX_AIR_DIR"/*.air -o "$MACOS_DIR/mlx.metallib" 2>/dev/null
+  rm -rf "$MLX_AIR_DIR"
+  echo "  mlx.metallib gerado ($(du -h "$MACOS_DIR/mlx.metallib" | cut -f1))"
+else
+  echo "  AVISO: Diretório Metal do MLX não encontrado, pulando metallib"
+fi
+
 echo "==> Assinando app com '$SIGNING_IDENTITY'"
 codesign \
   --force \

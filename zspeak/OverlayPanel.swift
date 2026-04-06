@@ -28,15 +28,18 @@ final class OverlayPanel: NSPanel {
         isReleasedWhenClosed = false
 
         // Posiciona no topo central da tela
-        positionAtTopCenter()
+        positionAtBottomCenter()
     }
 
-    /// Posiciona o painel no topo central da tela principal
-    private func positionAtTopCenter() {
+    /// Permite que SwiftUI receba eventos de mouse no painel
+    override var canBecomeKey: Bool { true }
+
+    /// Posiciona o painel na parte inferior central da tela principal
+    private func positionAtBottomCenter() {
         guard let screen = NSScreen.main else { return }
         let screenFrame = screen.visibleFrame
         let x = screenFrame.midX - frame.width / 2
-        let y = screenFrame.maxY - frame.height - 12
+        let y = screenFrame.minY + 80
         setFrameOrigin(NSPoint(x: x, y: y))
     }
 
@@ -44,9 +47,9 @@ final class OverlayPanel: NSPanel {
     func show() {
         alphaValue = 0
         orderFrontRegardless()
-        positionAtTopCenter()
+        positionAtBottomCenter()
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
+            context.duration = 0.1
             self.animator().alphaValue = 1
         }
     }
@@ -54,7 +57,7 @@ final class OverlayPanel: NSPanel {
     /// Esconde o painel com animação
     func hide() {
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.2
+            context.duration = 0.1
             self.animator().alphaValue = 0
         }) { [weak self] in
             MainActor.assumeIsolated {

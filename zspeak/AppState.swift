@@ -11,10 +11,12 @@ final class AppState {
 
     // MARK: - Estado
 
-    enum RecordingState {
+    enum RecordingState: Equatable {
         case idle          // Pronto para usar
         case recording     // Gravando audio
         case processing    // Transcrevendo
+        case promptReady   // Overlay mostra botão de prompt LLM
+        case applyingPrompt // LLM processando correção
     }
 
     var state: RecordingState = .idle
@@ -30,12 +32,21 @@ final class AppState {
     /// Store de vocabulário customizado — setado externamente pelo App.swift
     var vocabularyStore: VocabularyStore?
 
+    /// Store de prompts de correção LLM — setado externamente pelo App.swift
+    var correctionPromptStore: CorrectionPromptStore?
+
+    /// Toggle global de correção LLM — persiste em UserDefaults
+    var llmCorrectionEnabled: Bool = UserDefaults.standard.bool(forKey: "llmCorrectionEnabled") {
+        didSet { UserDefaults.standard.set(llmCorrectionEnabled, forKey: "llmCorrectionEnabled") }
+    }
+
     // MARK: - Dependencias
 
     let microphoneManager: MicrophoneManager
     private let audioCapture = AudioCapture()
     private let transcriber = Transcriber()
     private let textInserter = TextInserter()
+    private let llmManager = LLMCorrectionManager()
 
     /// Expõe transcrição para uso externo (benchmark)
     func transcribe(_ samples: [Float]) async throws -> String {
@@ -53,6 +64,137 @@ final class AppState {
             try await transcriber.configureVocabulary(context)
         }
     }
+
+    /// Aplica o prompt ativo na última transcrição e copia o resultado
+    var isApplyingPrompt = false
+
+    func applyPrompt() {
+        guard !lastTranscription.isEmpty else {
+            errorMessage = "Nenhuma transcrição para processar."
+            return
+        }
+        guard let prompt = correctionPromptStore?.activePrompt else {
+            errorMessage = "Nenhum prompt ativo. Configure em Correção LLM."
+            return
+        }
+        guard !isApplyingPrompt else { return }
+
+        isApplyingPrompt = true
+        state = .applyingPrompt
+        errorMessage = nil
+
+        Task {
+            do {
+                let corrected = try await llmManager.correct(
+                    text: lastTranscription,
+                    systemPrompt: prompt.systemPrompt
+                )
+                if !corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lastTranscription = corrected
+                    if accessibilityGranted {
+                        let inserted = textInserter.insert(corrected)
+                        if !inserted {
+                            textInserter.copyToClipboard(corrected)
+                        }
+                    } else {
+                        textInserter.copyToClipboard(corrected)
+                    }
+                    logger.info("Prompt aplicado: \(corrected.count) chars")
+                } else {
+                    errorMessage = "LLM retornou vazio."
+                }
+            } catch {
+                errorMessage = "Erro ao aplicar prompt: \(error.localizedDescription)"
+                logger.error("applyPrompt falhou: \(error.localizedDescription)")
+            }
+            isApplyingPrompt = false
+            state = .idle
+        }
+    }
+
+    /// Aplica um prompt específico (do seletor do overlay) na última transcrição
+    func applyPromptWithSpecific(_ prompt: CorrectionPrompt) {
+        guard !lastTranscription.isEmpty else { return }
+        guard !isApplyingPrompt else { return }
+
+        isApplyingPrompt = true
+        state = .applyingPrompt
+        errorMessage = nil
+
+        Task {
+            do {
+                let corrected = try await llmManager.correct(
+                    text: lastTranscription,
+                    systemPrompt: prompt.systemPrompt
+                )
+                if !corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lastTranscription = corrected
+                    if accessibilityGranted {
+                        let inserted = textInserter.insert(corrected)
+                        if !inserted {
+                            textInserter.copyToClipboard(corrected)
+                        }
+                    } else {
+                        textInserter.copyToClipboard(corrected)
+                    }
+                    logger.info("Prompt aplicado: \(corrected.count) chars")
+                } else {
+                    errorMessage = "LLM retornou vazio."
+                }
+            } catch {
+                errorMessage = "Erro ao aplicar prompt: \(error.localizedDescription)"
+                logger.error("applyPrompt falhou: \(error.localizedDescription)")
+            }
+            isApplyingPrompt = false
+            state = .idle
+        }
+    }
+
+    /// Dismiss do estado promptReady — volta para idle
+    func dismissPromptReady() {
+        guard state == .promptReady else { return }
+        state = .idle
+    }
+
+    /// Baixa o modelo LLM para correção — retorna estado final
+    func downloadLLMModel() async -> LLMCorrectionManager.ModelState {
+        do {
+            try await llmManager.downloadModel()
+        } catch {
+            logger.error("Erro no download do modelo LLM: \(error.localizedDescription)")
+        }
+        return await llmManager.modelState
+    }
+
+    /// Estado atual do modelo LLM
+    func llmModelState() async -> LLMCorrectionManager.ModelState {
+        await llmManager.modelState
+    }
+
+    /// Carrega modelo LLM na memória (sem download)
+    func loadLLMModel() async -> LLMCorrectionManager.ModelState {
+        do {
+            try await llmManager.loadModel()
+        } catch {
+            logger.error("Erro ao carregar modelo LLM: \(error.localizedDescription)")
+        }
+        return await llmManager.modelState
+    }
+
+    /// Remove modelo LLM do disco
+    func removeLLMModel() async {
+        do {
+            try await llmManager.deleteModel()
+        } catch {
+            logger.error("Erro ao remover modelo LLM: \(error.localizedDescription)")
+        }
+    }
+
+    /// Tamanho do modelo LLM no disco
+    func llmModelSizeOnDisk() async -> Int64? {
+        await llmManager.modelSizeOnDisk()
+    }
+
     private var recordingTask: Task<Void, Never>?
     private var isRequestingMicrophonePermission = false
 
@@ -74,7 +216,11 @@ final class AppState {
             isModelReady = true
 
             // Aplica vocabulário customizado se configurado
-            try? await applyVocabulary()
+            do {
+                try await applyVocabulary()
+            } catch {
+                logger.error("Falha ao aplicar vocabulário: \(error.localizedDescription)")
+            }
         } catch {
             errorMessage = "Erro ao carregar modelos: \(error.localizedDescription)"
         }
@@ -92,12 +238,18 @@ final class AppState {
             stopRecording()
         case .processing:
             logger.info("toggleRecording: ignorado durante processing")
+        case .promptReady:
+            dismissPromptReady()
+            startRecording()
+        case .applyingPrompt:
+            logger.info("toggleRecording: ignorado durante applyingPrompt")
         }
     }
 
     /// Inicia gravação se estiver idle — usado pelo modo Hold
     func startRecordingIfIdle() {
-        guard state == .idle else { return }
+        guard state == .idle || state == .promptReady else { return }
+        if state == .promptReady { dismissPromptReady() }
         startRecording()
     }
 
@@ -183,7 +335,7 @@ final class AppState {
                 }
 
                 // Transcreve o audio
-                let text = try await transcriber.transcribe(samples)
+                var text = try await transcriber.transcribe(samples)
 
                 // Se o texto esta vazio (silencio), volta para idle
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -212,7 +364,16 @@ final class AppState {
                     errorMessage = "Transcrição copiada para o clipboard. Ative Acessibilidade para colar automaticamente."
                 }
 
-                state = .idle
+                // Transiciona para promptReady se LLM está disponível
+                let modelExists = await llmManager.checkModelExists()
+                let shouldShowPrompt = llmCorrectionEnabled
+                    && correctionPromptStore?.activePrompt != nil
+                    && modelExists
+                if shouldShowPrompt {
+                    state = .promptReady
+                } else {
+                    state = .idle
+                }
             } catch {
                 state = .idle
                 errorMessage = "Erro na transcricao: \(error.localizedDescription)"

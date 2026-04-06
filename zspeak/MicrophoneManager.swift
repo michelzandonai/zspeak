@@ -60,7 +60,8 @@ final class MicrophoneManager {
            let mic = microphones.first(where: { $0.id == id }) {
             return mic.name
         }
-        return "System Default"
+        // Resolve o nome real do dispositivo padrão do sistema
+        return AVCaptureDevice.default(for: .audio)?.localizedName ?? "System Default"
     }
 
     var isPermissionGranted: Bool {

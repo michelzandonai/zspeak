@@ -7,6 +7,7 @@ final class OverlayController {
     private let appState: AppState
     private let model = OverlayModel()
     private var isShowing = false
+    private var dismissTimer: Timer?
 
     init(appState: AppState) {
         self.appState = appState
@@ -14,6 +15,19 @@ final class OverlayController {
         model.getAudioLevel = { [weak appState] in
             await appState?.currentAudioLevel() ?? 0
         }
+
+        // Callbacks para ações do overlay
+        model.onApplyPrompt = { [weak appState] in
+            appState?.applyPrompt()
+        }
+        model.onSwitchAndApplyPrompt = { [weak appState] prompt in
+            appState?.correctionPromptStore?.setActive(prompt)
+            appState?.applyPromptWithSpecific(prompt)
+        }
+        model.onDismissPromptReady = { [weak appState] in
+            appState?.dismissPromptReady()
+        }
+
         panel.setupContent(model: model)
         startObserving()
     }
@@ -42,13 +56,35 @@ final class OverlayController {
         // Nome do microfone ativo (do MicrophoneManager ou default)
         model.microphoneName = appState.microphoneManager.activeMicrophoneName
 
+        // Sincronizar prompts LLM
+        if let store = appState.correctionPromptStore {
+            model.prompts = store.prompts
+            model.activePromptName = store.activePrompt?.name ?? ""
+        }
+
         switch appState.state {
-        case .recording, .processing:
+        case .recording, .processing, .applyingPrompt:
+            dismissTimer?.invalidate()
+            dismissTimer = nil
             if !isShowing {
                 panel.show()
                 isShowing = true
             }
+        case .promptReady:
+            if !isShowing {
+                panel.show()
+                isShowing = true
+            }
+            // Timer de auto-dismiss 4s
+            dismissTimer?.invalidate()
+            dismissTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { [weak self] _ in
+                Task { @MainActor in
+                    self?.appState.dismissPromptReady()
+                }
+            }
         case .idle:
+            dismissTimer?.invalidate()
+            dismissTimer = nil
             if isShowing {
                 panel.hide()
                 isShowing = false
@@ -68,6 +104,7 @@ struct ZSpeakApp: App {
     @State private var store = TranscriptionStore()
     @State private var benchmarkStore = BenchmarkStore()
     @State private var vocabularyStore = VocabularyStore()
+    @State private var correctionPromptStore = CorrectionPromptStore()
     private let activationKeyManager = ActivationKeyManager()
     private let accessibilityManager = AccessibilityManager()
     private let hotkeyManager: HotkeyManager
@@ -77,7 +114,7 @@ struct ZSpeakApp: App {
     var body: some Scene {
         // App vive exclusivamente no menu bar (sem janela principal)
         MenuBarExtra {
-            MenuBarView(appState: appState, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore)
+            MenuBarView(appState: appState, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore, correctionPromptStore: correctionPromptStore)
         } label: {
             Image(systemName: menuBarIcon)
                 .symbolRenderingMode(.palette)
@@ -86,7 +123,7 @@ struct ZSpeakApp: App {
         // Janela de configurações
         Settings {
             let mgr = appState.microphoneManager
-            SettingsView(appState: appState, microphoneManager: mgr, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore)
+            SettingsView(appState: appState, microphoneManager: mgr, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore, correctionPromptStore: correctionPromptStore)
         }
     }
 
@@ -98,6 +135,10 @@ struct ZSpeakApp: App {
         case .recording:
             return "mic.fill"
         case .processing:
+            return "waveform"
+        case .promptReady:
+            return "sparkles"
+        case .applyingPrompt:
             return "waveform"
         }
     }
@@ -111,6 +152,7 @@ struct ZSpeakApp: App {
         state.store = store
         state.benchmarkStore = benchmarkStore
         state.vocabularyStore = vocabularyStore
+        state.correctionPromptStore = correctionPromptStore
         benchmarkStore.importFromHistory(historyStore: store)
 
         // Sincroniza estado inicial de Accessibility com AppState
@@ -138,6 +180,12 @@ struct ZSpeakApp: App {
             onStopRecording: { state.stopRecordingIfActive() },
             onCancelRecording: { state.cancelRecording() }
         )
+
+        // Hotkey de aplicar prompt LLM
+        hotkeyManager.onApplyPrompt = {
+            TextInserter.saveFocusedApp()
+            state.applyPrompt()
+        }
 
         // Carrega modelos no startup
         Task {

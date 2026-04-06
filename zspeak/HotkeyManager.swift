@@ -31,6 +31,9 @@ final class HotkeyManager {
     private var onStopRecording: (@MainActor () -> Void)?
     private var onCancelRecording: (@MainActor () -> Void)?
 
+    /// Callback para aplicar correção LLM (Shift + tecla de ativação)
+    var onApplyPrompt: (@MainActor () -> Void)?
+
     // Estado interno para double tap
     private var lastTapTime: Date?
     private let doubleTapInterval: TimeInterval = 0.3
@@ -165,6 +168,14 @@ final class HotkeyManager {
         // Para teclas individuais, verifica se o keycode corresponde
         if let expectedKeyCode = singleKeyCode(for: selectedKey) {
             if keyCode == expectedKeyCode {
+                // Shift + tecla de ativação = aplicar prompt (exceto se a tecla já é Shift)
+                if isKeyDown && flags.contains(.maskShift)
+                    && keyCode != KeyCode.leftShift.rawValue
+                    && keyCode != KeyCode.rightShift.rawValue {
+                    onApplyPrompt?()
+                    previousFlags = flags
+                    return
+                }
                 handleActivation(isDown: isKeyDown)
             }
         }

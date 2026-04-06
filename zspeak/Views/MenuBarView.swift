@@ -8,6 +8,7 @@ struct MenuBarView: View {
     let store: TranscriptionStore
     let benchmarkStore: BenchmarkStore
     let vocabularyStore: VocabularyStore
+    let correctionPromptStore: CorrectionPromptStore
 
     var body: some View {
         // Status atual
@@ -84,6 +85,22 @@ struct MenuBarView: View {
             Divider()
         }
 
+        // Aplicar prompt LLM na última transcrição
+        if !appState.lastTranscription.isEmpty, correctionPromptStore.activePrompt != nil {
+            Button {
+                appState.applyPrompt()
+            } label: {
+                if appState.isApplyingPrompt {
+                    Label("Processando...", systemImage: "sparkles")
+                } else {
+                    Label("Aplicar Prompt (\(correctionPromptStore.activePrompt!.name))", systemImage: "sparkles")
+                }
+            }
+            .disabled(appState.isApplyingPrompt || appState.state != .idle)
+
+            Divider()
+        }
+
         // Erro
         if let error = appState.errorMessage {
             Label(error, systemImage: "exclamationmark.triangle")
@@ -94,7 +111,7 @@ struct MenuBarView: View {
 
         // Configurações e sair
         Button("Configurações...") {
-            SettingsWindowController.shared.show(appState: appState, microphoneManager: appState.microphoneManager, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore)
+            SettingsWindowController.shared.show(appState: appState, microphoneManager: appState.microphoneManager, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore, correctionPromptStore: correctionPromptStore)
         }
         .keyboardShortcut(",", modifiers: [.command])
 
@@ -111,6 +128,8 @@ struct MenuBarView: View {
             return appState.isModelReady ? .green : .gray
         case .recording: return .red
         case .processing: return .yellow
+        case .promptReady: return .purple
+        case .applyingPrompt: return .yellow
         }
     }
 
@@ -121,6 +140,8 @@ struct MenuBarView: View {
         case .idle: return "Pronto"
         case .recording: return "Gravando..."
         case .processing: return "Transcrevendo..."
+        case .promptReady: return "Prompt disponível"
+        case .applyingPrompt: return "Aplicando prompt..."
         }
     }
 
