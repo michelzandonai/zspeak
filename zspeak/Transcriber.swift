@@ -6,7 +6,6 @@ import FluidAudio
 actor Transcriber {
 
     private var asrManager: AsrManager?
-    private var ctcModels: CtcModels?
     private(set) var isReady = false
 
     /// Diretório exclusivo do zspeak para modelos — evita conflito com outros apps (Spokenly)
@@ -21,7 +20,7 @@ actor Transcriber {
     func initialize() async throws {
         let models = try await AsrModels.downloadAndLoad(to: Self.modelsDirectory, version: .v3)
         let manager = AsrManager(config: .default)
-        try await manager.initialize(models: models)
+        try await manager.loadModels(models)
         self.asrManager = manager
         self.isReady = true
     }
@@ -38,49 +37,20 @@ actor Transcriber {
     }
 
     /// Configura vocabulário customizado com context biasing nativo
-    /// Baixa modelo CTC auxiliar (~110MB) na primeira chamada
+    /// TASK-001: API configureVocabularyBoosting/disableVocabularyBoosting foi removida do
+    /// AsrManager na versão atual do FluidAudio (migrou para SlidingWindowAsrManager).
+    /// Mantido como no-op até decidirmos migrar ou pinar versão antiga.
     func configureVocabulary(_ context: CustomVocabularyContext) async throws {
-        guard let manager = asrManager else {
+        guard asrManager != nil else {
             throw TranscriberError.notInitialized
         }
-
-        // Baixa/carrega modelo CTC se necessário (diretório exclusivo do zspeak)
-        if ctcModels == nil {
-            ctcModels = try await CtcModels.downloadAndLoad(to: Self.modelsDirectory, variant: .ctc110m)
-        }
-
-        // Tokeniza termos com CTC tokenizer — sem ctcTokenIds o rescorer pula o termo
-        let ctcModelDir = CtcModels.defaultCacheDirectory(for: ctcModels!.variant)
-        let tokenizer = try await CtcTokenizer.load(from: ctcModelDir)
-
-        let tokenizedTerms = context.terms.map { term in
-            let ids = tokenizer.encode(term.text)
-            return CustomVocabularyTerm(
-                text: term.text,
-                weight: term.weight,
-                aliases: term.aliases,
-                ctcTokenIds: ids.isEmpty ? nil : ids
-            )
-        }
-
-        let tokenizedContext = CustomVocabularyContext(
-            terms: tokenizedTerms,
-            alpha: context.alpha,
-            minCtcScore: context.minCtcScore,
-            minSimilarity: context.minSimilarity,
-            minCombinedConfidence: context.minCombinedConfidence,
-            minTermLength: context.minTermLength
-        )
-
-        try await manager.configureVocabularyBoosting(
-            vocabulary: tokenizedContext,
-            ctcModels: ctcModels!
-        )
+        // No-op: feature temporariamente indisponível — ver TASK-001
+        _ = context
     }
 
-    /// Desativa vocabulário customizado
+    /// Desativa vocabulário customizado — no-op (ver TASK-001)
     func disableVocabulary() async {
-        await asrManager?.disableVocabularyBoosting()
+        // No-op
     }
 
     enum TranscriberError: LocalizedError {

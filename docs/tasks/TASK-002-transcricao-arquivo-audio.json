@@ -1,0 +1,55 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-002",
+  "title": "Transcrição de arquivos de áudio com diarização opcional",
+  "status": "in_progress",
+  "dateCreated": "2026-04-07",
+  "dateModified": "2026-04-07",
+  "owner": "Michel Zandonai",
+  "context": "Hoje o zspeak só transcreve áudio capturado em tempo real do microfone. O usuário precisa transcrever arquivos de áudio externos — áudios do WhatsApp (.opus/.ogg), gravações antigas, podcasts, reuniões. O modelo Parakeet TDT v3 já está carregado, custo incremental é quase zero. A feature está listada como 'Fora do Escopo' no PRD do MVP e precisa ser movida para escopo pós-MVP. Escopo inclui identificação de interlocutores (diarização) para áudios de reunião, usando OfflineDiarizerManager do FluidAudio (já disponível no SDK que usamos).",
+  "goal": "Permitir transcrever arquivos de áudio de qualquer formato (incluindo Opus/Ogg do WhatsApp via ffmpeg embutido) com opção de identificar interlocutores em reuniões. Resultado mostrado na tela com botões Copiar e Baixar .txt, salvo no histórico.",
+  "acceptance": [
+    "Nova aba 'Transcrever Arquivo' em Settings acessível via sidebar e via item 'Transcrever arquivo...' no menu do tray",
+    "Drag & drop + file picker aceitam qualquer formato de áudio (WAV, MP3, M4A, AAC, FLAC, AIFF, CAF, OPUS, OGG, WMA, AMR, WebM)",
+    "Formatos nativos (WAV/MP3/M4A/AAC/FLAC/AIFF/CAF) são processados direto via FluidAudio.AudioConverter.resampleAudioFile",
+    "Formatos não-nativos são transcodados via ffmpeg embutido no bundle (Contents/MacOS/ffmpeg) antes do processamento",
+    "Modo 'Texto corrido' retorna texto simples da transcrição",
+    "Modo 'Reunião' baixa modelos de diarização (~600 MB) na primeira vez e retorna segmentos com speakerId, timestamp e texto",
+    "Botão 'Copiar' copia texto final para clipboard",
+    "Botão 'Baixar .txt' salva arquivo .txt via NSSavePanel",
+    "Resultado é salvo no histórico (TranscriptionStore) com targetAppName=nil, permitindo aplicar prompt LLM posteriormente",
+    "package_app.sh baixa ffmpeg arm64 de martin-riedl.de, assina com --options runtime e embute no bundle",
+    "swift build compila sem erros, swift test passa (todos os testes atuais + novos)",
+    "Erro amigável quando arquivo não é áudio ou transcodificação falha"
+  ],
+  "changes": [
+    "Criar zspeak/FFmpegTranscoder.swift — wrapper async para Process + ffmpeg com timeout e captura de stderr",
+    "Criar zspeak/DiarizationManager.swift — actor wrapper para OfflineDiarizerManager do FluidAudio com estados, idle timer e mapeamento de tipos",
+    "Criar zspeak/AudioFileTranscriber.swift — orquestra pipeline (detecta formato, transcoda se necessário, chama ASR e opcionalmente diarização)",
+    "Criar zspeak/Views/AudioFileView.swift — UI principal da feature com drag & drop, file picker, picker de modo, progresso multifase e visualizações plain/meeting",
+    "Modificar zspeak/AppState.swift — adicionar propriedade diarizationManager e método transcribeFile(url:mode:onProgress:)",
+    "Modificar zspeak/Views/SettingsView.swift — adicionar case audioFile no enum SettingsPage, case no detailView e parâmetro initialPage em SettingsWindowController.show",
+    "Modificar zspeak/Views/MenuBarView.swift — adicionar item 'Transcrever arquivo...' com atalho cmd+shift+T",
+    "Modificar zspeak/App.swift — instanciar DiarizationManager e propagar para AppState",
+    "Modificar scripts/package_app.sh — adicionar download de ffmpeg arm64 com cache + re-assinatura antes do codesign do app",
+    "Atualizar docs/prd/mvp.md — mover 'Transcrição de arquivos de áudio/vídeo' da seção 9 (Fora do Escopo) para nova seção 5.9",
+    "Criar docs/adr/010-transcricao-arquivo-audio.md — decisões sobre ffmpeg, OfflineDiarizerManager e estratégia diarize-then-transcribe",
+    "Criar Tests/FFmpegTranscoderTests.swift — integração com skip se binário não disponível",
+    "Criar Tests/AudioFileTranscriberTests.swift — testa detecção de formato, supportedExtensions e erros",
+    "Criar Tests/DiarizationManagerTests.swift — funções puras de mapeamento (sem carregar modelo)",
+    "Estender Tests/AppStateTests.swift — testa transcribeFile com WAV gerado"
+  ],
+  "followUps": [
+    "Avaliar licença do repo FluidInference/speaker-diarization-coreml no HuggingFace — se for não-comercial, adicionar disclaimer explícito na UI do modo Reunião",
+    "Batch transcription (múltiplos arquivos de uma vez)",
+    "Drop de arquivo no ícone do tray (requer NSApplicationDelegate.openURLs)",
+    "Suporte a arquivos de vídeo (.mp4, .mov — ffmpeg já extrai o áudio, só faltaria ajustar UI)",
+    "Exportar como .srt / .vtt (legendas com timestamps do modo Reunião)",
+    "Nomear speakers (renomear 'Speaker 0' → 'João', etc.)",
+    "Suporte a speaker embeddings persistentes (reconhecer mesmo falante entre arquivos)"
+  ],
+  "changelog": [
+    { "date": "2026-04-07", "change": "Task criada após decisão do usuário por ffmpeg embutido + diarização via FluidAudio" }
+  ]
+}

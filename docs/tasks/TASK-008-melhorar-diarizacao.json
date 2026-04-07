@@ -1,0 +1,35 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-008",
+  "title": "Reduzir over-segmentation da diarização (numSpeakers + tuning de defaults)",
+  "status": "completed",
+  "dateCreated": "2026-04-07",
+  "dateModified": "2026-04-07",
+  "owner": "Michel Zandonai",
+  "context": "Usuário relatou que reuniões transcritas tinham 5+ speakers (S3, S5, ...) quando na real eram 2-3 pessoas. Pesquisa em FluidAudio/pyannote confirma que o problema é over-segmentation: o clustering padrão (threshold 0.6) é sensível demais para áudio com reverb, compressão (m4a) ou variação vocal. Pyannote/community-1 expõe parâmetros (clustering threshold, numSpeakers, minGapDuration) que estávamos ignorando ao usar OfflineDiarizerConfig.default.",
+  "goal": "Permitir ao usuário informar quantos interlocutores há (eliminando ambiguidade) e melhorar defaults para reduzir over-segmentation em modo automático.",
+  "acceptance": [
+    "DiarizationManager.makeConfig(numSpeakers:) constrói OfflineDiarizerConfig com threshold 0.7 (vs 0.6 default), minGapDurationSeconds 0.5 (vs 0.1 default) e numSpeakers opcional",
+    "DiarizationManager.diarize(samples:numSpeakers:) recria o OfflineDiarizerManager interno quando a hint muda (modelos em disco são reusados)",
+    "AudioFileTranscriber.transcribe propaga numSpeakers até o diarizer",
+    "AppState.transcribeFile aceita numSpeakers opcional",
+    "AudioFileView mostra Picker segmented 'Interlocutores: Auto/2/3/4/5/6' no modo Reunião",
+    "Build e testes passam (21 testes do DiarizationManager incluindo 5 novos para makeConfig)"
+  ],
+  "changes": [
+    "DiarizationManager.swift: makeConfig(numSpeakers:) static; currentNumSpeakers state; diarize(samples:numSpeakers:) recria manager se config mudou; threshold 0.7, minGapDuration 0.5",
+    "AudioFileTranscriber.swift: transcribe(...) aceita numSpeakers e passa para diarizer.diarize",
+    "AppState.swift: transcribeFile(...) aceita numSpeakers",
+    "Views/AudioFileView.swift: @State numSpeakersHint + speakersHintPicker (Picker segmented Auto/2-6) renderizado no modo Reunião",
+    "Tests/DiarizationManagerTests.swift: 5 testes para makeConfig (threshold, numSpeakers, auto, minGap, exclusiveSegments)"
+  ],
+  "followUps": [
+    "Slider de 'Sensibilidade' avançado (mapeia threshold 0.5-0.85) em Settings",
+    "Pós-processamento extra: re-merge de segmentos consecutivos do mesmo speaker com gap < 1s",
+    "Calibrar threshold por benchmarks reais com áudios de reunião do usuário"
+  ],
+  "changelog": [
+    { "date": "2026-04-07", "change": "Task criada após pesquisa de melhores práticas em FluidAudio/pyannote sobre over-segmentation; implementação validada por 5 testes unitários" }
+  ]
+}

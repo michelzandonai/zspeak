@@ -69,6 +69,13 @@ final class TranscriptionStore {
         return id
     }
 
+    /// Atualiza o map de nomes de speakers de um registro existente
+    func updateSpeakerNames(recordID: UUID, names: [String: String]) {
+        guard let idx = records.firstIndex(where: { $0.id == recordID }) else { return }
+        records[idx].speakerNames = names
+        saveJSON()
+    }
+
     /// Remove um registro e seu arquivo de áudio
     func deleteRecord(_ record: TranscriptionRecord) {
         records.removeAll { $0.id == record.id }

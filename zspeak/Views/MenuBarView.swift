@@ -106,6 +106,23 @@ struct MenuBarView: View {
             Divider()
         }
 
+        // Transcrever arquivo de áudio
+        Button("Transcrever arquivo...") {
+            SettingsWindowController.shared.show(
+                appState: appState,
+                microphoneManager: appState.microphoneManager,
+                activationKeyManager: activationKeyManager,
+                accessibilityManager: accessibilityManager,
+                store: store,
+                benchmarkStore: benchmarkStore,
+                vocabularyStore: vocabularyStore,
+                correctionPromptStore: correctionPromptStore,
+                initialPage: .audioFile
+            )
+        }
+        .keyboardShortcut("t", modifiers: [.command, .shift])
+        .disabled(!appState.isModelReady)
+
         // Configurações e sair
         Button("Configurações...") {
             SettingsWindowController.shared.show(appState: appState, microphoneManager: appState.microphoneManager, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore, correctionPromptStore: correctionPromptStore)

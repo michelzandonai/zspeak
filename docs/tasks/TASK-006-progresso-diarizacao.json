@@ -1,0 +1,33 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-006",
+  "title": "Progresso honesto durante diarização (sub-fases + tempo decorrido/estimado)",
+  "status": "completed",
+  "dateCreated": "2026-04-07",
+  "dateModified": "2026-04-07",
+  "owner": "Michel Zandonai",
+  "context": "OfflineDiarizerManager.process() é uma chamada bloqueante única, sem callback de progresso. Hoje a UI mostra apenas 'Identificando interlocutores...' com spinner indeterminado, e em arquivos longos isso pode durar dezenas de segundos sem feedback — usuário acha que travou.",
+  "goal": "Mostrar mensagens rotativas honestas + tempo decorrido vs estimado durante a diarização, sem inventar barra de progresso percentual.",
+  "acceptance": [
+    "AudioFileTranscriber polla tempo decorrido a cada 500ms enquanto a diarização roda",
+    "Estimativa baseada em RTFx ~8x do diarizer FluidAudio em Apple Silicon",
+    "Sub-fases rotativas: 0-30% 'Analisando segmentos de voz', 30-80% 'Extraindo características vocais', 80-100% 'Agrupando interlocutores', >100% 'Finalizando'",
+    "UI mostra '<sub-fase> Xs de ~Ys estimados' atualizado em tempo real",
+    "phaseProgress continua nil para .diarizing (não inventa barra %)",
+    "Função pura diarizingSubphase(elapsed:estimated:) testável sem rodar diarizer real",
+    "Build e testes passam"
+  ],
+  "changes": [
+    "AudioFileTranscriber.swift: case diarizing(elapsed:estimated:) com associated values; constante diarizerRTFx = 8.0; helper static diarizingSubphase(elapsed:estimated:); polling Task em paralelo durante diarizer.diarize(samples:)",
+    "AudioFileView.swift: phaseDescription para .diarizing usa diarizingSubphase + tempo formatado",
+    "Tests/AudioFileTranscriberTests.swift: 2 testes (diarizingSubphase em 0%/50%/90%/110% + estimated 0)"
+  ],
+  "followUps": [
+    "Calibrar diarizerRTFx por benchmarks reais em diferentes Macs (M1/M2/M3)",
+    "Se FluidAudio expor callback nativo no futuro, trocar polling por progresso real"
+  ],
+  "changelog": [
+    { "date": "2026-04-07", "change": "Task criada e implementada após feedback do usuário sobre falta de progresso durante diarização de áudio longo" }
+  ]
+}

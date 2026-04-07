@@ -1,0 +1,37 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-004",
+  "title": "Progresso de download dos modelos de diarização + auto-trigger",
+  "status": "in_progress",
+  "dateCreated": "2026-04-07",
+  "dateModified": "2026-04-07",
+  "owner": "Michel Zandonai",
+  "context": "TASK-002 entregou o modo Reunião com diarização via OfflineDiarizerManager do FluidAudio, que baixa ~600 MB de modelos pyannote/WeSpeaker na primeira execução. O botão 'Baixar modelos agora' não mostra progresso visual enquanto baixa, e quando o usuário tenta transcrever um arquivo em modo Reunião sem os modelos prontos recebe um erro genérico 'Modelo de diarização não está pronto' em vez de auto-disparar o download. UX ruim — usuário fica perdido durante minutos.",
+  "goal": "Mostrar progresso 0-100% durante download dos modelos e auto-disparar a preparação quando o usuário tenta usar modo Reunião sem modelos prontos.",
+  "acceptance": [
+    "DiarizationManager expõe progresso 0-100% via polling do tamanho em disco vs total esperado (~600 MB)",
+    "ModelState.preparing(progress: Double) é atualizado em tempo real durante o download",
+    "AudioFileView mostra ProgressView determinada com % durante o download dos modelos",
+    "Texto descritivo mostra MB baixados / MB totais (ex.: '243 MB de ~600 MB')",
+    "Quando usuário dropa arquivo em modo Reunião sem modelos prontos, o app auto-dispara prepare() e continua a transcrição depois",
+    "Mensagem 'Falha na transcrição: Modelo de diarização não está pronto' é eliminada para o caminho feliz",
+    "Build e testes passam"
+  ],
+  "changes": [
+    "DiarizationManager: adicionar constante expectedTotalBytes (~600 MB), método prepareWithProgress que polla modelsSizeOnDisk a cada 500ms enquanto prepareModels roda em paralelo",
+    "DiarizationManager: atualizar modelState com .preparing(progress:) durante o polling para que observers vejam mudança",
+    "AudioFileView: refresh contínuo do diarizerState durante .preparing (Task de polling enquanto isPreparingDiarizer)",
+    "AudioFileView: ao iniciar transcrição em modo .meeting com diarizer não-ready, auto-dispara prepare() antes de transcribeFile",
+    "AudioFileView: ProgressView determinada com label MB/MB esperados",
+    "Tests/DiarizationManagerTests: testes de função pura para mapeamento progress/size"
+  ],
+  "followUps": [
+    "Cancelamento do download em andamento",
+    "Resume de download interrompido (FluidAudio pode não suportar)",
+    "Pré-fetch automático em background quando o usuário ativa modo Reunião pela primeira vez (sem precisar dropar arquivo)"
+  ],
+  "changelog": [
+    { "date": "2026-04-07", "change": "Task criada após screenshot do usuário mostrando UX ruim com botão sem progresso e erro genérico" }
+  ]
+}

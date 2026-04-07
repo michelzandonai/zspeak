@@ -1,0 +1,38 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-005",
+  "title": "Nomear speakers no modo Reunião com player de identificação",
+  "status": "completed",
+  "dateCreated": "2026-04-07",
+  "dateModified": "2026-04-07",
+  "owner": "Michel Zandonai",
+  "context": "TASK-002 entregou diarização funcionando, mas os speakers ficam como 'Speaker 0'/'Speaker 1' sem como identificar quem é quem nem renomear. Em reuniões com várias pessoas isso torna a transcrição quase inútil.",
+  "goal": "Permitir ao usuário ouvir um trecho representativo de cada speaker (~10s, 3 trechos espalhados) e renomear para um nome humano que persiste no histórico.",
+  "acceptance": [
+    "Painel 'Interlocutores' aparece no resultado modo Reunião listando todos os speakerIds distintos",
+    "Botão ▶/⏸ por speaker toca um snippet de ~10s em loop (3 trechos espalhados na timeline)",
+    "Apenas um player ativo por vez — clicar em outro speaker pausa o anterior",
+    "TextField editável por speaker (default = speakerId) atualiza badges em tempo real",
+    "Copiar e Baixar .txt usam os nomes renomeados",
+    "Nomes persistem no TranscriptionRecord (campo opcional speakerNames) sem quebrar registros antigos",
+    "Build e testes passam"
+  ],
+  "changes": [
+    "zspeak/SpeakerSnippetBuilder.swift: função pura buildSnippet — pega 3 trechos espalhados (1º terço/meio/último) do speaker, ~3.3s cada",
+    "zspeak/SpeakerAudioPlayer.swift: wrapper @MainActor de AVAudioPlayer com loop infinito e WAV temp em arquivo",
+    "zspeak/TranscriptionRecord.swift: campo opcional speakerNames: [String: String]? + helper displayName(for:); decode retrocompatível",
+    "zspeak/TranscriptionStore.swift: updateSpeakerNames(recordID:names:)",
+    "zspeak/AppState.swift: delegate updateSpeakerNames",
+    "zspeak/Views/AudioFileView.swift: speakersPanel/speakerRow com ▶/⏸ + TextField; meetingSegmentRow usa displayName; exportedText() para Copiar/Baixar; inicializa speakerNames + currentRecordID quando recebe result",
+    "Tests/SpeakerSnippetBuilderTests.swift: 4 testes (speaker inexistente, único curto, 6 segmentos espalhados, filtro de outros speakers)"
+  ],
+  "followUps": [
+    "Reconhecimento de speaker entre arquivos diferentes (embeddings persistentes)",
+    "Sugerir nomes a partir de contatos do usuário",
+    "Permitir renomear speakers diretamente do HistoryView"
+  ],
+  "changelog": [
+    { "date": "2026-04-07", "change": "Task criada e implementada após feedback do usuário sobre dificuldade de identificar quem é quem nas reuniões transcritas" }
+  ]
+}

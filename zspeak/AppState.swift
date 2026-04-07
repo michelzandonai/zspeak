@@ -36,6 +36,10 @@ final class AppState {
     /// Gerenciador do Modo Prompt LLM (overlay persistente) — setado externamente pelo App.swift
     var promptModeManager: PromptModeManager?
 
+    /// Gerenciador de diarização de speakers — setado externamente pelo App.swift
+    /// Usado pelo modo Reunião na transcrição de arquivos
+    var diarizationManager: DiarizationManager?
+
     /// ID do último registro de transcrição salvo — usado para linkar correções LLM
     var lastTranscriptionRecordID: UUID?
 
@@ -61,6 +65,57 @@ final class AppState {
     /// Expõe transcrição para uso externo (benchmark)
     func transcribe(_ samples: [Float]) async throws -> String {
         try await transcriber.transcribe(samples)
+    }
+
+    /// Transcreve um arquivo de áudio (qualquer formato suportado)
+    /// - Suporta modo `.plain` (texto corrido) e `.meeting` (com identificação de interlocutores)
+    /// - Salva automaticamente no histórico via TranscriptionStore.addRecord
+    /// - Copia o texto final para o clipboard
+    /// - Atualiza lastTranscription/lastTranscriptionRecordID para permitir "Aplicar prompt LLM" depois
+    func transcribeFile(
+        url: URL,
+        mode: AudioFileTranscriber.Mode,
+        numSpeakers: Int? = nil,
+        onProgress: @escaping @MainActor (FileTranscriptionPhase) -> Void
+    ) async throws -> FileTranscriptionResult {
+        let fileTranscriber = AudioFileTranscriber(
+            transcribe: { [weak self] samples in
+                guard let self else { throw AudioFileTranscriber.TranscriberError.transcriptionFailed("AppState liberado") }
+                return try await self.transcribe(samples)
+            },
+            diarizer: diarizationManager
+        )
+
+        let result = try await fileTranscriber.transcribe(url: url, mode: mode, numSpeakers: numSpeakers, onProgress: onProgress)
+
+        // Persiste no histórico
+        let modelName: String = {
+            switch mode {
+            case .plain: return "Parakeet TDT (arquivo)"
+            case .meeting: return "Parakeet TDT + Diarizer"
+            }
+        }()
+
+        let newID = store?.addRecord(
+            text: result.text,
+            modelName: modelName,
+            duration: result.durationSeconds,
+            targetAppName: nil,
+            samples: result.samples
+        )
+
+        lastTranscription = result.text
+        lastTranscriptionRecordID = newID
+
+        // Copia para o clipboard
+        textInserter.copyToClipboard(result.text)
+
+        return result
+    }
+
+    /// Atualiza o map de nomes de speakers de um registro de transcrição (modo Reunião)
+    func updateSpeakerNames(recordID: UUID, names: [String: String]) {
+        store?.updateSpeakerNames(recordID: recordID, names: names)
     }
 
     /// Aplica vocabulário customizado ao Transcriber (context biasing nativo)

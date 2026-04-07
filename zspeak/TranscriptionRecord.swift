@@ -10,6 +10,9 @@ struct TranscriptionRecord: Identifiable, Codable {
     let targetAppName: String? // app onde texto foi inserido
     let audioFileName: String? // nome do arquivo WAV salvo (ex: "UUID.wav")
     let sourceRecordID: UUID?  // se é resultado de correção LLM, aponta ao registro original
+    /// Map speakerId → nome humano renomeado pelo usuário (modo Reunião).
+    /// Opcional: registros antigos não têm este campo.
+    var speakerNames: [String: String]?
 
     init(
         id: UUID,
@@ -19,7 +22,8 @@ struct TranscriptionRecord: Identifiable, Codable {
         duration: TimeInterval,
         targetAppName: String?,
         audioFileName: String?,
-        sourceRecordID: UUID? = nil
+        sourceRecordID: UUID? = nil,
+        speakerNames: [String: String]? = nil
     ) {
         self.id = id
         self.text = text
@@ -29,9 +33,10 @@ struct TranscriptionRecord: Identifiable, Codable {
         self.targetAppName = targetAppName
         self.audioFileName = audioFileName
         self.sourceRecordID = sourceRecordID
+        self.speakerNames = speakerNames
     }
 
-    // Decodable backward-compat: arquivos antigos não têm sourceRecordID
+    // Decodable backward-compat: arquivos antigos não têm sourceRecordID nem speakerNames
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
@@ -42,5 +47,11 @@ struct TranscriptionRecord: Identifiable, Codable {
         self.targetAppName = try c.decodeIfPresent(String.self, forKey: .targetAppName)
         self.audioFileName = try c.decodeIfPresent(String.self, forKey: .audioFileName)
         self.sourceRecordID = try c.decodeIfPresent(UUID.self, forKey: .sourceRecordID)
+        self.speakerNames = try c.decodeIfPresent([String: String].self, forKey: .speakerNames)
+    }
+
+    /// Retorna o nome customizado do speaker (se houver) ou o ID original
+    func displayName(for speakerId: String) -> String {
+        speakerNames?[speakerId] ?? speakerId
     }
 }

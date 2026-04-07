@@ -1,0 +1,26 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-007",
+  "title": "Botão de cancelar transcrição de arquivo em andamento",
+  "status": "completed",
+  "dateCreated": "2026-04-07",
+  "dateModified": "2026-04-07",
+  "owner": "Michel Zandonai",
+  "context": "Em arquivos longos (>10min), a transcrição em modo plain pode levar minutos com 300+ chunks. Usuário não tem como abortar se errou o arquivo, escolheu o modo errado, ou simplesmente quer parar.",
+  "goal": "Permitir cancelar a qualquer momento durante a transcrição (transcoding, loading, diarização, transcribing).",
+  "acceptance": [
+    "Botão 'Cancelar' visível durante a fase de processamento",
+    "Ao clicar, a Task atual é cancelada e o estado volta para .initial",
+    "Loop de chunks/segmentos para imediatamente ao detectar Task.isCancelled",
+    "Cleanup de WAV temporário continua acontecendo via defer"
+  ],
+  "changes": [
+    "AudioFileTranscriber.swift: checa Task.isCancelled antes de cada chunk/segmento e lança CancellationError",
+    "AudioFileView.swift: botão Cancelar na processingView que chama processingTask.cancel() e seta state = .initial"
+  ],
+  "followUps": [],
+  "changelog": [
+    { "date": "2026-04-07", "change": "Task criada após feedback do usuário sobre falta de botão cancelar em arquivos longos" }
+  ]
+}

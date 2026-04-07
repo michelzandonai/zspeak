@@ -1,0 +1,37 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-003",
+  "title": "Progresso percentual 0-100% para arquivos grandes (conversão + transcrição)",
+  "status": "in_progress",
+  "dateCreated": "2026-04-07",
+  "dateModified": "2026-04-07",
+  "owner": "Michel Zandonai",
+  "context": "TASK-002 entregou a feature de transcrever arquivos de áudio, mas o feedback de progresso é apenas por fase (transcoding, loading, transcribing). Para arquivos grandes (reuniões de 1h+, podcasts), o usuário fica sem noção do tempo restante durante a conversão ffmpeg e durante a transcrição. Precisa de progresso percentual 0-100% em tempo real.",
+  "goal": "Exibir barra de progresso determinada (0-100%) durante conversão ffmpeg e transcrição de arquivos grandes, com atualizações em tempo real.",
+  "acceptance": [
+    "FFmpeg emite progresso via -progress pipe:2 parseado para percentual baseado na duração total do arquivo",
+    "AudioFileView mostra ProgressView determinada (barra com %) durante a conversão",
+    "Transcrição de áudio longo (> 60s) é dividida em chunks de 30s, cada chunk reportando current/total",
+    "AudioFileView mostra ProgressView determinada durante transcrição com 'Transcrevendo chunk X/N...'",
+    "Fallback gracioso: se duração do arquivo não for detectável, cai para ProgressView indeterminada",
+    "FileTranscriptionPhase.transcoding passa a ter Double? progress opcional",
+    "Testes atualizados refletindo nova assinatura, build e test passam"
+  ],
+  "changes": [
+    "FFmpegTranscoder: adicionar parâmetro onProgress callback, usar -progress pipe:2, parsear out_time_us e Duration do stderr",
+    "AudioFileTranscriber: dividir samples em chunks de 30s para modo .plain quando samples.count > 960000, reportar current/total",
+    "AudioFileTranscriber: atualizar FileTranscriptionPhase para carregar Double? (nil = indeterminado)",
+    "AudioFileView: trocar ProgressView() indeterminado por ProgressView(value:total:) quando progress disponível",
+    "Tests/FFmpegTranscoderTests: testar parsing de out_time_us e Duration (funções puras extraídas)",
+    "Tests/AudioFileTranscriberTests: atualizar assertions para nova assinatura de phase"
+  ],
+  "followUps": [
+    "Streaming de resultado parcial durante transcrição (ir preenchendo texto conforme chunks completam)",
+    "Progresso real da leitura de samples via AVAudioFile custom (hoje é instantâneo para arquivos pequenos)",
+    "Cancelamento de transcrição em andamento"
+  ],
+  "changelog": [
+    { "date": "2026-04-07", "change": "Task criada após feedback do usuário sobre arquivos grandes sem progresso detalhado" }
+  ]
+}

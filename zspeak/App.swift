@@ -103,6 +103,7 @@ struct ZSpeakApp: App {
     @State private var vocabularyStore = VocabularyStore()
     @State private var correctionPromptStore = CorrectionPromptStore()
     @State private var promptModeManager = PromptModeManager()
+    private let diarizationManager = DiarizationManager()
     private let activationKeyManager = ActivationKeyManager()
     private let accessibilityManager = AccessibilityManager()
     private let hotkeyManager: HotkeyManager
@@ -149,6 +150,7 @@ struct ZSpeakApp: App {
         state.vocabularyStore = vocabularyStore
         state.correctionPromptStore = correctionPromptStore
         state.promptModeManager = promptMode
+        state.diarizationManager = diarizationManager
         benchmarkStore.importFromHistory(historyStore: store)
 
         // Sincroniza estado inicial de Accessibility com AppState

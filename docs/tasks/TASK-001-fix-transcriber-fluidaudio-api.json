@@ -1,0 +1,29 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-001",
+  "title": "Fix Transcriber — API do AsrManager mudou no FluidAudio",
+  "status": "in_progress",
+  "dateCreated": "2026-04-07",
+  "dateModified": "2026-04-07",
+  "owner": "Michel Zandonai",
+  "context": "O build do DMG falhou porque Transcriber.swift chama AsrManager.initialize(models:), configureVocabularyBoosting() e disableVocabularyBoosting() — métodos que não existem mais na versão atual do FluidAudio em .build/checkouts. initialize foi renomeado para loadModels; a API de vocabulary boosting migrou para SlidingWindowAsrManager e não está mais disponível no AsrManager padrão.",
+  "goal": "Restaurar compilação e gerar DMG instalável do zspeak.",
+  "acceptance": [
+    "swift build compila sem erros",
+    "scripts/package_app.sh gera build/zspeak.app e zspeak-<version>.dmg",
+    "Fluxo de transcrição básica (sem vocabulário custom) segue funcionando"
+  ],
+  "changes": [
+    "Transcriber.initialize(): trocar manager.initialize(models:) por manager.loadModels(models)",
+    "Transcriber.configureVocabulary(): transformar em no-op temporário (log de aviso) — feature de context biasing indisponível nesta versão do FluidAudio",
+    "Transcriber.disableVocabulary(): no-op"
+  ],
+  "followUps": [
+    "Avaliar migração para SlidingWindowAsrManager para reativar vocabulary boosting, OU pinar FluidAudio em versão que ainda expõe configureVocabularyBoosting no AsrManager",
+    "Atualizar PRD/ADR de vocabulário nativo quando a decisão for tomada"
+  ],
+  "changelog": [
+    { "date": "2026-04-07", "change": "Task criada após falha de build durante packaging do DMG" }
+  ]
+}

@@ -103,6 +103,19 @@ App de menubar que:
 - Últimas N transcrições acessíveis pelo menu do tray
 - Copiar transcrição anterior para clipboard
 
+### 5.9 Transcrição de arquivos de áudio (pós-MVP — TASK-002)
+
+- Aba dedicada em Settings (drag & drop + file picker) e atalho no menu do tray
+- Suporte universal a formatos via ffmpeg embutido no bundle:
+  - Nativo (AVAudioFile): WAV, MP3, M4A, AAC, FLAC, AIFF, CAF
+  - Via ffmpeg: OPUS, OGG (WhatsApp), WMA, AMR, WebM, MKA, 3GP
+- Dois modos de visualização:
+  - **Texto corrido:** transcrição plana (simples, ideal para áudios de mensagem)
+  - **Reunião:** identifica interlocutores via `OfflineDiarizerManager` do FluidAudio (pyannote 3.1 + WeSpeaker), mostra segmentos com badge colorida por speaker e timestamps
+- Resultado mostrado na tela com botões "Copiar" e "Baixar .txt"
+- Salvo no histórico (compatível com "Aplicar prompt LLM" a posteriori)
+- Modelos de diarização (~600 MB) baixados sob demanda na primeira vez que o usuário usa o modo Reunião
+
 ---
 
 ## 6. Requisitos Não-Funcionais
@@ -184,15 +197,16 @@ App de menubar que:
 
 - Múltiplos modelos de transcrição
 - Modo de comandos de voz (controlar Mac por voz)
-- Pós-processamento com LLM (GPT, Claude)
 - iOS / iPadOS
 - Windows / Linux
 - MCP Server para ferramentas de IA
 - Agent Mode
 - Text-to-Speech
-- Speaker Diarization
 - Gravação de áudio do sistema
-- Transcrição de arquivos de áudio/vídeo
+- Transcrição de arquivos de vídeo (.mp4, .mov)
+- Batch transcription de múltiplos arquivos simultaneamente
+
+> **Nota:** "Pós-processamento com LLM" foi implementado no Prompt Mode. "Speaker Diarization" e "Transcrição de arquivos de áudio" foram movidos para seção 5.9 via TASK-002.
 
 ---
 

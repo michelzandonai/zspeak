@@ -9,12 +9,40 @@ import KeyboardShortcuts
 final class SettingsWindowController {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
+    private var currentHostingView: NSHostingView<SettingsView>?
 
-    func show(appState: AppState, microphoneManager: MicrophoneManager, activationKeyManager: ActivationKeyManager, accessibilityManager: AccessibilityManager, store: TranscriptionStore, benchmarkStore: BenchmarkStore, vocabularyStore: VocabularyStore, correctionPromptStore: CorrectionPromptStore) {
+    func show(
+        appState: AppState,
+        microphoneManager: MicrophoneManager,
+        activationKeyManager: ActivationKeyManager,
+        accessibilityManager: AccessibilityManager,
+        store: TranscriptionStore,
+        benchmarkStore: BenchmarkStore,
+        vocabularyStore: VocabularyStore,
+        correctionPromptStore: CorrectionPromptStore,
+        initialPage: SettingsPage? = nil
+    ) {
         if let window = window, window.isVisible {
             window.level = .floating
             window.makeKeyAndOrderFront(nil)
             NSApp.activate()
+            // Se foi pedida uma página específica, reconstrói a view com initialPage
+            if let initialPage {
+                let updatedView = SettingsView(
+                    appState: appState,
+                    microphoneManager: microphoneManager,
+                    activationKeyManager: activationKeyManager,
+                    accessibilityManager: accessibilityManager,
+                    store: store,
+                    benchmarkStore: benchmarkStore,
+                    vocabularyStore: vocabularyStore,
+                    correctionPromptStore: correctionPromptStore,
+                    initialPage: initialPage
+                )
+                let hostingView = NSHostingView(rootView: updatedView)
+                window.contentView = hostingView
+                self.currentHostingView = hostingView
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 window.level = .normal
             }
@@ -29,9 +57,11 @@ final class SettingsWindowController {
             store: store,
             benchmarkStore: benchmarkStore,
             vocabularyStore: vocabularyStore,
-            correctionPromptStore: correctionPromptStore
+            correctionPromptStore: correctionPromptStore,
+            initialPage: initialPage
         )
         let hostingView = NSHostingView(rootView: settingsView)
+        self.currentHostingView = hostingView
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 700, height: 500),
@@ -57,8 +87,9 @@ final class SettingsWindowController {
 
 // MARK: - Sidebar navigation
 
-private enum SettingsPage: String, CaseIterable, Identifiable {
+enum SettingsPage: String, CaseIterable, Identifiable {
     case history = "Histórico"
+    case audioFile = "Transcrever Arquivo"
     case benchmark = "Benchmark"
     case vocabulary = "Vocabulário"
     case correction = "Correção LLM"
@@ -73,6 +104,7 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .history: "clock.arrow.circlepath"
+        case .audioFile: "waveform.badge.plus"
         case .benchmark: "gauge.with.needle"
         case .vocabulary: "text.book.closed"
         case .correction: "sparkles"
@@ -97,7 +129,29 @@ struct SettingsView: View {
     @Bindable var vocabularyStore: VocabularyStore
     @Bindable var correctionPromptStore: CorrectionPromptStore
 
-    @State private var selectedPage: SettingsPage = .history
+    @State private var selectedPage: SettingsPage
+
+    init(
+        appState: AppState,
+        microphoneManager: MicrophoneManager,
+        activationKeyManager: ActivationKeyManager,
+        accessibilityManager: AccessibilityManager,
+        store: TranscriptionStore,
+        benchmarkStore: BenchmarkStore,
+        vocabularyStore: VocabularyStore,
+        correctionPromptStore: CorrectionPromptStore,
+        initialPage: SettingsPage? = nil
+    ) {
+        self.appState = appState
+        self.microphoneManager = microphoneManager
+        self.activationKeyManager = activationKeyManager
+        self.accessibilityManager = accessibilityManager
+        self.store = store
+        self.benchmarkStore = benchmarkStore
+        self.vocabularyStore = vocabularyStore
+        self.correctionPromptStore = correctionPromptStore
+        self._selectedPage = State(initialValue: initialPage ?? .history)
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -117,6 +171,8 @@ struct SettingsView: View {
         switch page {
         case .history:
             HistoryView(store: store)
+        case .audioFile:
+            AudioFileView(appState: appState, store: store)
         case .benchmark:
             BenchmarkView(appState: appState, store: benchmarkStore, historyStore: store)
         case .vocabulary:
