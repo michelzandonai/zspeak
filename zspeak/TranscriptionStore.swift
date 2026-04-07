@@ -33,14 +33,17 @@ final class TranscriptionStore {
 
     // MARK: - API pública
 
-    /// Adiciona um registro de transcrição e salva o áudio como WAV
+    /// Adiciona um registro de transcrição e salva o áudio como WAV.
+    /// Retorna o UUID gerado para que o caller possa linkar correções LLM ao registro original.
+    @discardableResult
     func addRecord(
         text: String,
         modelName: String,
         duration: TimeInterval,
         targetAppName: String?,
-        samples: [Float]?
-    ) {
+        samples: [Float]?,
+        sourceRecordID: UUID? = nil
+    ) -> UUID {
         let id = UUID()
         var audioFileName: String? = nil
 
@@ -57,11 +60,13 @@ final class TranscriptionStore {
             modelName: modelName,
             duration: duration,
             targetAppName: targetAppName,
-            audioFileName: audioFileName
+            audioFileName: audioFileName,
+            sourceRecordID: sourceRecordID
         )
 
         records.insert(record, at: 0)
         saveJSON()
+        return id
     }
 
     /// Remove um registro e seu arquivo de áudio

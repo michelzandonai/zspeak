@@ -5,9 +5,15 @@ import SwiftUI
 /// Aparece no topo central da tela, não rouba foco do app ativo
 final class OverlayPanel: NSPanel {
 
+    private static let xKey = "overlayPanelX"
+    private static let yKey = "overlayPanelY"
+    private static let collapsedWidth: CGFloat = 320
+    private static let expandedWidth: CGFloat = 440
+    private var hostingView: NSHostingView<OverlayView>?
+
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 280, height: 80),
+            contentRect: NSRect(x: 0, y: 0, width: Self.collapsedWidth, height: 80),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -27,12 +33,37 @@ final class OverlayPanel: NSPanel {
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
 
-        // Posiciona no topo central da tela
-        positionAtBottomCenter()
+        // Permite arrastar pelo fundo
+        isMovableByWindowBackground = true
+
+        // Restaura posição salva ou usa default
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: Self.xKey) != nil, defaults.object(forKey: Self.yKey) != nil {
+            let x = CGFloat(defaults.double(forKey: Self.xKey))
+            let y = CGFloat(defaults.double(forKey: Self.yKey))
+            setFrameOrigin(NSPoint(x: x, y: y))
+        } else {
+            positionAtBottomCenter()
+        }
+
+        // Persiste posição quando o usuário arrasta
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDidMove(_:)),
+            name: NSWindow.didMoveNotification,
+            object: self
+        )
     }
 
-    /// Permite que SwiftUI receba eventos de mouse no painel
-    override var canBecomeKey: Bool { true }
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleDidMove(_ note: Notification) {
+        let defaults = UserDefaults.standard
+        defaults.set(Double(frame.origin.x), forKey: Self.xKey)
+        defaults.set(Double(frame.origin.y), forKey: Self.yKey)
+    }
 
     /// Posiciona o painel na parte inferior central da tela principal
     private func positionAtBottomCenter() {
@@ -43,11 +74,29 @@ final class OverlayPanel: NSPanel {
         setFrameOrigin(NSPoint(x: x, y: y))
     }
 
+    /// Ajusta o tamanho do painel com base no conteúdo SwiftUI (intrinsic size)
+    /// Chamado após qualquer mudança de estado que afete o layout
+    func setExpanded(_ expanded: Bool) {
+        let targetWidth = expanded ? Self.expandedWidth : Self.collapsedWidth
+        // Força o hostingView a recalcular o fittingSize com a nova largura
+        hostingView?.frame.size.width = targetWidth
+        let targetHeight = hostingView?.fittingSize.height ?? 80
+        guard frame.width != targetWidth || frame.height != targetHeight else { return }
+        var newFrame = frame
+        // Mantém a base do painel ancorada (cresce para cima)
+        newFrame.origin.y -= (targetHeight - newFrame.height)
+        newFrame.size.width = targetWidth
+        newFrame.size.height = targetHeight
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            animator().setFrame(newFrame, display: true)
+        }
+    }
+
     /// Mostra o painel com animação
     func show() {
         alphaValue = 0
         orderFrontRegardless()
-        positionAtBottomCenter()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.1
             self.animator().alphaValue = 1
@@ -69,6 +118,31 @@ final class OverlayPanel: NSPanel {
     /// Configura o conteúdo SwiftUI UMA VEZ com o modelo observável
     /// Atualizações subsequentes são feitas via OverlayModel (sem recriar a view)
     func setupContent(model: OverlayModel) {
-        contentView = NSHostingView(rootView: OverlayView(model: model))
+        let hosting = NSHostingView(rootView: OverlayView(model: model))
+        hosting.sizingOptions = [.intrinsicContentSize]
+        hosting.postsFrameChangedNotifications = true
+        contentView = hosting
+        hostingView = hosting
+
+        // Quando o SwiftUI mudar de tamanho (ex: modo prompt alternado, estado muda),
+        // o NSHostingView posta frameDidChangeNotification e ajustamos o panel
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleContentSizeChange(_:)),
+            name: NSView.frameDidChangeNotification,
+            object: hosting
+        )
+    }
+
+    @objc private func handleContentSizeChange(_ note: Notification) {
+        guard let hosting = hostingView else { return }
+        let size = hosting.fittingSize
+        guard size.width > 0, size.height > 0 else { return }
+        guard frame.size != size else { return }
+        var newFrame = frame
+        let heightDelta = size.height - newFrame.size.height
+        newFrame.origin.y -= heightDelta
+        newFrame.size = size
+        setFrame(newFrame, display: true)
     }
 }

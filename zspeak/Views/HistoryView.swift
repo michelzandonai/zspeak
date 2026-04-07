@@ -61,6 +61,17 @@ struct HistoryView: View {
                         expandedRecordId = isExpanded ? nil : record.id
                     }
                 }
+
+            // Badge de linkagem: se este record foi gerado a partir de outro
+            if let sourceID = record.sourceRecordID,
+               let original = store.records.first(where: { $0.id == sourceID }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.uturn.backward")
+                    Text("Corrigido de: \(original.text.prefix(40))\(original.text.count > 40 ? "…" : "")")
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
         }
 
         // Metadados

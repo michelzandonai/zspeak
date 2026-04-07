@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import LaunchAtLogin
+import KeyboardShortcuts
 
 // MARK: - Window Controller
 
@@ -154,11 +155,12 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
             }
 
-            Section("Correção LLM") {
-                LabeledContent("Aplicar prompt") {
-                    Text("⇧ Shift + tecla de ativação")
-                        .foregroundStyle(.secondary)
-                }
+            Section {
+                KeyboardShortcuts.Recorder("Modo Prompt LLM:", name: .togglePromptMode)
+            } header: {
+                Text("Correção LLM")
+            } footer: {
+                Text("Atalho global para ligar/desligar o Modo Prompt. Quando ativo, o overlay fica visível com chips de prompts clicáveis. ESC também desliga.")
             }
 
             Section {

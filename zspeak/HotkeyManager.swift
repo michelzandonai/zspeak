@@ -1,4 +1,9 @@
 import Cocoa
+import KeyboardShortcuts
+
+extension KeyboardShortcuts.Name {
+    static let togglePromptMode = Self("togglePromptMode")
+}
 
 /// Keycodes para teclas modificadoras individuais (left/right)
 private enum KeyCode: UInt16 {
@@ -31,8 +36,8 @@ final class HotkeyManager {
     private var onStopRecording: (@MainActor () -> Void)?
     private var onCancelRecording: (@MainActor () -> Void)?
 
-    /// Callback para aplicar correção LLM (Shift + tecla de ativação)
-    var onApplyPrompt: (@MainActor () -> Void)?
+    /// Gerenciador do Modo Prompt LLM (setado externamente via App.swift)
+    var promptModeManager: PromptModeManager?
 
     // Estado interno para double tap
     private var lastTapTime: Date?
@@ -62,6 +67,11 @@ final class HotkeyManager {
         self.onStopRecording = onStopRecording
         self.onCancelRecording = onCancelRecording
         createEventTap()
+
+        // Atalho global de toggle do Modo Prompt LLM
+        KeyboardShortcuts.onKeyDown(for: .togglePromptMode) { [weak self] in
+            self?.promptModeManager?.toggle()
+        }
     }
 
     /// Recria o event tap (usado quando a permissão de Accessibility é concedida após o startup)
@@ -153,6 +163,12 @@ final class HotkeyManager {
     // MARK: - Escape
 
     private func handleEscape() {
+        // Se modo prompt está ativo, ESC desativa o modo (prioridade sobre cancel recording)
+        if let modeManager = promptModeManager, modeManager.isEnabled {
+            modeManager.disable()
+            return
+        }
+
         guard activationKeyManager.escapeToCancel else { return }
         onCancelRecording?()
     }
@@ -168,14 +184,6 @@ final class HotkeyManager {
         // Para teclas individuais, verifica se o keycode corresponde
         if let expectedKeyCode = singleKeyCode(for: selectedKey) {
             if keyCode == expectedKeyCode {
-                // Shift + tecla de ativação = aplicar prompt (exceto se a tecla já é Shift)
-                if isKeyDown && flags.contains(.maskShift)
-                    && keyCode != KeyCode.leftShift.rawValue
-                    && keyCode != KeyCode.rightShift.rawValue {
-                    onApplyPrompt?()
-                    previousFlags = flags
-                    return
-                }
                 handleActivation(isDown: isKeyDown)
             }
         }

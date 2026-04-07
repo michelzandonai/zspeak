@@ -9,8 +9,21 @@ struct MenuBarView: View {
     let benchmarkStore: BenchmarkStore
     let vocabularyStore: VocabularyStore
     let correctionPromptStore: CorrectionPromptStore
+    let promptModeManager: PromptModeManager
 
     var body: some View {
+        // Indicador do Modo Prompt LLM
+        if promptModeManager.isEnabled {
+            Label("Modo Prompt LLM: ATIVO", systemImage: "sparkles")
+                .foregroundStyle(.yellow)
+        }
+
+        Button(promptModeManager.isEnabled ? "Desligar Modo Prompt" : "Ligar Modo Prompt") {
+            promptModeManager.toggle()
+        }
+
+        Divider()
+
         // Status atual
         HStack {
             Circle()
@@ -85,22 +98,6 @@ struct MenuBarView: View {
             Divider()
         }
 
-        // Aplicar prompt LLM na última transcrição
-        if !appState.lastTranscription.isEmpty, correctionPromptStore.activePrompt != nil {
-            Button {
-                appState.applyPrompt()
-            } label: {
-                if appState.isApplyingPrompt {
-                    Label("Processando...", systemImage: "sparkles")
-                } else {
-                    Label("Aplicar Prompt (\(correctionPromptStore.activePrompt!.name))", systemImage: "sparkles")
-                }
-            }
-            .disabled(appState.isApplyingPrompt || appState.state != .idle)
-
-            Divider()
-        }
-
         // Erro
         if let error = appState.errorMessage {
             Label(error, systemImage: "exclamationmark.triangle")
@@ -128,8 +125,6 @@ struct MenuBarView: View {
             return appState.isModelReady ? .green : .gray
         case .recording: return .red
         case .processing: return .yellow
-        case .promptReady: return .purple
-        case .applyingPrompt: return .yellow
         }
     }
 
@@ -140,8 +135,6 @@ struct MenuBarView: View {
         case .idle: return "Pronto"
         case .recording: return "Gravando..."
         case .processing: return "Transcrevendo..."
-        case .promptReady: return "Prompt disponível"
-        case .applyingPrompt: return "Aplicando prompt..."
         }
     }
 

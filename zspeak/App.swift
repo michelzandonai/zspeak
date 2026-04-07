@@ -5,36 +5,37 @@ import SwiftUI
 final class OverlayController {
     private let panel = OverlayPanel()
     private let appState: AppState
+    private let promptModeManager: PromptModeManager
     private let model = OverlayModel()
     private var isShowing = false
-    private var dismissTimer: Timer?
 
-    init(appState: AppState) {
+    init(appState: AppState, promptModeManager: PromptModeManager) {
         self.appState = appState
+        self.promptModeManager = promptModeManager
+
         // Closure direta: WaveformView lê audioLevel do AudioCapture sem intermediários
         model.getAudioLevel = { [weak appState] in
             await appState?.currentAudioLevel() ?? 0
         }
 
-        // Callbacks para ações do overlay
-        model.onApplyPrompt = { [weak appState] in
-            appState?.applyPrompt()
-        }
-        model.onSwitchAndApplyPrompt = { [weak appState] prompt in
-            appState?.correctionPromptStore?.setActive(prompt)
-            appState?.applyPromptWithSpecific(prompt)
-        }
-        model.onDismissPromptReady = { [weak appState] in
-            appState?.dismissPromptReady()
+        // Aplica prompt selecionado na última transcrição
+        model.onApplyPrompt = { [weak appState] prompt in
+            appState?.applyPromptToLast(prompt)
         }
 
         panel.setupContent(model: model)
         startObserving()
+        update()
     }
 
     private func startObserving() {
         withObservationTracking {
             _ = appState.state
+            _ = appState.isApplyingPrompt
+            _ = appState.lastLLMResult
+            _ = appState.lastLLMPromptName
+            _ = promptModeManager.isEnabled
+            _ = appState.correctionPromptStore?.prompts
         } onChange: { [weak self] in
             Task { @MainActor in
                 self?.update()
@@ -42,53 +43,49 @@ final class OverlayController {
         }
     }
 
+    private var wasPromptModeEnabled: Bool = false
+
     private func update() {
-        // Atualiza modelo in-place — SwiftUI reage via @Observable sem recriar views
+        // Sincroniza modelo in-place — SwiftUI reage via @Observable sem recriar views
         model.state = appState.state
         model.isModelReady = appState.isModelReady
+        model.isApplyingPrompt = appState.isApplyingPrompt
+        model.promptModeEnabled = promptModeManager.isEnabled
+        model.lastLLMResult = appState.lastLLMResult
+        model.lastLLMPromptName = appState.lastLLMPromptName
 
-        // Atualiza ícone/nome do app em foco
+        // Detecta transição do Modo Prompt para preload/release do LLM
+        if promptModeManager.isEnabled && !wasPromptModeEnabled {
+            appState.preloadLLMAndKeepAlive()
+        } else if !promptModeManager.isEnabled && wasPromptModeEnabled {
+            appState.releaseLLMKeepAlive()
+        }
+        wasPromptModeEnabled = promptModeManager.isEnabled
+
+        if let store = appState.correctionPromptStore {
+            model.prompts = store.prompts
+        }
+
         if let app = TextInserter.previousApp {
             model.focusedAppName = app.localizedName ?? ""
             model.focusedAppIcon = app.icon
         }
-
-        // Nome do microfone ativo (do MicrophoneManager ou default)
         model.microphoneName = appState.microphoneManager.activeMicrophoneName
 
-        // Sincronizar prompts LLM
-        if let store = appState.correctionPromptStore {
-            model.prompts = store.prompts
-            model.activePromptName = store.activePrompt?.name ?? ""
-        }
+        // Ajusta tamanho do panel conforme modo prompt
+        panel.setExpanded(promptModeManager.isEnabled)
 
-        switch appState.state {
-        case .recording, .processing, .applyingPrompt:
-            dismissTimer?.invalidate()
-            dismissTimer = nil
-            if !isShowing {
-                panel.show()
-                isShowing = true
-            }
-        case .promptReady:
-            if !isShowing {
-                panel.show()
-                isShowing = true
-            }
-            // Timer de auto-dismiss 4s
-            dismissTimer?.invalidate()
-            dismissTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { [weak self] _ in
-                Task { @MainActor in
-                    self?.appState.dismissPromptReady()
-                }
-            }
-        case .idle:
-            dismissTimer?.invalidate()
-            dismissTimer = nil
-            if isShowing {
-                panel.hide()
-                isShowing = false
-            }
+        // Show/hide: visível durante gravação/processamento OU se modo prompt ativo
+        let shouldShow = appState.state == .recording
+            || appState.state == .processing
+            || promptModeManager.isEnabled
+
+        if shouldShow && !isShowing {
+            panel.show()
+            isShowing = true
+        } else if !shouldShow && isShowing {
+            panel.hide()
+            isShowing = false
         }
 
         // Re-registrar observação (withObservationTracking é one-shot)
@@ -105,6 +102,7 @@ struct ZSpeakApp: App {
     @State private var benchmarkStore = BenchmarkStore()
     @State private var vocabularyStore = VocabularyStore()
     @State private var correctionPromptStore = CorrectionPromptStore()
+    @State private var promptModeManager = PromptModeManager()
     private let activationKeyManager = ActivationKeyManager()
     private let accessibilityManager = AccessibilityManager()
     private let hotkeyManager: HotkeyManager
@@ -114,7 +112,7 @@ struct ZSpeakApp: App {
     var body: some Scene {
         // App vive exclusivamente no menu bar (sem janela principal)
         MenuBarExtra {
-            MenuBarView(appState: appState, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore, correctionPromptStore: correctionPromptStore)
+            MenuBarView(appState: appState, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore, correctionPromptStore: correctionPromptStore, promptModeManager: promptModeManager)
         } label: {
             Image(systemName: menuBarIcon)
                 .symbolRenderingMode(.palette)
@@ -136,10 +134,6 @@ struct ZSpeakApp: App {
             return "mic.fill"
         case .processing:
             return "waveform"
-        case .promptReady:
-            return "sparkles"
-        case .applyingPrompt:
-            return "waveform"
         }
     }
 
@@ -147,12 +141,14 @@ struct ZSpeakApp: App {
         let keyManager = activationKeyManager
         self.hotkeyManager = HotkeyManager(activationKeyManager: keyManager)
         let state = appState
+        let promptMode = promptModeManager
 
         // Conecta stores ao AppState
         state.store = store
         state.benchmarkStore = benchmarkStore
         state.vocabularyStore = vocabularyStore
         state.correctionPromptStore = correctionPromptStore
+        state.promptModeManager = promptMode
         benchmarkStore.importFromHistory(historyStore: store)
 
         // Sincroniza estado inicial de Accessibility com AppState
@@ -173,6 +169,9 @@ struct ZSpeakApp: App {
             accessibilityManager.requestPermission()
         }
 
+        // Injeta PromptModeManager no HotkeyManager para o atalho de toggle e ESC
+        hotkeyManager.promptModeManager = promptMode
+
         // Configura hotkey global com 4 callbacks para suportar toggle/hold/doubleTap
         hotkeyManager.setup(
             onToggle: { state.toggleRecording() },
@@ -181,18 +180,12 @@ struct ZSpeakApp: App {
             onCancelRecording: { state.cancelRecording() }
         )
 
-        // Hotkey de aplicar prompt LLM
-        hotkeyManager.onApplyPrompt = {
-            TextInserter.saveFocusedApp()
-            state.applyPrompt()
-        }
-
         // Carrega modelos no startup
         Task {
             await state.initialize()
         }
 
         // Cria overlay controller e retém referência estática para evitar desalocação por ARC
-        Self.overlayController = OverlayController(appState: state)
+        Self.overlayController = OverlayController(appState: state, promptModeManager: promptMode)
     }
 }

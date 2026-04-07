@@ -55,6 +55,19 @@ actor LLMCorrectionManager {
     private(set) var modelState: ModelState = .notDownloaded
     private var modelContainer: ModelContainer?
     private var idleTimer: Task<Void, Never>?
+    private var keepAlive: Bool = false
+
+    /// Quando true, cancela o idle timer e impede que o modelo seja descarregado.
+    /// Usado enquanto o Modo Prompt está ativo — evita cold starts repetidos.
+    func setKeepAlive(_ alive: Bool) {
+        keepAlive = alive
+        if alive {
+            idleTimer?.cancel()
+            idleTimer = nil
+        } else if case .ready = modelState {
+            startIdleTimer()
+        }
+    }
 
     /// Qwen 2.5 3B Instruct quantizado 4-bit (~1.7 GB) — melhor instruction following
     static let modelID = "mlx-community/Qwen2.5-3B-Instruct-4bit"
@@ -165,9 +178,15 @@ actor LLMCorrectionManager {
     /// - Parameters:
     ///   - text: Texto transcrito pelo ASR
     ///   - systemPrompt: Prompt de sistema com instruções de correção
-    ///   - maxTokens: Limite de tokens na resposta (padrão: 512)
+    ///   - maxTokens: Limite de tokens na resposta (padrão: 384)
+    ///   - onPartial: Callback chamado a cada chunk com o texto parcial acumulado (para streaming na UI)
     /// - Returns: Texto corrigido pelo LLM
-    func correct(text: String, systemPrompt: String, maxTokens: Int = 512) async throws -> String {
+    func correct(
+        text: String,
+        systemPrompt: String,
+        maxTokens: Int = 384,
+        onPartial: (@Sendable (String) -> Void)? = nil
+    ) async throws -> String {
         // Lazy load do disco se já baixado — NUNCA faz download aqui
         if modelContainer == nil {
             guard case .downloaded = modelState else {
@@ -207,6 +226,18 @@ actor LLMCorrectionManager {
             switch generation {
             case .chunk(let chunk):
                 result += chunk
+                // Notifica callback com texto parcial (ignora tags <think> para preview)
+                if let onPartial {
+                    var preview = result
+                    if let thinkStart = preview.range(of: "<think>") {
+                        if let thinkEnd = preview.range(of: "</think>") {
+                            preview.removeSubrange(thinkStart.lowerBound...thinkEnd.upperBound)
+                        } else {
+                            preview.removeSubrange(thinkStart.lowerBound..<preview.endIndex)
+                        }
+                    }
+                    onPartial(preview.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
             case .info:
                 break
             default:
@@ -274,6 +305,7 @@ actor LLMCorrectionManager {
     /// Inicia timer para descarregar modelo após inatividade
     private func startIdleTimer() {
         idleTimer?.cancel()
+        guard !keepAlive else { return }
         idleTimer = Task {
             try? await Task.sleep(for: .seconds(Self.idleTimeout))
             guard !Task.isCancelled else { return }

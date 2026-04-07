@@ -80,6 +80,71 @@ struct TextInserter {
         logger.debug("Texto copiado para o clipboard (\(text.count) chars)")
     }
 
+    /// Substitui o último texto colado via Cmd+Z (undo) + novo Cmd+V.
+    /// Usado quando o usuário aplica correção LLM ao texto já inserido.
+    @discardableResult
+    @MainActor func replaceLastPaste(_ newText: String) -> Bool {
+        guard AXIsProcessTrusted() else {
+            logger.error("Sem permissão de Acessibilidade — não é possível substituir paste")
+            return false
+        }
+
+        let pasteboard = NSPasteboard.general
+        let previousContents = pasteboard.string(forType: .string)
+
+        // Re-ativa app anterior
+        if let app = Self.previousApp {
+            guard !app.isTerminated else {
+                logger.warning("App anterior (\(app.localizedName ?? "?")) já foi encerrado")
+                return false
+            }
+            app.activate()
+            logger.debug("App reativado para replaceLastPaste: \(app.localizedName ?? "?")")
+        }
+
+        // Delay para o app reativar
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            // Cmd+Z (undo) — desfaz paste original
+            Self.simulateUndo()
+
+            // Delay para o undo propagar
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                // Coloca texto corrigido no clipboard
+                pasteboard.clearContents()
+                pasteboard.setString(newText, forType: .string)
+
+                // Delay para clipboard propagar
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    _ = Self.simulatePaste()
+
+                    // Restaura clipboard anterior após delay
+                    if let previous = previousContents {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            pasteboard.clearContents()
+                            pasteboard.setString(previous, forType: .string)
+                        }
+                    }
+                }
+            }
+        }
+
+        return true
+    }
+
+    /// Simula Cmd+Z via CGEvent
+    private static func simulateUndo() {
+        let source = CGEventSource(stateID: .hidSystemState)
+        // Z key = keycode 6
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 6, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 6, keyDown: false) else {
+            logger.error("simulateUndo: CGEvent retornou nil")
+            return
+        }
+        keyDown.flags = .maskCommand
+        keyDown.post(tap: .cgAnnotatedSessionEventTap)
+        keyUp.post(tap: .cgAnnotatedSessionEventTap)
+    }
+
     /// Simula pressionamento de Cmd+V via CGEvent
     /// Retorna false se CGEvent não pôde ser criado (sem permissão)
     private static func simulatePaste() -> Bool {

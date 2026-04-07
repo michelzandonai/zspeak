@@ -15,8 +15,6 @@ final class AppState {
         case idle          // Pronto para usar
         case recording     // Gravando audio
         case processing    // Transcrevendo
-        case promptReady   // Overlay mostra botão de prompt LLM
-        case applyingPrompt // LLM processando correção
     }
 
     var state: RecordingState = .idle
@@ -34,6 +32,18 @@ final class AppState {
 
     /// Store de prompts de correção LLM — setado externamente pelo App.swift
     var correctionPromptStore: CorrectionPromptStore?
+
+    /// Gerenciador do Modo Prompt LLM (overlay persistente) — setado externamente pelo App.swift
+    var promptModeManager: PromptModeManager?
+
+    /// ID do último registro de transcrição salvo — usado para linkar correções LLM
+    var lastTranscriptionRecordID: UUID?
+
+    /// Último resultado gerado pela correção LLM (para exibir no overlay)
+    var lastLLMResult: String?
+
+    /// Nome do prompt usado na última correção LLM
+    var lastLLMPromptName: String?
 
     /// Toggle global de correção LLM — persiste em UserDefaults
     var llmCorrectionEnabled: Bool = UserDefaults.standard.bool(forKey: "llmCorrectionEnabled") {
@@ -65,95 +75,82 @@ final class AppState {
         }
     }
 
-    /// Aplica o prompt ativo na última transcrição e copia o resultado
+    /// Aplica o prompt ativo na última transcrição e substitui o texto colado
     var isApplyingPrompt = false
 
+    /// Aplica o prompt ativo (configurado em CorrectionPromptStore) na última transcrição
     func applyPrompt() {
+        guard let prompt = correctionPromptStore?.activePrompt else {
+            errorMessage = "Nenhum prompt ativo."
+            return
+        }
+        applyPromptToLast(prompt)
+    }
+
+    /// Aplica um prompt específico na última transcrição, substituindo o texto colado.
+    /// Salva o resultado no histórico linkado ao registro original via sourceRecordID.
+    func applyPromptToLast(_ prompt: CorrectionPrompt) {
         guard !lastTranscription.isEmpty else {
             errorMessage = "Nenhuma transcrição para processar."
             return
         }
-        guard let prompt = correctionPromptStore?.activePrompt else {
-            errorMessage = "Nenhum prompt ativo. Configure em Correção LLM."
-            return
-        }
         guard !isApplyingPrompt else { return }
 
+        // Re-salva o app em foco atual (pode ter mudado desde a transcrição)
+        TextInserter.saveFocusedApp()
+
         isApplyingPrompt = true
-        state = .applyingPrompt
         errorMessage = nil
+        // Limpa resultado anterior e seta nome do prompt para UI mostrar streaming
+        lastLLMResult = ""
+        lastLLMPromptName = prompt.name
+        let originalID = lastTranscriptionRecordID
+        let originalText = lastTranscription
 
         Task {
             do {
                 let corrected = try await llmManager.correct(
-                    text: lastTranscription,
-                    systemPrompt: prompt.systemPrompt
-                )
-                if !corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    lastTranscription = corrected
-                    if accessibilityGranted {
-                        let inserted = textInserter.insert(corrected)
-                        if !inserted {
-                            textInserter.copyToClipboard(corrected)
+                    text: originalText,
+                    systemPrompt: prompt.systemPrompt,
+                    onPartial: { [weak self] partial in
+                        Task { @MainActor in
+                            self?.lastLLMResult = partial
                         }
-                    } else {
-                        textInserter.copyToClipboard(corrected)
                     }
-                    logger.info("Prompt aplicado: \(corrected.count) chars")
+                )
+                let trimmed = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    // Substituir texto já colado no app via Cmd+Z + novo Cmd+V
+                    if accessibilityGranted {
+                        _ = textInserter.replaceLastPaste(trimmed)
+                    } else {
+                        textInserter.copyToClipboard(trimmed)
+                    }
+
+                    // Salva no histórico linkado ao registro original
+                    let newID = store?.addRecord(
+                        text: trimmed,
+                        modelName: "LLM: \(prompt.name)",
+                        duration: 0,
+                        targetAppName: TextInserter.previousApp?.localizedName,
+                        samples: nil,
+                        sourceRecordID: originalID
+                    )
+
+                    lastTranscription = trimmed
+                    lastTranscriptionRecordID = newID
+                    lastLLMResult = trimmed
+                    lastLLMPromptName = prompt.name
+                    logger.info("Prompt '\(prompt.name)' aplicado: \(trimmed.count) chars")
                 } else {
                     errorMessage = "LLM retornou vazio."
                 }
             } catch {
                 errorMessage = "Erro ao aplicar prompt: \(error.localizedDescription)"
-                logger.error("applyPrompt falhou: \(error.localizedDescription)")
+                logger.error("applyPromptToLast falhou: \(error.localizedDescription)")
             }
             isApplyingPrompt = false
-            state = .idle
         }
-    }
-
-    /// Aplica um prompt específico (do seletor do overlay) na última transcrição
-    func applyPromptWithSpecific(_ prompt: CorrectionPrompt) {
-        guard !lastTranscription.isEmpty else { return }
-        guard !isApplyingPrompt else { return }
-
-        isApplyingPrompt = true
-        state = .applyingPrompt
-        errorMessage = nil
-
-        Task {
-            do {
-                let corrected = try await llmManager.correct(
-                    text: lastTranscription,
-                    systemPrompt: prompt.systemPrompt
-                )
-                if !corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    lastTranscription = corrected
-                    if accessibilityGranted {
-                        let inserted = textInserter.insert(corrected)
-                        if !inserted {
-                            textInserter.copyToClipboard(corrected)
-                        }
-                    } else {
-                        textInserter.copyToClipboard(corrected)
-                    }
-                    logger.info("Prompt aplicado: \(corrected.count) chars")
-                } else {
-                    errorMessage = "LLM retornou vazio."
-                }
-            } catch {
-                errorMessage = "Erro ao aplicar prompt: \(error.localizedDescription)"
-                logger.error("applyPrompt falhou: \(error.localizedDescription)")
-            }
-            isApplyingPrompt = false
-            state = .idle
-        }
-    }
-
-    /// Dismiss do estado promptReady — volta para idle
-    func dismissPromptReady() {
-        guard state == .promptReady else { return }
-        state = .idle
     }
 
     /// Baixa o modelo LLM para correção — retorna estado final
@@ -179,6 +176,26 @@ final class AppState {
             logger.error("Erro ao carregar modelo LLM: \(error.localizedDescription)")
         }
         return await llmManager.modelState
+    }
+
+    /// Pré-carrega o modelo LLM em background (não-bloqueante) e ativa keep-alive.
+    /// Chamado quando o Modo Prompt é ligado para eliminar cold start.
+    func preloadLLMAndKeepAlive() {
+        Task.detached(priority: .userInitiated) { [llmManager] in
+            await llmManager.setKeepAlive(true)
+            let state = await llmManager.modelState
+            if case .downloaded = state {
+                try? await llmManager.loadModel()
+            }
+        }
+    }
+
+    /// Libera keep-alive do LLM — chamado quando o Modo Prompt é desligado.
+    /// O idle timer volta a rodar normalmente e descarrega após 120s.
+    func releaseLLMKeepAlive() {
+        Task.detached(priority: .utility) { [llmManager] in
+            await llmManager.setKeepAlive(false)
+        }
     }
 
     /// Remove modelo LLM do disco
@@ -238,18 +255,12 @@ final class AppState {
             stopRecording()
         case .processing:
             logger.info("toggleRecording: ignorado durante processing")
-        case .promptReady:
-            dismissPromptReady()
-            startRecording()
-        case .applyingPrompt:
-            logger.info("toggleRecording: ignorado durante applyingPrompt")
         }
     }
 
     /// Inicia gravação se estiver idle — usado pelo modo Hold
     func startRecordingIfIdle() {
-        guard state == .idle || state == .promptReady else { return }
-        if state == .promptReady { dismissPromptReady() }
+        guard state == .idle else { return }
         startRecording()
     }
 
@@ -335,7 +346,7 @@ final class AppState {
                 }
 
                 // Transcreve o audio
-                var text = try await transcriber.transcribe(samples)
+                let text = try await transcriber.transcribe(samples)
 
                 // Se o texto esta vazio (silencio), volta para idle
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -345,13 +356,14 @@ final class AppState {
 
                 // Persiste no histórico
                 lastTranscription = text
-                store?.addRecord(
+                let newID = store?.addRecord(
                     text: text,
                     modelName: "Parakeet TDT 0.6B V3",
                     duration: Double(samples.count) / 16000.0,
                     targetAppName: TextInserter.previousApp?.localizedName,
                     samples: samples
                 )
+                lastTranscriptionRecordID = newID
 
                 if accessibilityGranted {
                     let inserted = textInserter.insert(text)
@@ -364,16 +376,7 @@ final class AppState {
                     errorMessage = "Transcrição copiada para o clipboard. Ative Acessibilidade para colar automaticamente."
                 }
 
-                // Transiciona para promptReady se LLM está disponível
-                let modelExists = await llmManager.checkModelExists()
-                let shouldShowPrompt = llmCorrectionEnabled
-                    && correctionPromptStore?.activePrompt != nil
-                    && modelExists
-                if shouldShowPrompt {
-                    state = .promptReady
-                } else {
-                    state = .idle
-                }
+                state = .idle
             } catch {
                 state = .idle
                 errorMessage = "Erro na transcricao: \(error.localizedDescription)"

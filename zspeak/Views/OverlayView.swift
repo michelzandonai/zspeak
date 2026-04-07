@@ -13,15 +13,45 @@ final class OverlayModel {
     /// Closure para ler audioLevel direto do AudioCapture (evita pipeline redundante)
     var getAudioLevel: (@Sendable () async -> Float)?
 
-    // Prompts LLM para o overlay
+    // Modo Prompt
+    var promptModeEnabled: Bool = false
     var prompts: [CorrectionPrompt] = []
-    var activePromptName: String = ""
-    var showPromptSelector: Bool = false
+    var isApplyingPrompt: Bool = false
+    var onApplyPrompt: ((CorrectionPrompt) -> Void)?
 
-    // Callbacks para ações do overlay
-    var onApplyPrompt: (() -> Void)?
-    var onSwitchAndApplyPrompt: ((CorrectionPrompt) -> Void)?
-    var onDismissPromptReady: (() -> Void)?
+    /// Último resultado gerado pela LLM (para exibir no overlay)
+    var lastLLMResult: String?
+    var lastLLMPromptName: String?
+
+    /// Toggle para expandir/colapsar a visualização do resultado LLM — persiste em UserDefaults
+    var isResultExpanded: Bool {
+        didSet { UserDefaults.standard.set(isResultExpanded, forKey: "overlayResultExpanded") }
+    }
+
+    /// ID do último prompt selecionado — persiste em UserDefaults
+    var selectedPromptID: UUID? {
+        didSet {
+            if let id = selectedPromptID {
+                UserDefaults.standard.set(id.uuidString, forKey: "overlayLastPromptID")
+            }
+        }
+    }
+
+    init() {
+        self.isResultExpanded = UserDefaults.standard.bool(forKey: "overlayResultExpanded")
+        if let raw = UserDefaults.standard.string(forKey: "overlayLastPromptID"),
+           let id = UUID(uuidString: raw) {
+            self.selectedPromptID = id
+        }
+    }
+
+    /// Retorna o prompt atualmente selecionado (ou o primeiro se nenhum)
+    var selectedPrompt: CorrectionPrompt? {
+        if let id = selectedPromptID, let match = prompts.first(where: { $0.id == id }) {
+            return match
+        }
+        return prompts.first
+    }
 }
 
 /// Overlay visual estilo Spokenly — barra escura com waveform reativa
@@ -34,7 +64,6 @@ struct OverlayView: View {
         VStack(spacing: 8) {
             // Linha superior: app em foco + branding (estilo Spokenly)
             HStack(spacing: 8) {
-                // Ícone + nome do app em foco
                 if let icon = model.focusedAppIcon {
                     Image(nsImage: icon)
                         .resizable()
@@ -49,7 +78,6 @@ struct OverlayView: View {
 
                 Spacer()
 
-                // Branding
                 Image(systemName: "waveform")
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.5))
@@ -58,12 +86,11 @@ struct OverlayView: View {
                     .foregroundStyle(.white.opacity(0.5))
             }
 
-            // Waveform estilo Spokenly
+            // Bloco central por estado
             if state == .recording {
                 WaveformView(model: model)
                     .frame(height: 20)
 
-                // Nome do microfone
                 if !model.microphoneName.isEmpty {
                     HStack(spacing: 4) {
                         Image(systemName: "mic.fill")
@@ -76,84 +103,37 @@ struct OverlayView: View {
                     }
                 }
             } else if state == .processing {
-                // Animação de progresso durante transcrição
                 ProgressView()
                     .controlSize(.small)
                     .tint(.white.opacity(0.6))
                     .frame(height: 20)
-            } else if state == .promptReady {
-                // Botão de aplicar prompt com seletor
-                HStack(spacing: 0) {
-                    // Área clicável principal — aplica prompt ativo
-                    HStack(spacing: 6) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.yellow)
-                        Text(model.activePromptName)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.9))
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        model.onApplyPrompt?()
-                    }
+            } else if model.promptModeEnabled {
+                Text("Aguardando voz...")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .frame(height: 20)
+            }
 
-                    // Chevron para lista de prompts
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            model.showPromptSelector.toggle()
-                        }
+            // Seção inferior: seletor de prompt + botão aplicar (Modo Prompt)
+            if model.promptModeEnabled {
+                Divider()
+                    .background(.white.opacity(0.1))
 
-                    // Separador vertical
-                    Rectangle()
-                        .fill(.white.opacity(0.15))
-                        .frame(width: 1, height: 20)
-                        .padding(.horizontal, 4)
+                PromptSelectorBar(model: model)
 
-                    // Botão dismiss
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            model.onDismissPromptReady?()
-                        }
+                // Resultado da última correção LLM (toggleável)
+                if model.lastLLMResult != nil {
+                    Divider()
+                        .background(.white.opacity(0.1))
+
+                    LLMResultView(model: model)
                 }
-                .overlay(alignment: .top) {
-                    if model.showPromptSelector {
-                        PromptSelectorView(
-                            prompts: model.prompts,
-                            onSelect: { prompt in
-                                model.showPromptSelector = false
-                                model.onSwitchAndApplyPrompt?(prompt)
-                            }
-                        )
-                        .offset(y: -8)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
-                }
-            } else if state == .applyingPrompt {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white.opacity(0.6))
-                    Text("Aplicando \(model.activePromptName)...")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-                .frame(height: 20)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .frame(width: 320)
+        .frame(width: model.promptModeEnabled ? 440 : 320)
+        .fixedSize(horizontal: false, vertical: true)
         .background(.black.opacity(0.85))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
@@ -162,57 +142,161 @@ struct OverlayView: View {
         )
         .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
     }
+}
 
-    private var statusText: String {
-        switch state {
-        case .recording: return "Gravando..."
-        case .processing: return "Transcrevendo..."
-        case .idle: return "Pronto"
-        case .promptReady: return "Prompt disponível"
-        case .applyingPrompt: return "Aplicando prompt..."
+/// Barra inferior do overlay no Modo Prompt: Menu dropdown com todos os prompts + botão Aplicar
+struct PromptSelectorBar: View {
+    let model: OverlayModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if model.isApplyingPrompt {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white.opacity(0.7))
+                Text("Aplicando \(model.selectedPrompt?.name ?? "")...")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(1)
+                Spacer()
+            } else {
+                // Dropdown de prompts — Menu com label custom (chevron no lugar certo)
+                Menu {
+                    ForEach(model.prompts) { prompt in
+                        Button {
+                            model.selectedPromptID = prompt.id
+                        } label: {
+                            if prompt.id == model.selectedPromptID {
+                                Label(prompt.name, systemImage: "checkmark")
+                            } else {
+                                Text(prompt.name)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(model.selectedPrompt?.name ?? "Selecionar prompt")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(.white.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(.white.opacity(0.15), lineWidth: 0.5)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+
+                Spacer()
+
+                // Botão Aplicar
+                Button {
+                    if let prompt = model.selectedPrompt {
+                        model.onApplyPrompt?(prompt)
+                    }
+                } label: {
+                    Text("Aplicar")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.accentColor.opacity(0.8))
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(model.selectedPrompt == nil)
+            }
         }
+        .frame(maxWidth: .infinity)
     }
 }
 
-/// Seletor de prompts que aparece acima do overlay no estado promptReady
-struct PromptSelectorView: View {
-    let prompts: [CorrectionPrompt]
-    let onSelect: (CorrectionPrompt) -> Void
+/// Visualização do último resultado da LLM — pode ser expandida ou colapsada
+struct LLMResultView: View {
+    let model: OverlayModel
 
     var body: some View {
-        VStack(spacing: 2) {
-            ForEach(prompts) { prompt in
-                HStack(spacing: 6) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.yellow.opacity(0.7))
-                    Text(prompt.name)
+        VStack(alignment: .leading, spacing: 6) {
+            // Header com toggle expand/collapse + nome do prompt + botão copiar
+            HStack(spacing: 6) {
+                Image(systemName: model.isResultExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .frame(width: 12)
+
+                Text("Resultado")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.7))
+
+                if let name = model.lastLLMPromptName {
+                    Text("·")
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(.white.opacity(0.3))
+                    Text(name)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.5))
                         .lineLimit(1)
-                    Spacer()
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    onSelect(prompt)
+
+                Spacer()
+
+                if model.isResultExpanded {
+                    Button {
+                        if let text = model.lastLLMResult {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(text, forType: .string)
+                        }
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copiar resultado")
                 }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    model.isResultExpanded.toggle()
+                }
+            }
+
+            // Conteúdo expandido
+            if model.isResultExpanded, let text = model.lastLLMResult {
+                ScrollView {
+                    Text(text)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 120)
+                .padding(8)
                 .background(
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: 6)
                         .fill(.white.opacity(0.05))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(.white.opacity(0.1), lineWidth: 0.5)
                 )
             }
         }
-        .padding(6)
-        .background(.black.opacity(0.95))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(.white.opacity(0.1), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.5), radius: 8, y: 2)
-        .frame(width: 200)
     }
 }
 
@@ -244,13 +328,11 @@ struct WaveformView: View {
         }
         .onAppear {
             history = Array(repeating: 0, count: barCount)
-            // Timer a ~30 FPS — animação SwiftUI interpola entre frames
             timer = Timer.scheduledTimer(withTimeInterval: 0.033, repeats: true) { [weak model] _ in
                 Task { @MainActor in
                     guard let model else { return }
                     let level = await model.getAudioLevel?() ?? 0
                     let amplified = min(level * 2.5, 1.0)
-                    // Suavização exponencial (EMA) — elimina jitter
                     smoothedLevel = smoothingFactor * amplified + (1 - smoothingFactor) * smoothedLevel
                     history.append(smoothedLevel)
                     if history.count > barCount {
