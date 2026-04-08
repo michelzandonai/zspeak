@@ -19,6 +19,10 @@ final class OverlayModel {
     var isApplyingPrompt: Bool = false
     var onApplyPrompt: ((CorrectionPrompt) -> Void)?
 
+    /// Texto da última transcrição — exibido no overlay no estado idle do modo prompt
+    /// para o usuário ver o que foi capturado antes de decidir aplicar um prompt.
+    var lastTranscription: String = ""
+
     /// Último resultado gerado pela LLM (para exibir no overlay)
     var lastLLMResult: String?
     var lastLLMPromptName: String?
@@ -108,10 +112,31 @@ struct OverlayView: View {
                     .tint(.white.opacity(0.6))
                     .frame(height: 20)
             } else if model.promptModeEnabled {
-                Text("Aguardando voz...")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .frame(height: 20)
+                if !model.lastTranscription.isEmpty {
+                    // Mostra a transcrição captada para o usuário revisar antes de aplicar LLM
+                    ScrollView {
+                        Text(model.lastTranscription)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxHeight: 100)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(.white.opacity(0.05))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(.white.opacity(0.1), lineWidth: 0.5)
+                    )
+                } else {
+                    Text("Aguardando voz...")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(height: 20)
+                }
             }
 
             // Seção inferior: seletor de prompt + botão aplicar (Modo Prompt)

@@ -7,13 +7,13 @@ final class OverlayPanel: NSPanel {
 
     private static let xKey = "overlayPanelX"
     private static let yKey = "overlayPanelY"
-    private static let collapsedWidth: CGFloat = 320
-    private static let expandedWidth: CGFloat = 440
-    private var hostingView: NSHostingView<OverlayView>?
+
+    private var hostingController: NSHostingController<OverlayView>?
+    private var sizeObservation: NSKeyValueObservation?
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: Self.collapsedWidth, height: 80),
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 80),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -57,6 +57,7 @@ final class OverlayPanel: NSPanel {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        // sizeObservation é NSKeyValueObservation — auto-invalida quando deallocado
     }
 
     @objc private func handleDidMove(_ note: Notification) {
@@ -74,32 +75,74 @@ final class OverlayPanel: NSPanel {
         setFrameOrigin(NSPoint(x: x, y: y))
     }
 
-    /// Ajusta o tamanho do painel com base no conteúdo SwiftUI (intrinsic size)
-    /// Chamado após qualquer mudança de estado que afete o layout
-    func setExpanded(_ expanded: Bool) {
-        let targetWidth = expanded ? Self.expandedWidth : Self.collapsedWidth
-        // Força o hostingView a recalcular o fittingSize com a nova largura
-        hostingView?.frame.size.width = targetWidth
-        let targetHeight = hostingView?.fittingSize.height ?? 80
-        guard frame.width != targetWidth || frame.height != targetHeight else { return }
-        var newFrame = frame
-        // Mantém a base do painel ancorada (cresce para cima)
-        newFrame.origin.y -= (targetHeight - newFrame.height)
-        newFrame.size.width = targetWidth
-        newFrame.size.height = targetHeight
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.18
-            animator().setFrame(newFrame, display: true)
+    /// Configura o conteúdo SwiftUI UMA VEZ com o modelo observável.
+    ///
+    /// Usa NSHostingController com `.preferredContentSize`: a cada mudança no intrinsic
+    /// size do SwiftUI (ex: troca de estado, modo prompt, resultado LLM), o controller
+    /// atualiza `preferredContentSize`. Observamos essa propriedade via KVO e ajustamos
+    /// o frame do panel automaticamente. Isso elimina o bug de medir `fittingSize` antes
+    /// do SwiftUI renderizar (que acontecia com NSHostingView + frameDidChangeNotification).
+    func setupContent(model: OverlayModel) {
+        let controller = NSHostingController(rootView: OverlayView(model: model))
+        controller.sizingOptions = [.preferredContentSize]
+        hostingController = controller
+        contentView = controller.view
+
+        // Aplica tamanho inicial (sem animação — painel ainda escondido)
+        adjustToPreferredSize(animated: false)
+
+        // Observa mudanças subsequentes do tamanho preferido do SwiftUI
+        sizeObservation = controller.observe(\.preferredContentSize, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in
+                self?.adjustToPreferredSize(animated: true)
+            }
         }
     }
 
-    /// Mostra o painel com animação
+    /// Ajusta o frame do painel para match exato com `preferredContentSize` do SwiftUI.
+    /// Mantém a base do painel ancorada (cresce para cima em vez de para baixo).
+    private func adjustToPreferredSize(animated: Bool) {
+        guard let controller = hostingController else { return }
+        let size = controller.preferredContentSize
+        guard size.width > 0, size.height > 0 else { return }
+        // Evita chamadas redundantes
+        guard abs(frame.width - size.width) > 0.5 || abs(frame.height - size.height) > 0.5 else {
+            return
+        }
+
+        var newFrame = frame
+        let heightDelta = size.height - newFrame.size.height
+        newFrame.origin.y -= heightDelta
+        newFrame.size = size
+
+        if animated && alphaValue > 0 && isVisible {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.12
+                animator().setFrame(newFrame, display: true)
+            }
+        } else {
+            setFrame(newFrame, display: true)
+        }
+    }
+
+    /// Mostra o painel com animação.
+    ///
+    /// Ordena front com alpha = 0, depois dispara async o ajuste de tamanho +
+    /// fade-in. O async dispatch dá ao SwiftUI uma iteração do runloop para
+    /// renderizar pendências do modelo (ex: `state = .recording` recém-setado),
+    /// garantindo que `preferredContentSize` reflita o estado correto antes
+    /// do painel ficar visível.
     func show() {
         alphaValue = 0
         orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.1
-            self.animator().alphaValue = 1
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.adjustToPreferredSize(animated: false)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.1
+                self.animator().alphaValue = 1
+            }
         }
     }
 
@@ -113,36 +156,5 @@ final class OverlayPanel: NSPanel {
                 self?.orderOut(nil)
             }
         }
-    }
-
-    /// Configura o conteúdo SwiftUI UMA VEZ com o modelo observável
-    /// Atualizações subsequentes são feitas via OverlayModel (sem recriar a view)
-    func setupContent(model: OverlayModel) {
-        let hosting = NSHostingView(rootView: OverlayView(model: model))
-        hosting.sizingOptions = [.intrinsicContentSize]
-        hosting.postsFrameChangedNotifications = true
-        contentView = hosting
-        hostingView = hosting
-
-        // Quando o SwiftUI mudar de tamanho (ex: modo prompt alternado, estado muda),
-        // o NSHostingView posta frameDidChangeNotification e ajustamos o panel
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleContentSizeChange(_:)),
-            name: NSView.frameDidChangeNotification,
-            object: hosting
-        )
-    }
-
-    @objc private func handleContentSizeChange(_ note: Notification) {
-        guard let hosting = hostingView else { return }
-        let size = hosting.fittingSize
-        guard size.width > 0, size.height > 0 else { return }
-        guard frame.size != size else { return }
-        var newFrame = frame
-        let heightDelta = size.height - newFrame.size.height
-        newFrame.origin.y -= heightDelta
-        newFrame.size = size
-        setFrame(newFrame, display: true)
     }
 }

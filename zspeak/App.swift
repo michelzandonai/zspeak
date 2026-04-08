@@ -34,6 +34,7 @@ final class OverlayController {
             _ = appState.isApplyingPrompt
             _ = appState.lastLLMResult
             _ = appState.lastLLMPromptName
+            _ = appState.lastTranscription
             _ = promptModeManager.isEnabled
             _ = appState.correctionPromptStore?.prompts
         } onChange: { [weak self] in
@@ -53,6 +54,7 @@ final class OverlayController {
         model.promptModeEnabled = promptModeManager.isEnabled
         model.lastLLMResult = appState.lastLLMResult
         model.lastLLMPromptName = appState.lastLLMPromptName
+        model.lastTranscription = appState.lastTranscription
 
         // Detecta transição do Modo Prompt para preload/release do LLM
         if promptModeManager.isEnabled && !wasPromptModeEnabled {
@@ -72,8 +74,8 @@ final class OverlayController {
         }
         model.microphoneName = appState.microphoneManager.activeMicrophoneName
 
-        // Ajusta tamanho do panel conforme modo prompt
-        panel.setExpanded(promptModeManager.isEnabled)
+        // Nota: o tamanho do panel é auto-ajustado via KVO em OverlayPanel
+        // (NSHostingController.preferredContentSize → adjustToPreferredSize)
 
         // Show/hide: visível durante gravação/processamento OU se modo prompt ativo
         let shouldShow = appState.state == .recording
