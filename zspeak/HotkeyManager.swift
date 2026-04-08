@@ -68,8 +68,12 @@ final class HotkeyManager {
         self.onCancelRecording = onCancelRecording
         createEventTap()
 
-        // Atalho global de toggle do Modo Prompt LLM
+        // Atalho global de toggle do Modo Prompt LLM.
+        // Salva o frontmost app ANTES de toggle (TASK-013) — garante que o paste do
+        // resultado LLM vá para o app destino correto, mesmo quando o usuário entra
+        // no Modo Prompt sem gravar antes.
         KeyboardShortcuts.onKeyDown(for: .togglePromptMode) { [weak self] in
+            TextInserter.saveFocusedApp()
             self?.promptModeManager?.toggle()
         }
     }

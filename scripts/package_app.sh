@@ -108,9 +108,11 @@ else
   find "$METAL_DIR" -name "*.metal" -exec sh -c '
     xcrun -sdk macosx metal -c "$1" -I "$2" -o "$3/$(basename "$1" .metal).air" 2>/dev/null
   ' _ {} "$METAL_DIR" "$MLX_AIR_DIR" \;
-  if compgen -G "$MLX_AIR_DIR/*.air" > /dev/null; then
-    xcrun -sdk macosx metallib "$MLX_AIR_DIR"/*.air -o "$MACOS_DIR/mlx.metallib" 2>/dev/null
-    echo "  mlx.metallib gerado ($(du -h "$MACOS_DIR/mlx.metallib" | cut -f1))"
+  # zsh nullglob qualifier (N) — array vazio se não houver matches, sem erro
+  air_files=( "$MLX_AIR_DIR"/*.air(N) )
+  if (( ${#air_files} > 0 )); then
+    xcrun -sdk macosx metallib "${air_files[@]}" -o "$MACOS_DIR/mlx.metallib" 2>/dev/null
+    echo "  mlx.metallib gerado ($(du -h "$MACOS_DIR/mlx.metallib" | cut -f1)) — ${#air_files} shaders"
   else
     echo "  AVISO: nenhum .air gerado, pulando metallib"
   fi

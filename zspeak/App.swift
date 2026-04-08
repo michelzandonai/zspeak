@@ -23,6 +23,16 @@ final class OverlayController {
             appState?.applyPromptToLast(prompt)
         }
 
+        // Usa texto do clipboard como input e aplica o prompt ativo (TASK-012)
+        model.onPasteAndApply = { [weak appState] in
+            appState?.applyPromptFromClipboard()
+        }
+
+        // TextField detectou paste — aplica prompt no texto colado (TASK-013)
+        model.onTextInputApply = { [weak appState] text in
+            appState?.applyPromptToTextInput(text)
+        }
+
         panel.setupContent(model: model)
         startObserving()
         update()
@@ -45,6 +55,7 @@ final class OverlayController {
     }
 
     private var wasPromptModeEnabled: Bool = false
+    private var wasApplyingPrompt: Bool = false
 
     private func update() {
         // Sincroniza modelo in-place — SwiftUI reage via @Observable sem recriar views
@@ -63,6 +74,13 @@ final class OverlayController {
             appState.releaseLLMKeepAlive()
         }
         wasPromptModeEnabled = promptModeManager.isEnabled
+
+        // Borda 'começou a aplicar prompt' → expande LLMResultView automaticamente
+        // (TASK-011). Usuário pode colapsar manualmente depois e o estado persiste.
+        if appState.isApplyingPrompt && !wasApplyingPrompt {
+            model.isResultExpanded = true
+        }
+        wasApplyingPrompt = appState.isApplyingPrompt
 
         if let store = appState.correctionPromptStore {
             model.prompts = store.prompts

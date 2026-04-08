@@ -3,9 +3,9 @@
   "kind": "task",
   "id": "TASK-001",
   "title": "Fix Transcriber — API do AsrManager mudou no FluidAudio",
-  "status": "in_progress",
+  "status": "completed",
   "dateCreated": "2026-04-07",
-  "dateModified": "2026-04-07",
+  "dateModified": "2026-04-08",
   "owner": "Michel Zandonai",
   "context": "O build do DMG falhou porque Transcriber.swift chama AsrManager.initialize(models:), configureVocabularyBoosting() e disableVocabularyBoosting() — métodos que não existem mais na versão atual do FluidAudio em .build/checkouts. initialize foi renomeado para loadModels; a API de vocabulary boosting migrou para SlidingWindowAsrManager e não está mais disponível no AsrManager padrão.",
   "goal": "Restaurar compilação e gerar DMG instalável do zspeak.",
@@ -24,6 +24,7 @@
     "Atualizar PRD/ADR de vocabulário nativo quando a decisão for tomada"
   ],
   "changelog": [
-    { "date": "2026-04-07", "change": "Task criada após falha de build durante packaging do DMG" }
+    { "date": "2026-04-07", "change": "Task criada após falha de build durante packaging do DMG" },
+    { "date": "2026-04-08", "change": "Aplicado fix manager.initialize(models:) → manager.loadModels(models). Build OK, DMG (zspeak-1.0.dmg) gerado e zspeak.app instalado em /Applications. configureVocabulary/disableVocabulary já estavam como no-op." }
   ]
 }

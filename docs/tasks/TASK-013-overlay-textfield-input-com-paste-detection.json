@@ -1,0 +1,43 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-013",
+  "title": "Overlay: TextField editável com auto-trigger ao colar texto",
+  "status": "completed",
+  "dateCreated": "2026-04-08",
+  "dateModified": "2026-04-08",
+  "owner": "Michel Zandonai",
+  "context": "Em complemento à TASK-012 (botão clipboard), o usuário pediu também um campo de entrada editável no overlay onde ele possa colar um texto e ver a saída do LLM aparecer automaticamente embaixo. Os dois mecanismos coexistem: o botão clipboard é o atalho rápido (1 clique), o TextField permite colar/editar texto antes da geração — disparada automaticamente ao detectar paste.",
+  "goal": "Adicionar TextField editável no overlay (Modo Prompt) que aceita paste e dispara o LLM automaticamente com o prompt selecionado, sem precisar clicar em 'Aplicar'.",
+  "acceptance": [
+    "Um TextField editável aparece no overlay no Modo Prompt quando não há gravação em andamento",
+    "Usuário pode clicar no TextField, ele recebe foco (overlay vira key window sem roubar foco do app destino para sempre)",
+    "Cmd+V no TextField cola o conteúdo do clipboard",
+    "Detectado o paste (mudança brusca de texto), o LLM é disparado automaticamente com o prompt ativo",
+    "Streaming aparece no bloco Resultado embaixo, igual ao fluxo de gravação",
+    "Após processar, o resultado é colado no app destino que estava em foco antes do Modo Prompt ser ativado",
+    "Botão clipboard da TASK-012 continua funcionando (não foi removido)",
+    "Hotkey global de toggle do Modo Prompt salva o frontmost app antes de ativar — para que o paste do resultado vá para o lugar certo"
+  ],
+  "changes": [
+    "OverlayPanel: override `canBecomeKey` retornando true para permitir input de TextField (preservando .nonactivatingPanel para não roubar foco automaticamente)",
+    "OverlayModel: adicionar `inputText: String` (estado do TextField) e closure `onPasteDetected: ((String) -> Void)?`",
+    "OverlayController.init: setar onPasteDetected = { text in appState.applyPromptToTextInput(text) }",
+    "AppState.applyPromptToTextInput(_:): novo método. Seta lastTranscription = text, lastTranscriptionRecordID = nil, dispara applyPromptToLast com prompt ativo",
+    "OverlayView: adicionar TextField no bloco superior quando promptModeEnabled e state == .idle. Usar onChange(of: inputText) com heurística: se newValue.count - oldValue.count > 20, considerar paste e disparar onPasteDetected",
+    "HotkeyManager: no callback de KeyboardShortcuts.onKeyDown(for: .togglePromptMode), chamar TextInserter.saveFocusedApp() ANTES de toggle, garantindo que o frontmost app é capturado para o paste do resultado"
+  ],
+  "rejectedAlternatives": [
+    "NSTextField via NSViewRepresentable interceptando paste: selector — mais robusto mas overkill",
+    "Detectar Cmd+V via .onKeyPress no SwiftUI 14+: API limitada em panels não-activating",
+    "Substituir o botão clipboard pelo TextField: usuário pediu os dois explicitamente"
+  ],
+  "followUps": [
+    "Avaliar se a heurística 'mudança > 20 chars = paste' tem falsos positivos em uso real (digitação rápida, autocomplete)",
+    "Se necessário, migrar para NSViewRepresentable com paste: selector para detecção 100% confiável"
+  ],
+  "changelog": [
+    { "date": "2026-04-08", "change": "Task criada após esclarecimento via AskUserQuestion. Decisões: (1) manter botão clipboard E adicionar TextField; (2) trigger automático ao detectar paste." },
+    { "date": "2026-04-08", "change": "Implementado: (1) OverlayPanel.canBecomeKey override para true permite TextField receber input. (2) HotkeyManager: callback de togglePromptMode salva TextInserter.previousApp ANTES do toggle. (3) AppState.applyPromptToTextInput(_:) refatorado a partir de applyPromptFromClipboard — método compartilhado. (4) OverlayModel ganhou onTextInputApply closure. (5) OverlayController seta a closure. (6) Nova subview TextInputBlock com @State local + heurística onChange (delta > 20 chars = paste) → dispara onTextInputApply e limpa o campo. (7) Bloco superior do overlay no Modo Prompt mostra TextInputBlock quando lastTranscription está vazio. Build OK, app reinstalado e reiniciado em /Applications." }
+  ]
+}

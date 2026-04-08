@@ -1,0 +1,32 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-009",
+  "title": "Fix crash ao ativar Modo LLM — mlx.metallib ausente no bundle",
+  "status": "completed",
+  "dateCreated": "2026-04-08",
+  "dateModified": "2026-04-08",
+  "owner": "Michel Zandonai",
+  "context": "Usuário relatou que o app fecha sozinho ao ativar o Modo LLM. Investigação mostrou que o último DMG (zspeak-1.0.dmg) foi gerado sem o mlx.metallib porque o Metal Toolchain estava ausente no Xcode no momento do packaging. O package_app.sh emitiu o aviso 'Metal Toolchain ausente — correção LLM (MLX) ficará indisponível no DMG' e seguiu sem o metallib. Quando o usuário ativa o Modo LLM, o MLX-Swift tenta carregar mlx.metallib via load_default_library() em mlx/backend/metal/device.cpp:140 — primeiro procura colocated com o binário (Contents/MacOS/mlx.metallib), depois SwiftPM bundle, depois caminho default. Como nada existe, lança std::runtime_error em load_library_from_path. Essa exceção C++ cruza o boundary Swift via Cmlx e termina em abort do processo (sem catch possível em Swift), explicando o crash silencioso (sem entrada em DiagnosticReports porque o app sai antes do CrashReporter capturar uma trace consistente).",
+  "goal": "Modo LLM funciona no app instalado em /Applications/zspeak.app sem crashar.",
+  "rootCause": "Duas falhas combinadas: (1) Metal Toolchain não estava instalado no Xcode → primeiro empacotamento pulou shaders MLX. (2) Mesmo com Metal Toolchain instalado, o package_app.sh usava `compgen -G` (builtin do bash) sob shebang `#!/bin/zsh`, então o teste 'há .air gerados?' falhava silenciosamente com `command not found: compgen` e o script entrava no else 'AVISO: nenhum .air gerado, pulando metallib'. Resultado em ambos os casos: mlx.metallib ausente no bundle → MLX-Swift dispara std::runtime_error em load_default_library → exceção C++ cruza boundary Swift → abort do processo.",
+  "acceptance": [
+    "xcrun -sdk macosx metal --version retorna versão válida (Metal Toolchain instalado)",
+    "scripts/package_app.sh empacota mlx.metallib em build/zspeak.app/Contents/MacOS/mlx.metallib",
+    "/Applications/zspeak.app/Contents/MacOS/mlx.metallib existe após install_app.sh",
+    "Ativar Modo LLM no app instalado não fecha o processo"
+  ],
+  "changes": [
+    "xcodebuild -downloadComponent MetalToolchain (instala Metal Toolchain 17C7003j ~700 MB)",
+    "scripts/package_app.sh: substituído `compgen -G` (bash builtin) por glob qualifier nullglob nativo do zsh `*.air(N)`, resolvendo o silent skip da geração do metallib mesmo com Metal Toolchain presente",
+    "Re-executado scripts/install_app.sh — mlx.metallib (3.0 MB, 9 shaders) agora presente em /Applications/zspeak.app/Contents/MacOS/mlx.metallib"
+  ],
+  "followUps": [
+    "Avaliar se package_app.sh deve falhar (em vez de avisar) quando o Metal Toolchain está ausente, para evitar gerar DMGs com LLM quebrado",
+    "Adicionar checagem em tempo de runtime: antes de inicializar MLX, verificar se mlx.metallib está colocated; se não estiver, mostrar erro amigável na UI em vez de crashar"
+  ],
+  "changelog": [
+    { "date": "2026-04-08", "change": "Task criada após relato de crash do app ao ativar Modo LLM. Root cause inicialmente atribuída só ao Metal Toolchain ausente." },
+    { "date": "2026-04-08", "change": "Metal Toolchain instalado via xcodebuild -downloadComponent. Segundo empacotamento expôs segundo bug: `compgen -G` é bash-only, não funciona em zsh — script fazia silent fallback para 'sem metallib'. Substituído por `*.air(N)` (nullglob qualifier do zsh). Terceiro empacotamento gerou mlx.metallib (3.0 MB, 9 shaders) com sucesso. App reinstalado em /Applications/zspeak.app." }
+  ]
+}

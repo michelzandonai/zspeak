@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import FluidAudio
 import os.log
 
@@ -142,6 +143,38 @@ final class AppState {
         applyPromptToLast(prompt)
     }
 
+    /// Usa o texto atual do clipboard como input do LLM e aplica o prompt selecionado.
+    /// Permite ao usuário processar qualquer texto (não só transcrições) sem precisar gravar.
+    /// TASK-012.
+    func applyPromptFromClipboard() {
+        guard let raw = NSPasteboard.general.string(forType: .string) else {
+            errorMessage = "Clipboard vazio."
+            return
+        }
+        applyPromptToTextInput(raw)
+    }
+
+    /// Aplica o prompt ativo num texto arbitrário fornecido pelo usuário.
+    /// Usado pelo TextField do overlay quando o usuário cola/digita um texto e o paste é detectado.
+    /// TASK-013.
+    func applyPromptToTextInput(_ raw: String) {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            errorMessage = "Texto vazio."
+            return
+        }
+        guard let prompt = correctionPromptStore?.activePrompt else {
+            errorMessage = "Nenhum prompt ativo."
+            return
+        }
+        // Define como input do LLM — texto colado não tem record de gravação associado
+        lastTranscription = text
+        lastTranscriptionRecordID = nil
+        lastLLMResult = nil
+        lastLLMPromptName = nil
+        applyPromptToLast(prompt)
+    }
+
     /// Aplica um prompt específico na última transcrição, substituindo o texto colado.
     /// Salva o resultado no histórico linkado ao registro original via sourceRecordID.
     func applyPromptToLast(_ prompt: CorrectionPrompt) {
@@ -182,8 +215,11 @@ final class AppState {
                         textInserter.copyToClipboard(trimmed)
                     }
 
-                    // Salva no histórico linkado ao registro original
-                    let newID = store?.addRecord(
+                    // Salva no histórico linkado ao registro original.
+                    // Mantém apenas o record persistido — NÃO sobrescreve lastTranscription
+                    // nem lastTranscriptionRecordID (TASK-011): a fala original permanece
+                    // visível no overlay e um próximo prompt processa o mesmo texto base.
+                    _ = store?.addRecord(
                         text: trimmed,
                         modelName: "LLM: \(prompt.name)",
                         duration: 0,
@@ -192,8 +228,6 @@ final class AppState {
                         sourceRecordID: originalID
                     )
 
-                    lastTranscription = trimmed
-                    lastTranscriptionRecordID = newID
                     lastLLMResult = trimmed
                     lastLLMPromptName = prompt.name
                     logger.info("Prompt '\(prompt.name)' aplicado: \(trimmed.count) chars")

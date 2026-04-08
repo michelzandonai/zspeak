@@ -1,0 +1,42 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-012",
+  "title": "Overlay: botão para usar texto do clipboard como input do LLM",
+  "status": "completed",
+  "dateCreated": "2026-04-08",
+  "dateModified": "2026-04-08",
+  "owner": "Michel Zandonai",
+  "context": "Usuário pediu uma forma rápida de colar um texto qualquer (do clipboard) no overlay do Modo Prompt e aplicar o prompt LLM nele — sem precisar gravar o texto pelo microfone. Hoje, a única forma de alimentar o LLM é via gravação que vira lastTranscription. Pedido explícito do usuário: 'algo bem simples mesmo, nada que ocupe muito espaço, um botão só já resolveria'.",
+  "goal": "Adicionar um botão pequeno e discreto no overlay (Modo Prompt) que: (1) lê o texto atual do clipboard, (2) define como input do LLM e (3) aplica o prompt selecionado imediatamente, mostrando o streaming no bloco Resultado.",
+  "acceptance": [
+    "Existe um botão de ícone (sem texto) no PromptSelectorBar do overlay",
+    "Botão aparece próximo ao dropdown de seleção de prompt — não ocupa linha extra",
+    "Tem tooltip explicando o que faz",
+    "Ao clicar: lê NSPasteboard.general.string(forType: .string)",
+    "Se clipboard vazio ou só whitespace: mostra errorMessage e não dispara o LLM",
+    "Se clipboard tem texto: seta como lastTranscription, limpa lastTranscriptionRecordID e dispara applyPrompt()",
+    "O bloco superior do overlay passa a mostrar o texto colado (mesmo lugar onde mostraria a transcrição)",
+    "O bloco Resultado abre automaticamente e mostra o streaming do LLM, igual ao fluxo de gravação",
+    "Botão fica desabilitado durante isApplyingPrompt para evitar reentrância"
+  ],
+  "changes": [
+    "AppState.applyPromptFromClipboard(): novo método. Lê clipboard, valida, seta lastTranscription, limpa lastTranscriptionRecordID e chama applyPrompt()",
+    "OverlayModel: adicionar closure `onPasteAndApply: (() -> Void)?`",
+    "OverlayController init: setar `model.onPasteAndApply = { [weak appState] in appState?.applyPromptFromClipboard() }`",
+    "OverlayView.PromptSelectorBar: adicionar Button com Image(systemName: \"doc.on.clipboard\") entre o Menu (dropdown) e o Spacer, antes do botão Aplicar. Tooltip via .help()"
+  ],
+  "rejectedAlternatives": [
+    "Campo de texto editável no overlay: ocupa muito espaço, fere o pedido 'um botão só'",
+    "Drag-and-drop de arquivo: complexidade alta, não pedido pelo usuário",
+    "Ícone no header do overlay (top bar): semanticamente confuso — top bar é branding/contexto, não ações"
+  ],
+  "followUps": [
+    "Avaliar se precisa um shortcut de teclado dedicado para 'paste & apply' (ex: Cmd+Shift+V quando o overlay está aberto)",
+    "Considerar feedback visual quando o clipboard está vazio (badge transitória 'Clipboard vazio')"
+  ],
+  "changelog": [
+    { "date": "2026-04-08", "change": "Task criada. Pedido direto do usuário durante teste do prompt 'Tópicos'." },
+    { "date": "2026-04-08", "change": "Implementado: (1) AppState.applyPromptFromClipboard() lê NSPasteboard, valida, seta lastTranscription e dispara applyPromptToLast com prompt ativo. (2) OverlayModel ganhou closure onPasteAndApply. (3) OverlayController init seta a closure. (4) PromptSelectorBar tem botão com ícone doc.on.clipboard entre o dropdown e o Spacer, com tooltip 'Aplicar prompt no texto do clipboard'. Build OK, app reinstalado em /Applications." }
+  ]
+}

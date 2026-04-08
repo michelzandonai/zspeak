@@ -18,6 +18,10 @@ final class OverlayModel {
     var prompts: [CorrectionPrompt] = []
     var isApplyingPrompt: Bool = false
     var onApplyPrompt: ((CorrectionPrompt) -> Void)?
+    /// Closure para aplicar o prompt ativo no texto atual do clipboard (TASK-012)
+    var onPasteAndApply: (() -> Void)?
+    /// Closure chamada quando o TextField detecta paste — passa o texto colado (TASK-013)
+    var onTextInputApply: ((String) -> Void)?
 
     /// Texto da última transcrição — exibido no overlay no estado idle do modo prompt
     /// para o usuário ver o que foi capturado antes de decidir aplicar um prompt.
@@ -132,10 +136,8 @@ struct OverlayView: View {
                             .stroke(.white.opacity(0.1), lineWidth: 0.5)
                     )
                 } else {
-                    Text("Aguardando voz...")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .frame(height: 20)
+                    // TextField editável — usuário pode colar texto para o LLM (TASK-013)
+                    TextInputBlock(model: model)
                 }
             }
 
@@ -224,6 +226,28 @@ struct PromptSelectorBar: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
 
+                // Botão "colar do clipboard" — usa texto do clipboard como input do LLM (TASK-012)
+                Button {
+                    model.onPasteAndApply?()
+                } label: {
+                    Image(systemName: "doc.on.clipboard")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(.white.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(.white.opacity(0.15), lineWidth: 0.5)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Aplicar prompt no texto do clipboard")
+
                 Spacer()
 
                 // Botão Aplicar
@@ -258,10 +282,18 @@ struct LLMResultView: View {
         VStack(alignment: .leading, spacing: 6) {
             // Header com toggle expand/collapse + nome do prompt + botão copiar
             HStack(spacing: 6) {
-                Image(systemName: model.isResultExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .frame(width: 12)
+                if model.isApplyingPrompt {
+                    // Spinner enquanto LLM gera (TASK-011) — feedback visual de streaming ao vivo
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(.white.opacity(0.5))
+                        .frame(width: 12)
+                } else {
+                    Image(systemName: model.isResultExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(width: 12)
+                }
 
                 Text("Resultado")
                     .font(.system(size: 11, weight: .medium))
@@ -322,6 +354,59 @@ struct LLMResultView: View {
                 )
             }
         }
+    }
+}
+
+/// Campo de texto editável dentro do overlay no Modo Prompt (TASK-013).
+/// Aceita digitação e paste; ao detectar paste (mudança brusca > 20 chars), dispara
+/// automaticamente o LLM via `model.onTextInputApply`. Limpa o campo após disparar
+/// para indicar que o texto foi consumido.
+struct TextInputBlock: View {
+    let model: OverlayModel
+    @State private var text: String = ""
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            // Placeholder manual — TextField padrão tem placeholder com cor de sistema
+            // que fica invisível em fundo escuro
+            if text.isEmpty {
+                Text("Cole um texto aqui para o LLM processar...")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .allowsHitTesting(false)
+            }
+
+            TextField("", text: $text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...4)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.9))
+                .tint(.white.opacity(0.7))
+                .onChange(of: text) { oldValue, newValue in
+                    // Heurística: aumento brusco (> 20 chars) é provável paste.
+                    // Digitação humana raramente adiciona mais de ~5 chars por evento.
+                    let delta = newValue.count - oldValue.count
+                    if delta > 20 {
+                        let pasted = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !pasted.isEmpty {
+                            model.onTextInputApply?(pasted)
+                            // Limpa o campo após consumir — feedback visual de "processado"
+                            text = ""
+                        }
+                    }
+                }
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.white.opacity(0.1), lineWidth: 0.5)
+        )
     }
 }
 

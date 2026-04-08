@@ -60,6 +60,12 @@ final class OverlayPanel: NSPanel {
         // sizeObservation é NSKeyValueObservation — auto-invalida quando deallocado
     }
 
+    /// Permite que o painel vire key window quando o usuário clica no TextField interno (TASK-013).
+    /// Combinado com .nonactivatingPanel, isso permite input de teclado sem ativar o app zspeak —
+    /// o foco vai pro TextField mas o app destino mantém o seu próprio "key" do ponto de vista do usuário.
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+
     @objc private func handleDidMove(_ note: Notification) {
         let defaults = UserDefaults.standard
         defaults.set(Double(frame.origin.x), forKey: Self.xKey)

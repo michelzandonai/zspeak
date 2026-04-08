@@ -24,6 +24,11 @@ struct TextInserter {
 
     /// Insere texto no app em foco
     /// Retorna true se conseguiu inserir, false se falhou (sem permissão ou erro)
+    ///
+    /// Não restaura o clipboard anterior — o texto transcrito permanece disponível
+    /// para Cmd+V manual caso o paste automático falhe (foco perdido, app lento, etc.).
+    /// Ver TASK-010: o restore agressivo apagava a transcrição quando o paste async
+    /// falhava silenciosamente, deixando o usuário sem texto em lugar nenhum.
     @discardableResult
     @MainActor func insert(_ text: String) -> Bool {
         // Verifica permissão de Acessibilidade antes de tudo
@@ -34,11 +39,7 @@ struct TextInserter {
 
         let pasteboard = NSPasteboard.general
 
-        // Salva conteúdo anterior do clipboard
-        let previousContents = pasteboard.string(forType: .string)
-        logger.debug("Clipboard anterior salvo (\(previousContents?.count ?? 0) chars)")
-
-        // Coloca texto transcrito no clipboard
+        // Coloca texto transcrito no clipboard (permanece lá para fallback manual)
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         Self.lastPastedCount = text.count
@@ -47,30 +48,20 @@ struct TextInserter {
         // Reativa o app que estava em foco antes da gravação
         if let app = Self.previousApp {
             guard !app.isTerminated else {
-                logger.warning("App anterior (\(app.localizedName ?? "?")) já foi encerrado")
+                logger.warning("App anterior (\(app.localizedName ?? "?")) já foi encerrado — texto disponível no clipboard")
                 return false
             }
             app.activate()
             logger.debug("App reativado: \(app.localizedName ?? "?")")
         }
 
-        // Delay para o app reativar e clipboard propagar
+        // Delay para o app reativar e clipboard propagar, depois simula Cmd+V
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            // Simula Cmd+V
             let pasteOk = Self.simulatePaste()
             if pasteOk {
                 logger.debug("Paste simulado com sucesso")
             } else {
-                logger.error("Falha ao simular paste — CGEvent retornou nil")
-            }
-
-            // Restaura clipboard anterior após delay
-            if let previous = previousContents {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    pasteboard.clearContents()
-                    pasteboard.setString(previous, forType: .string)
-                    logger.debug("Clipboard restaurado")
-                }
+                logger.error("Falha ao simular paste — CGEvent retornou nil. Texto permanece no clipboard.")
             }
         }
 
@@ -109,12 +100,14 @@ struct TextInserter {
         }
 
         let pasteboard = NSPasteboard.general
-        let previousContents = pasteboard.string(forType: .string)
 
         // Re-ativa app anterior
         if let app = Self.previousApp {
             guard !app.isTerminated else {
-                logger.warning("App anterior (\(app.localizedName ?? "?")) já foi encerrado")
+                logger.warning("App anterior (\(app.localizedName ?? "?")) já foi encerrado — texto corrigido será colocado no clipboard")
+                pasteboard.clearContents()
+                pasteboard.setString(newText, forType: .string)
+                Self.lastPastedCount = newText.count
                 return false
             }
             app.activate()
@@ -129,21 +122,16 @@ struct TextInserter {
 
             // Delay para o app processar os backspaces
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                // Coloca texto corrigido no clipboard
+                // Coloca texto corrigido no clipboard (permanece lá — sem restore, ver TASK-010)
                 pasteboard.clearContents()
                 pasteboard.setString(newText, forType: .string)
                 Self.lastPastedCount = newText.count
 
                 // Delay para clipboard propagar
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    _ = Self.simulatePaste()
-
-                    // Restaura clipboard anterior após delay
-                    if let previous = previousContents {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            pasteboard.clearContents()
-                            pasteboard.setString(previous, forType: .string)
-                        }
+                    let pasteOk = Self.simulatePaste()
+                    if !pasteOk {
+                        logger.error("replaceLastPaste: simulatePaste falhou. Texto permanece no clipboard.")
                     }
                 }
             }

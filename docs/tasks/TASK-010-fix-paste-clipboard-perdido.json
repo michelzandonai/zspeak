@@ -1,0 +1,42 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-010",
+  "title": "Fix transcrição perdida — paste falha E clipboard é sobrescrito",
+  "status": "completed",
+  "dateCreated": "2026-04-08",
+  "dateModified": "2026-04-08",
+  "owner": "Michel Zandonai",
+  "context": "Usuário relata bug frequente: ao parar a gravação, às vezes o texto transcrito não é colado no app destino E não fica disponível no clipboard. O usuário fica sem o texto em lugar nenhum. O bug não é determinístico — depende de timing de foco.",
+  "rootCause": "TextInserter.insert() em zspeak/TextInserter.swift faz três operações encadeadas via DispatchQueue.main.asyncAfter:\n  1. (síncrono) clearContents() + setString(text) — coloca transcrição no clipboard\n  2. (síncrono) previousApp.activate() — pede pro macOS reativar o app que estava em foco\n  3. (+0.25s) simulatePaste() — envia Cmd+V via CGEvent\n  4. (+0.55s) clearContents() + setString(previousContents) — RESTAURA o clipboard anterior, INCONDICIONALMENTE\n\nO bug é o passo 4: o restore acontece sempre, mesmo quando o paste do passo 3 não foi efetivamente entregue ao app destino. Cenários comuns que causam paste 'fantasma':\n  - app.activate() não conseguiu trazer o app destino pro front (em macOS recentes há restrições; também falha se outro app pegou foco no meio)\n  - 0.25s não foi suficiente pro app destino estabilizar foco e aceitar input (apps Electron/Slack/Notion são lentos)\n  - app destino está modal/sheet/dialog que descarta o Cmd+V\n  - usuário trocou de app/janela manualmente nesse meio tempo (ex: clicou em outro lugar enquanto esperava)\n\nQuando isso acontece, o usuário Cmd+V manual cola o conteúdo ANTIGO do clipboard (o que estava lá antes da gravação) — confirmando a percepção de 'não copia para a área de transferência'. A função insert() retorna `true` no fim do passo 2 (linha 77), então o caller AppState.stopRecording() acredita que tudo deu certo e não cai no fallback `copyToClipboard(text)`.",
+  "evidence": [
+    "TextInserter.swift:58-75 — bloco asyncAfter que sempre restaura previousContents",
+    "TextInserter.swift:77 — return true cedo, antes do paste async ser executado",
+    "AppState.swift:423-432 — caller confia no return de insert() e não tem fallback para 'paste agendou mas falhou em entregar'"
+  ],
+  "goal": "Garantir que o texto transcrito NUNCA seja perdido. Após stop, ou o texto é colado no app destino, ou está disponível no clipboard para o usuário colar manualmente — nunca os dois falham.",
+  "acceptance": [
+    "Cenário feliz: paste funciona, texto aparece no app destino, clipboard volta ao conteúdo anterior depois de ~5s (não imediato)",
+    "Cenário ruim: paste falha (foco perdido), texto permanece no clipboard, usuário consegue Cmd+V manualmente",
+    "Cenário sem AX: copyToClipboard() segue funcionando como hoje",
+    "Não precisa eliminar 100% das falhas de paste — esse é um bug intrínseco do CGEvent + activate. Foco é não perder o texto."
+  ],
+  "proposedFix": [
+    "Aumentar drasticamente o delay de restore do clipboard (ou eliminar) — preferência: aumentar para ~10s, dando ao usuário tempo de Cmd+V manual se notar que o paste não funcionou",
+    "Alternativa: não restaurar o clipboard nunca — usuário sempre tem o texto transcrito disponível",
+    "Adicionar log de info quando paste é simulado para diagnóstico futuro"
+  ],
+  "rejectedAlternatives": [
+    "Detectar se o paste 'pegou' no app destino — não há API confiável (CGEvent é fire-and-forget, não há ack)",
+    "Verificar pasteboard.changeCount após o paste — só detecta se houve clear, não se o texto chegou ao app",
+    "Aumentar delay antes do paste (0.25s → 0.5s) — reduz frequência mas não resolve, e atrasa o caso feliz"
+  ],
+  "followUps": [
+    "Considerar adicionar feedback visual no overlay quando o paste é simulado mas pode não ter chegado (ex: badge 'Texto no clipboard — Cmd+V se necessário')",
+    "Avaliar se vale a pena oferecer uma config 'preservar clipboard original' (off por padrão)"
+  ],
+  "changelog": [
+    { "date": "2026-04-08", "change": "Task criada após relato de bug recorrente. Root cause identificada em TextInserter.insert() — restore incondicional do clipboard sobrescreve a transcrição quando o paste async falha em entregar." },
+    { "date": "2026-04-08", "change": "Fix aplicado: removido o bloco de restore do clipboard em TextInserter.insert() e em TextInserter.replaceLastPaste(). Agora o texto transcrito (e o texto corrigido pelo LLM) permanece no clipboard após o paste — se o Cmd+V automático falhar por qualquer motivo (foco perdido, app modal, app lento), o usuário consegue Cmd+V manualmente. Trade-off explícito: perdemos a 'preservação do clipboard original' (que devs costumam resolver com clipboard managers como Maccy/Paste). Tests TextInserterTests pré-existentes continuam falhando 2/5 — falhas independentes da mudança (AXIsProcessTrusted retorna true no Terminal de teste, invalidando premissa dos asserts). DMG zspeak-1.0.dmg gerado e zspeak.app reinstalado em /Applications." }
+  ]
+}

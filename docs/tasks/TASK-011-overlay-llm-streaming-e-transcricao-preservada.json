@@ -1,0 +1,40 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-011",
+  "title": "Overlay: preservar transcrição original e exibir streaming LLM ao vivo",
+  "status": "completed",
+  "dateCreated": "2026-04-08",
+  "dateModified": "2026-04-08",
+  "owner": "Michel Zandonai",
+  "context": "Usuário relatou dois problemas no overlay do Modo Prompt: (1) ao aplicar um prompt LLM, a transcrição original some — o resultado do LLM ocupa o lugar onde estava a fala capturada; (2) o streaming não é visível — o usuário só vê o resultado quando o modelo termina de gerar, sem feedback visual durante a geração.",
+  "rootCause": "Dois bugs encadeados:\n  (1) AppState.applyPromptToLast em zspeak/AppState.swift:195 fazia `lastTranscription = trimmed` ao final, sobrescrevendo a fala capturada com o resultado do LLM. Como o OverlayController.update() (zspeak/App.swift:57) propaga isso para model.lastTranscription, o bloco do overlay que mostra a transcrição passa a mostrar o resultado do LLM. Visualmente, parece que 'a transcrição foi substituída'.\n  (2) O LLMResultView (zspeak/Views/OverlayView.swift:254-326) já existe e já recebe os chunks de streaming via lastLLMResult atualizado pelo callback onPartial em AppState.swift:170-174 → LLMCorrectionManager.swift:225-246. Mas o LLMResultView fica colapsado por padrão (isResultExpanded em UserDefaults começa false). O usuário nunca expandiu manualmente, então o streaming ocorria invisivelmente. Por isso a percepção de 'esperar acabar tudo para gerar': o resultado só ficava visível quando substituía o lastTranscription ao final.",
+  "goal": "Fala original permanece visível no overlay durante e depois de aplicar um prompt LLM. Resultado do LLM aparece num bloco abaixo, expandido automaticamente, mostrando o texto sendo gerado caractere a caractere. Usuário pode colapsar manualmente depois.",
+  "acceptance": [
+    "Após aplicar prompt LLM, a transcrição original permanece visível no bloco superior do overlay",
+    "O bloco 'Resultado' abre automaticamente quando começa a aplicação do prompt",
+    "Texto do LLM aparece progressivamente conforme o modelo gera (streaming visível)",
+    "Header do bloco Resultado mostra spinner durante a geração e volta ao chevron quando termina",
+    "Clicar no header colapsa o bloco e o estado persiste em UserDefaults",
+    "Aplicar um segundo prompt em sequência processa a fala original (não o resultado do primeiro prompt)",
+    "Histórico de transcrições continua salvando o resultado LLM linkado ao registro original via sourceRecordID"
+  ],
+  "changes": [
+    "AppState.applyPromptToLast: remover `lastTranscription = trimmed` e `lastTranscriptionRecordID = newID`. Manter persistência no histórico via store.addRecord (cria record LLM linkado ao original) — apenas não atualiza o ponteiro de 'última transcrição ativa'",
+    "OverlayController: adicionar `wasApplyingPrompt: Bool` e detectar borda 'começou a aplicar' em update() para forçar `model.isResultExpanded = true` uma única vez por aplicação",
+    "OverlayView.LLMResultView: durante isApplyingPrompt, substituir o ícone chevron do header por ProgressView (mini spinner), retornando ao chevron quando termina"
+  ],
+  "rejectedAlternatives": [
+    "Mostrar lastLLMResult sempre expandido (sem toggle): tira controle do usuário",
+    "Adicionar flag forceExpanded no AppState e propagar via OverlayController: gambiarra — usar borda wasApplyingPrompt é mais limpo",
+    "Refatorar OverlayModel para separar lastTranscription de lastLLMResult conceitualmente: já estão separados, só estavam sendo confundidos pelo sobrescrito do AppState"
+  ],
+  "followUps": [
+    "Considerar feature de 'encadear prompts' — aplicar um prompt sobre o resultado de outro (em vez de sempre processar a fala original). Pedido eventual; criar TASK separada se necessário",
+    "Avaliar se vale a pena adicionar botão 'descartar' para limpar lastLLMResult sem precisar gravar de novo"
+  ],
+  "changelog": [
+    { "date": "2026-04-08", "change": "Task criada após relato de bugs no overlay do Modo Prompt. Plano aprovado em /Users/michelzandonai/.claude/plans/zany-roaming-galaxy.md" },
+    { "date": "2026-04-08", "change": "Implementado: (1) AppState.applyPromptToLast não mais sobrescreve lastTranscription/lastTranscriptionRecordID — store.addRecord segue persistindo o resultado LLM linkado ao original; (2) OverlayController.update detecta borda 'começou a aplicar' via wasApplyingPrompt e força model.isResultExpanded = true; (3) LLMResultView header mostra ProgressView mini durante isApplyingPrompt e volta ao chevron quando termina. Build OK, DMG gerado e zspeak.app reinstalado em /Applications." }
+  ]
+}

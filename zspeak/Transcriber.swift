@@ -20,7 +20,7 @@ actor Transcriber {
     func initialize() async throws {
         let models = try await AsrModels.downloadAndLoad(to: Self.modelsDirectory, version: .v3)
         let manager = AsrManager(config: .default)
-        try await manager.initialize(models: models)
+        try await manager.loadModels(models)
         self.asrManager = manager
         self.isReady = true
     }
