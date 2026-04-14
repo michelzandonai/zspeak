@@ -1,3 +1,5 @@
+import AVFoundation
+import Foundation
 import Testing
 @testable import zspeak
 
@@ -125,5 +127,95 @@ struct AudioCaptureTests {
 
         #expect(samples.isEmpty)
         #expect(await capture.isCapturing == false)
+    }
+
+    // MARK: - Fallback silencioso removido (task #1)
+
+    @Test("start com deviceUID inexistente lanca .coreAudioDeviceNotFound")
+    func start_comDeviceUIDInexistente_lancaErro() async {
+        let capture = AudioCapture()
+        let uidInexistente = "test-invalid-uid-\(UUID().uuidString)"
+
+        do {
+            try await capture.start(deviceUID: uidInexistente)
+            Issue.record("Esperado erro, mas start() completou sem lancar")
+            _ = await capture.stop()
+        } catch let error as AudioCaptureError {
+            // Esperamos .coreAudioDeviceNotFound com o uid que passamos
+            switch error {
+            case .coreAudioDeviceNotFound(let uid):
+                #expect(uid == uidInexistente)
+            default:
+                Issue.record("Erro inesperado: \(error)")
+            }
+            // Estado deve ter voltado a nao-capturando apos throw
+            #expect(await capture.isCapturing == false)
+        } catch {
+            Issue.record("Erro de tipo inesperado: \(error)")
+        }
+    }
+
+}
+
+// Sub-suite serializada: testes que tocam o HAL real ou mexem no default input
+// device. Rodar em paralelo causa interferência entre si (engine.start() falha
+// com -10868 porque outro teste trocou o default no meio).
+@Suite("AudioCapture - Hardware real", .serialized)
+struct AudioCaptureHardwareTests {
+
+    // MARK: - Regressão: engine.start() falha com -10868 após setInputDevice (#mic-priority-fallback)
+
+    /// Reproduz o bug em que selecionar um device específico via uniqueID
+    /// sempre cai no fallback "system default" porque `engine.start()` lança
+    /// -10868 (kAudioUnitErr_FormatNotSupported). O usuário observou o overlay
+    /// mostrando sempre o device default do macOS mesmo com outro mic priorizado
+    /// no topo da lista.
+    ///
+    /// Hardware-dependente: pula em CI e quando não há mic conectado.
+    @Test("start com deviceUID de mic real não lança -10868 e captura do device selecionado")
+    func start_comDeviceUIDReal_naoLancaFormatoIncompativel() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        let realDevices = session.devices.filter { !$0.uniqueID.hasPrefix("CADefaultDeviceAggregate") }
+        guard let mic = realDevices.first else { return }
+
+        let capture = AudioCapture()
+
+        do {
+            try await capture.start(deviceUID: mic.uniqueID)
+            #expect(await capture.isCapturing == true,
+                    "start com uid '\(mic.uniqueID)' deveria ter ligado o engine")
+        } catch {
+            Issue.record("start(deviceUID:) lançou \(error) — provável -10868 do AUGraphParser. Mic usado: \(mic.localizedName) (\(mic.uniqueID))")
+        }
+
+        _ = await capture.stop()
+        #expect(await capture.isCapturing == false)
+    }
+
+    @Test("start com deviceUID nil usa default e inicia sem erro")
+    func start_comDeviceUIDNil_usaDefaultEIniciaSemErro() async {
+        // Depende de hardware real de microfone — skip em CI
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        let capture = AudioCapture()
+
+        do {
+            try await capture.start(deviceUID: nil)
+            #expect(await capture.isCapturing == true)
+            let samples = await capture.stop()
+            // Samples podem estar vazios; o importante e que start nao lancou e stop nao crashou
+            _ = samples
+            #expect(await capture.isCapturing == false)
+        } catch {
+            // Em ambiente sem mic disponivel (ex: VM sem driver), tolerar falha
+            // apenas validando que o erro e do tipo esperado
+            #expect(error is AudioCaptureError)
+        }
     }
 }
