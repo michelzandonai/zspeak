@@ -91,6 +91,7 @@ final class OverlayController {
             model.focusedAppIcon = app.icon
         }
         model.microphoneName = appState.microphoneManager.activeMicrophoneName
+        model.microphoneManager = appState.microphoneManager
 
         // Nota: o tamanho do panel é auto-ajustado via KVO em OverlayPanel
         // (NSHostingController.preferredContentSize → adjustToPreferredSize)

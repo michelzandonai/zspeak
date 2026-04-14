@@ -13,25 +13,42 @@ struct BenchmarkView: View {
     @State private var fixtureToDelete: BenchmarkFixture?
     @State private var audioPlayer: AVAudioPlayer?
     @State private var playingFixtureId: UUID?
+    @State private var isLoadingFixtures = true
+    /// Cache de arquivos de áudio existentes — computado uma vez por render, evita `fileExists` por linha.
+    @State private var availableAudioFiles: Set<String> = []
 
     var body: some View {
         Form {
-            if store.fixtures.isEmpty {
+            if isLoadingFixtures {
+                ContentUnavailableView {
+                    Label("Carregando benchmarks…", systemImage: "hourglass")
+                } description: {
+                    ProgressView()
+                }
+            } else if store.fixtures.isEmpty {
                 ContentUnavailableView(
                     "Nenhuma fixture",
                     systemImage: "gauge.with.needle",
                     description: Text("Importe WAVs ou use transcrições do histórico para criar fixtures de benchmark.")
                 )
             } else {
-                ForEach(store.fixtures) { fixture in
+                ForEach(Array(store.fixtures.enumerated()), id: \.element.id) { index, fixture in
                     Section {
-                        fixtureRow(fixture)
+                        fixtureRow(fixture, index: index)
                     }
                 }
             }
         }
         .formStyle(.grouped)
         .navigationTitle("Benchmark")
+        .task {
+            await store.loadFixturesAsync()
+            availableAudioFiles = store.availableAudioFileNames()
+            isLoadingFixtures = false
+        }
+        .onChange(of: store.fixtures.count) {
+            availableAudioFiles = store.availableAudioFileNames()
+        }
         .onDisappear { stopAudio() }
         .toolbar {
             ToolbarItemGroup {
@@ -76,13 +93,13 @@ struct BenchmarkView: View {
     // MARK: - Linha de cada fixture
 
     @ViewBuilder
-    private func fixtureRow(_ fixture: BenchmarkFixture) -> some View {
+    private func fixtureRow(_ fixture: BenchmarkFixture, index: Int) -> some View {
         // Nome
         Text(fixture.name)
             .font(.headline)
 
-        // Texto esperado editável
-        if let index = store.fixtures.firstIndex(where: { $0.id == fixture.id }) {
+        // Texto esperado editável — binding direto por índice evita firstIndex O(n) por linha.
+        if index < store.fixtures.count {
             TextField("Texto esperado", text: $store.fixtures[index].expectedText, axis: .vertical)
                 .lineLimit(1...4)
         }
@@ -104,7 +121,7 @@ struct BenchmarkView: View {
 
         // Ações
         HStack(spacing: 8) {
-            if store.audioURL(for: fixture) != nil {
+            if availableAudioFiles.contains(fixture.audioFileName) {
                 Button {
                     if playingFixtureId == fixture.id {
                         stopAudio()
@@ -153,17 +170,31 @@ struct BenchmarkView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 12) {
-                Label(String(format: "%.0f%%", result.similarity * 100), systemImage: "textformat.abc")
-                    .foregroundStyle(similarityColor(result.similarity))
+                Label(String(format: "Acc %.0f%%", result.accuracyScore * 100), systemImage: "checkmark.seal")
+                    .foregroundStyle(accuracyColor(result.accuracyScore))
+                if let wer = result.wordErrorRate {
+                    Label(String(format: "WER %.0f%%", wer * 100), systemImage: "textformat.abc")
+                        .foregroundStyle(errorRateColor(wer))
+                }
+                if let cer = result.characterErrorRate {
+                    Label(String(format: "CER %.0f%%", cer * 100), systemImage: "character.cursor.ibeam")
+                        .foregroundStyle(errorRateColor(cer))
+                }
                 Label(String(format: "%.0fms", result.latency * 1000), systemImage: "timer")
             }
             .font(.caption)
         }
     }
 
-    private func similarityColor(_ value: Double) -> Color {
+    private func accuracyColor(_ value: Double) -> Color {
         if value > 0.9 { return .green }
         if value > 0.7 { return .yellow }
+        return .red
+    }
+
+    private func errorRateColor(_ value: Double) -> Color {
+        if value < 0.1 { return .green }
+        if value < 0.3 { return .yellow }
         return .red
     }
 

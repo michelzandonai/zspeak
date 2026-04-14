@@ -198,6 +198,106 @@ struct AudioCaptureHardwareTests {
         #expect(await capture.isCapturing == false)
     }
 
+    // MARK: - Regressão: latência entre engine.start() e primeiro sample (#primeiras-palavras-perdidas)
+
+    /// Mede a latência intrínseca do HAL: do `engine.start()` retornar até o
+    /// primeiro buffer chegar no tap. Esse valor é um piso que não conseguimos
+    /// reduzir sem mexer em buffer frame size — ~100ms no dev atual.
+    /// Documentação-only (não força threshold apertado).
+    @Test("Registra latência entre engine.start() e primeiro sample (diagnóstico)")
+    func latencia_primeiroSample_apos_engineStart() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        let capture = AudioCapture()
+        try await capture.start(deviceUID: nil)
+
+        let deadline = CFAbsoluteTimeGetCurrent() + 2.0
+        while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let firstSample = await capture.firstSampleTimestamp
+        _ = await capture.stop()
+
+        guard let firstSample,
+              let engineStart = await capture.engineStartTimestamp else {
+            Issue.record("Nenhum sample chegou em 2s — engine não produziu áudio")
+            return
+        }
+
+        let delayMs = (firstSample - engineStart) * 1000
+        print("[LATENCIA HAL] primeiro sample \(String(format: "%.1f", delayMs))ms após engine.start()")
+        #expect(delayMs < 300,
+                "Latência HAL de \(String(format: "%.1f", delayMs))ms é alta — verifique buffer frame size")
+    }
+
+    /// Latência TOTAL do que o usuário percebe: de `start()` ser chamada (logo
+    /// após o overlay acender) até o primeiro sample chegar. Essa é a janela
+    /// em que o áudio é perdido se o usuário começar a falar imediatamente.
+    ///
+    /// Sem warmUp: ~380ms (AVAudioEngine construção + installTap + prepare + start + HAL).
+    /// Com warmUp (fast path): ~170ms — `engine.start()` (~66ms) + HAL primeiro
+    /// sample (~106ms). Zero é impossível sem manter o engine em IO ativo
+    /// (indicador de privacidade do macOS aceso), o que o usuário rejeitou.
+    @Test("Fast path com warmUp: start() → primeiro sample < 250ms")
+    func latencia_total_comWarmUp_fastPath() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        let capture = AudioCapture()
+
+        // Pré-aquece com o mesmo deviceUID que usaremos no start
+        try await capture.warmUp(deviceUID: nil)
+
+        // Agora mede start() até first sample
+        try await capture.start(deviceUID: nil)
+
+        let deadline = CFAbsoluteTimeGetCurrent() + 2.0
+        while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let firstSample = await capture.firstSampleTimestamp
+        let startCalled = await capture.startCalledTimestamp
+        _ = await capture.stop()
+
+        guard let firstSample, let startCalled else {
+            Issue.record("Nenhum sample chegou em 2s")
+            return
+        }
+
+        let totalMs = (firstSample - startCalled) * 1000
+        print("[LATENCIA TOTAL fast path] start() → primeiro sample: \(String(format: "%.1f", totalMs))ms")
+
+        #expect(totalMs < 250,
+                "Latência total de \(String(format: "%.1f", totalMs))ms é alta — warmUp não está reduzindo cold setup")
+    }
+
+    /// Documenta a latência TOTAL sem warmUp (cold path). Mostra o ganho do fix.
+    @Test("Cold path (sem warmUp): start() → primeiro sample")
+    func latencia_total_semWarmUp_coldPath() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        let capture = AudioCapture()
+        try await capture.start(deviceUID: nil)
+
+        let deadline = CFAbsoluteTimeGetCurrent() + 2.0
+        while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let firstSample = await capture.firstSampleTimestamp
+        let startCalled = await capture.startCalledTimestamp
+        _ = await capture.stop()
+
+        guard let firstSample, let startCalled else {
+            Issue.record("Nenhum sample chegou em 2s")
+            return
+        }
+
+        let totalMs = (firstSample - startCalled) * 1000
+        print("[LATENCIA TOTAL cold path] start() → primeiro sample: \(String(format: "%.1f", totalMs))ms")
+    }
+
     @Test("start com deviceUID nil usa default e inicia sem erro")
     func start_comDeviceUIDNil_usaDefaultEIniciaSemErro() async {
         // Depende de hardware real de microfone — skip em CI

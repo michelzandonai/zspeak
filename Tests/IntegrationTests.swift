@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import zspeak
 
@@ -273,5 +274,48 @@ struct IntegrationTests {
 
         let validStates: [AppState.RecordingState] = [.idle, .processing]
         #expect(validStates.contains(appState.state), "Deve terminar em estado estável")
+    }
+
+    // MARK: - Fallback iterativo para system default (task #3)
+
+    @Test("startRecording com mic priorizado inexistente cai para default do sistema")
+    func startRecording_comMicPriorizadoInexistente_caiParaDefault() async throws {
+        // Depende de hardware real de mic para o fallback default funcionar — skip em CI
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        let appState = makeReadyAppState()
+
+        // Garante permissao em estado autorizado (requer mic real funcionando)
+        guard appState.microphoneManager.isPermissionGranted else {
+            return
+        }
+
+        // Configura mic priorizado que nao existe. connectedMicrophones() devolve
+        // este UID, AudioCapture.start() deve falhar com .coreAudioDeviceNotFound,
+        // e startRecording deve percorrer o loop e cair para system default (nil).
+        appState.microphoneManager.useSystemDefault = false
+        appState.microphoneManager.microphones = [
+            MicrophoneInfo(id: "test-invalid-uid-12345", name: "Fake Mic", isConnected: true),
+        ]
+
+        appState.toggleRecording()
+        #expect(appState.state == .recording)
+
+        // Aguarda recordingTask percorrer candidato invalido + cair para default
+        try await waitUntilOnMain(timeout: .seconds(5)) {
+            appState.microphoneManager.activeMicrophoneID == nil
+                && appState.state == .recording
+        }
+
+        // Fallback aconteceu: ID ativo e nil (indicando default), estado ainda recording
+        #expect(appState.microphoneManager.activeMicrophoneID == nil)
+        #expect(appState.state == .recording)
+        #expect(appState.errorMessage == nil)
+
+        // Limpa estado
+        appState.cancelRecording()
+        try await waitUntilOnMain(timeout: .seconds(3)) {
+            appState.state == .idle
+        }
     }
 }

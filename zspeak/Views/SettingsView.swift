@@ -150,7 +150,7 @@ struct SettingsView: View {
         self.benchmarkStore = benchmarkStore
         self.vocabularyStore = vocabularyStore
         self.correctionPromptStore = correctionPromptStore
-        self._selectedPage = State(initialValue: initialPage ?? .history)
+        self._selectedPage = State(initialValue: initialPage ?? .general)
     }
 
     var body: some View {
@@ -249,22 +249,45 @@ struct SettingsView: View {
 
             if !microphoneManager.useSystemDefault {
                 Section {
-                    ForEach(microphoneManager.microphones) { mic in
+                    // Em Form/.grouped no macOS, .onMove n\u00e3o oferece drag-to-reorder
+                    // nativo confi\u00e1vel. Usamos bot\u00f5es de seta como alternativa acess\u00edvel.
+                    ForEach(Array(microphoneManager.microphones.enumerated()), id: \.element.id) { index, mic in
                         HStack {
                             let isPreferred = mic.id == preferredMicrophoneID
                             Image(systemName: isPreferred ? "mic.circle.fill" : (mic.isConnected ? "mic" : "mic.slash"))
                                 .foregroundStyle(isPreferred ? .green : (mic.isConnected ? .primary : .secondary))
                             Text(mic.name)
                                 .foregroundStyle(mic.isConnected ? .primary : .secondary)
+                            Spacer()
+                            Button {
+                                microphoneManager.reorder(
+                                    fromOffsets: IndexSet(integer: index),
+                                    toOffset: index - 1
+                                )
+                            } label: {
+                                Image(systemName: "chevron.up")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(index == 0)
+                            .help("Mover para cima")
+
+                            Button {
+                                microphoneManager.reorder(
+                                    fromOffsets: IndexSet(integer: index),
+                                    toOffset: index + 2
+                                )
+                            } label: {
+                                Image(systemName: "chevron.down")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(index == microphoneManager.microphones.count - 1)
+                            .help("Mover para baixo")
                         }
-                    }
-                    .onMove { source, destination in
-                        microphoneManager.reorder(fromOffsets: source, toOffset: destination)
                     }
                 } header: {
                     Text("Ordem de prioridade")
                 } footer: {
-                    Text("Microfones são tentados na ordem acima. Arraste para reordenar.")
+                    Text("Microfones são tentados na ordem acima. Use as setas para reordenar.")
                 }
             }
         }

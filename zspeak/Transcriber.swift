@@ -20,7 +20,7 @@ actor Transcriber {
     func initialize() async throws {
         let models = try await AsrModels.downloadAndLoad(to: Self.modelsDirectory, version: .v3)
         let manager = AsrManager(config: .default)
-        try await manager.loadModels(models)
+        try await manager.initialize(models: models)
         self.asrManager = manager
         self.isReady = true
     }
@@ -39,12 +39,13 @@ actor Transcriber {
     /// Configura vocabulário customizado com context biasing nativo
     /// TASK-001: API configureVocabularyBoosting/disableVocabularyBoosting foi removida do
     /// AsrManager na versão atual do FluidAudio (migrou para SlidingWindowAsrManager).
-    /// Mantido como no-op até decidirmos migrar ou pinar versão antiga.
+    /// Mantido como no-op — o fallback atual é pós-processamento em Swift via
+    /// `VocabularyStore.applyReplacements(to:)`, aplicado no pipeline do AppState.
     func configureVocabulary(_ context: CustomVocabularyContext) async throws {
         guard asrManager != nil else {
             throw TranscriberError.notInitialized
         }
-        // No-op: feature temporariamente indisponível — ver TASK-001
+        // No-op: context biasing nativo indisponível — fallback via VocabularyStore.applyReplacements
         _ = context
     }
 

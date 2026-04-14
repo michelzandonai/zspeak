@@ -10,6 +10,7 @@ final class BenchmarkStore {
     private let audioDir: URL
     private let fixturesFile: URL
 
+    /// Init padrão do app — NÃO faz I/O síncrono. A view deve chamar `loadFixturesAsync()`.
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let defaultBase = base.appendingPathComponent("zspeak", isDirectory: true)
@@ -18,15 +19,41 @@ final class BenchmarkStore {
         audioDir = defaultBase.appendingPathComponent("audio", isDirectory: true)
         fixturesFile = defaultBase.appendingPathComponent("fixtures.json")
         try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
-        fixtures = loadFixtures()
+        // Não carrega fixtures no init — evita bloquear startup/abertura da aba.
     }
 
+    /// Init usado em testes: carrega síncrono para preservar semântica determinística.
     init(baseDirectory: URL) {
         baseDir = baseDirectory
         audioDir = baseDirectory.appendingPathComponent("audio", isDirectory: true)
         fixturesFile = baseDirectory.appendingPathComponent("fixtures.json")
         try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
         fixtures = loadFixtures()
+    }
+
+    /// Carrega fixtures do disco fora da main actor; publica no main.
+    func loadFixturesAsync() async {
+        let file = fixturesFile
+        let loaded = await Task.detached(priority: .utility) { () -> [BenchmarkFixture] in
+            guard FileManager.default.fileExists(atPath: file.path),
+                  let data = try? Data(contentsOf: file) else {
+                return []
+            }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return (try? decoder.decode([BenchmarkFixture].self, from: data)) ?? []
+        }.value
+        // Só sobrescreve se ainda estiver vazio — evita sobrescrever edições feitas enquanto carregava.
+        if fixtures.isEmpty {
+            fixtures = loaded
+        }
+    }
+
+    /// Retorna conjunto com nomes de arquivo de áudio existentes em disco (uma varredura só).
+    func availableAudioFileNames() -> Set<String> {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(atPath: audioDir.path) else { return [] }
+        return Set(items)
     }
 
     // MARK: - API pública
@@ -93,7 +120,8 @@ final class BenchmarkStore {
         return samples
     }
 
-    /// Executa benchmark para uma fixture usando closure de transcrição
+    /// Executa benchmark para uma fixture usando closure de transcrição.
+    /// Usa WER/CER, que são mais confiáveis para regressão de ASR do que word overlap.
     func runBenchmark(
         fixture: BenchmarkFixture,
         transcribe: ([Float]) async throws -> String
@@ -106,13 +134,26 @@ final class BenchmarkStore {
         let elapsed = clock.now - start
         let latency = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
 
-        let similarity = wordSimilarity(fixture.expectedText, transcribedText)
+        let wordErrorRate = BenchmarkMetrics.wordErrorRate(
+            expected: fixture.expectedText,
+            actual: transcribedText
+        )
+        let characterErrorRate = BenchmarkMetrics.characterErrorRate(
+            expected: fixture.expectedText,
+            actual: transcribedText
+        )
+        let similarity = BenchmarkMetrics.accuracyScore(
+            expected: fixture.expectedText,
+            actual: transcribedText
+        )
 
         let result = BenchmarkResult(
             transcribedText: transcribedText,
             latency: latency,
             timestamp: Date(),
-            similarity: similarity
+            similarity: similarity,
+            wordErrorRate: wordErrorRate,
+            characterErrorRate: characterErrorRate
         )
 
         // Atualizar fixture com resultado
@@ -182,22 +223,6 @@ final class BenchmarkStore {
         decoder.dateDecodingStrategy = .iso8601
 
         return (try? decoder.decode([BenchmarkFixture].self, from: data)) ?? []
-    }
-
-    // MARK: - Similaridade
-
-    /// Calcula similaridade por word overlap entre texto esperado e transcrito
-    private func wordSimilarity(_ expected: String, _ actual: String) -> Double {
-        let clean: (String) -> Set<String> = { text in
-            Set(text.lowercased()
-                .components(separatedBy: .whitespacesAndNewlines)
-                .filter { !$0.isEmpty })
-        }
-        let expectedWords = clean(expected)
-        let actualWords = clean(actual)
-        guard !expectedWords.isEmpty else { return actualWords.isEmpty ? 1.0 : 0.0 }
-        let matches = expectedWords.intersection(actualWords)
-        return Double(matches.count) / Double(expectedWords.count)
     }
 }
 

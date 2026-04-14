@@ -9,7 +9,22 @@ final class OverlayModel {
     var isModelReady: Bool = false
     var focusedAppName: String = ""
     var focusedAppIcon: NSImage?
+    /// Referência ao MicrophoneManager para ler o nome do mic ativo de forma reativa.
+    /// Setada externamente (App.swift). Quando presente, o overlay atualiza o nome
+    /// automaticamente ao trocar de microfone durante a gravação, já que
+    /// `MicrophoneManager` e `OverlayModel` são ambos `@Observable`.
+    var microphoneManager: MicrophoneManager?
+    /// Fallback não-reativo usado apenas em previews/testes quando não há manager.
+    /// Em produção, `microphoneManager` é sempre setado e esta propriedade é ignorada.
     var microphoneName: String = ""
+
+    /// Nome efetivo do mic: prioriza a fonte reativa do manager; cai para o fallback.
+    var effectiveMicrophoneName: String {
+        if let manager = microphoneManager {
+            return manager.activeMicrophoneName
+        }
+        return microphoneName
+    }
     /// Closure para ler audioLevel direto do AudioCapture (evita pipeline redundante)
     var getAudioLevel: (@Sendable () async -> Float)?
 
@@ -99,15 +114,20 @@ struct OverlayView: View {
                 WaveformView(model: model)
                     .frame(height: 20)
 
-                if !model.microphoneName.isEmpty {
+                // Nome do mic ativo durante gravação — reativo via MicrophoneManager.
+                // Tipografia pequena e secundária para não competir com a waveform.
+                // Trunca no meio se o nome do device for muito longo.
+                let micName = model.effectiveMicrophoneName
+                if !micName.isEmpty {
                     HStack(spacing: 4) {
                         Image(systemName: "mic.fill")
                             .font(.system(size: 8))
                             .foregroundStyle(.white.opacity(0.35))
-                        Text(model.microphoneName)
+                        Text(micName)
                             .font(.system(size: 9))
                             .foregroundStyle(.white.opacity(0.35))
                             .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                 }
             } else if state == .processing {

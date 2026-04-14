@@ -87,7 +87,17 @@ final class AppState {
             diarizer: diarizationManager
         )
 
-        let result = try await fileTranscriber.transcribe(url: url, mode: mode, numSpeakers: numSpeakers, onProgress: onProgress)
+        let rawResult = try await fileTranscriber.transcribe(url: url, mode: mode, numSpeakers: numSpeakers, onProgress: onProgress)
+
+        // Aplica vocabulário customizado (substituições alias → term) no texto final
+        let correctedText = vocabularyStore?.applyReplacements(to: rawResult.text) ?? rawResult.text
+        let result = FileTranscriptionResult(
+            text: correctedText,
+            segments: rawResult.segments,
+            sourceFileName: rawResult.sourceFileName,
+            durationSeconds: rawResult.durationSeconds,
+            samples: rawResult.samples
+        )
 
         // Persiste no histórico
         let modelName: String = {
@@ -327,8 +337,30 @@ final class AppState {
             } catch {
                 logger.error("Falha ao aplicar vocabulário: \(error.localizedDescription)")
             }
+
+            // Pré-aquece o audio engine com o device prioritário para encurtar
+            // a latência do primeiro start() após o hotkey (de ~380ms para ~170ms).
+            // prepare() não abre o HAL → não acende o indicador de microfone.
+            await warmUpAudioCapture()
         } catch {
             errorMessage = "Erro ao carregar modelos: \(error.localizedDescription)"
+        }
+    }
+
+    /// Pré-aquece o `AudioCapture` com o device prioritário atual.
+    /// Chamado no startup e sempre que a lista/ordem de mics muda.
+    /// Silencia erros: se o warmUp falhar, o próximo `start()` cai no cold
+    /// path normal — mesmo comportamento pré-fix.
+    func warmUpAudioCapture() async {
+        guard microphoneManager.isPermissionGranted else { return }
+
+        // Mesma lógica de startRecording: primeiro da lista priorizada, ou nil
+        // (system default) se o toggle "Usar padrão do sistema" está ligado.
+        let preferredUID = microphoneManager.connectedMicrophones().first?.id
+        do {
+            try await audioCapture.warmUp(deviceUID: preferredUID)
+        } catch {
+            logger.info("warmUpAudioCapture: falhou (\(error.localizedDescription)) — start() usará cold path")
         }
     }
 
@@ -367,6 +399,7 @@ final class AppState {
             await recordingTask?.value
             recordingTask = nil
             _ = await audioCapture.stop()
+            await warmUpAudioCapture()
         }
     }
 
@@ -393,26 +426,58 @@ final class AppState {
         logger.info("startRecording: estado → recording")
 
         recordingTask = Task {
-            do {
-                let preferredDevice = microphoneManager.getPreferredDevice()
-                let deviceUID = preferredDevice?.uniqueID
-                logger.error("startRecording: device = \(deviceUID ?? "system default", privacy: .public), useSystemDefault = \(self.microphoneManager.useSystemDefault, privacy: .public)")
-                microphoneManager.activeMicrophoneID = microphoneManager.useSystemDefault ? nil : deviceUID
+            // Lista ordenada de candidatos. Vazia → usa apenas system default.
+            let candidatos = microphoneManager.connectedMicrophones()
 
-                do {
-                    try await audioCapture.start(deviceUID: deviceUID)
-                } catch where deviceUID != nil {
-                    // Fallback: se o device específico falhou, tenta system default
-                    logger.error("startRecording: fallback para system default após erro: \(String(describing: error), privacy: .public)")
-                    microphoneManager.activeMicrophoneID = nil
-                    try await audioCapture.start(deviceUID: nil)
-                }
-                logger.error("startRecording: audioCapture.start() OK")
-            } catch {
-                logger.error("startRecording: ERRO final → \(String(describing: error), privacy: .public)")
+            if candidatos.isEmpty {
+                logger.info("startRecording: candidatos vazios, usando system default")
                 microphoneManager.activeMicrophoneID = nil
-                state = .idle
-                errorMessage = "Erro ao iniciar gravacao: \(error.localizedDescription)"
+                do {
+                    try await audioCapture.start(deviceUID: nil)
+                    logger.info("startRecording: mic ativo = system default")
+                } catch {
+                    logger.error("startRecording: system default falhou → \(String(describing: error), privacy: .public)")
+                    microphoneManager.activeMicrophoneID = nil
+                    state = .idle
+                    errorMessage = "Não foi possível iniciar gravação em nenhum microfone disponível"
+                }
+                return
+            }
+
+            let nomes = candidatos.map(\.name).joined(separator: ", ")
+            logger.info("startRecording: candidatos = [\(nomes, privacy: .public)]")
+
+            // Tenta cada candidato em ordem. Primeiro sucesso encerra.
+            var sucesso = false
+            for (idx, mic) in candidatos.enumerated() {
+                logger.info("startRecording: tentando mic \(mic.name, privacy: .public) (pos \(idx + 1)/\(candidatos.count))")
+                microphoneManager.activeMicrophoneID = mic.id
+                do {
+                    try await audioCapture.start(deviceUID: mic.id)
+                    logger.info("startRecording: mic \(mic.name, privacy: .public) OK")
+                    logger.info("startRecording: mic ativo = \(mic.name, privacy: .public) (\(mic.id, privacy: .public))")
+                    sucesso = true
+                    break
+                } catch {
+                    logger.error("startRecording: mic \(mic.name, privacy: .public) (\(mic.id, privacy: .public)) falhou (\(String(describing: error), privacy: .public)), tentando próximo")
+                    // Limpeza preventiva: engine pode ter ficado semi-iniciado
+                    _ = await audioCapture.stop()
+                }
+            }
+
+            // Se nenhum da lista funcionou, tenta system default como último recurso
+            if !sucesso {
+                logger.info("startRecording: caindo para system default")
+                microphoneManager.activeMicrophoneID = nil
+                do {
+                    try await audioCapture.start(deviceUID: nil)
+                    logger.info("startRecording: mic ativo = system default")
+                } catch {
+                    logger.error("startRecording: system default falhou → \(String(describing: error), privacy: .public)")
+                    microphoneManager.activeMicrophoneID = nil
+                    state = .idle
+                    errorMessage = "Não foi possível iniciar gravação em nenhum microfone disponível"
+                }
             }
         }
     }
@@ -435,7 +500,10 @@ final class AppState {
                 }
 
                 // Transcreve o audio
-                let text = try await transcriber.transcribe(samples)
+                let rawText = try await transcriber.transcribe(samples)
+
+                // Aplica vocabulário customizado (substituições alias → term)
+                let text = vocabularyStore?.applyReplacements(to: rawText) ?? rawText
 
                 // Se o texto esta vazio (silencio), volta para idle
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -466,9 +534,13 @@ final class AppState {
                 }
 
                 state = .idle
+
+                // Re-aquece para a próxima gravação ficar no fast path
+                await warmUpAudioCapture()
             } catch {
                 state = .idle
                 errorMessage = "Erro na transcricao: \(error.localizedDescription)"
+                await warmUpAudioCapture()
             }
         }
     }

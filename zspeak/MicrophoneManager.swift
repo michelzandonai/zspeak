@@ -1,5 +1,8 @@
 import AVFoundation
 import AppKit
+import os.log
+
+private let logger = Logger(subsystem: "com.zspeak", category: "MicrophoneManager")
 
 struct MicrophoneInfo: Identifiable, Codable, Equatable {
     let id: String
@@ -55,13 +58,27 @@ final class MicrophoneManager {
     var permissionState: MicrophonePermissionState
     private let skipBundlePermissionCheck: Bool
 
+    // Fonte de verdade do nome do microfone mostrado no overlay durante a gravação.
+    // Se `activeMicrophoneID` está setado (device específico em uso), resolve pela lista.
+    // Caso contrário (toggle "System Default" ligado OU fallback), devolve o nome real do
+    // device padrão do sistema via AVCaptureDevice.default. Só cai na string genérica
+    // "System Default" se o sistema não expuser nenhum device de áudio.
     var activeMicrophoneName: String {
         if let id = activeMicrophoneID,
            let mic = microphones.first(where: { $0.id == id }) {
             return mic.name
         }
-        // Resolve o nome real do dispositivo padrão do sistema
         return AVCaptureDevice.default(for: .audio)?.localizedName ?? "System Default"
+    }
+
+    /// Lista de microfones conectados em ordem de prioridade.
+    /// - Retorna array vazio quando `useSystemDefault == true` (sinaliza ao chamador
+    ///   que deve usar o device padrão do sistema em vez de escolher da lista).
+    /// - Caso contrário, devolve somente os `microphones` com `isConnected == true`
+    ///   na ordem salva em UserDefaults.
+    func connectedMicrophones() -> [MicrophoneInfo] {
+        guard !useSystemDefault else { return [] }
+        return microphones.filter(\.isConnected)
     }
 
     var isPermissionGranted: Bool {
@@ -170,12 +187,23 @@ final class MicrophoneManager {
     }
 
     func getPreferredDevice() -> AVCaptureDevice? {
-        guard !useSystemDefault else { return nil }
-        for mic in microphones where mic.isConnected {
+        guard !useSystemDefault else {
+            logger.info("getPreferredDevice: useSystemDefault=true → usando device padrão do sistema")
+            return nil
+        }
+        for mic in microphones {
+            guard mic.isConnected else {
+                logger.info("getPreferredDevice: pulando mic desconectado id=\(mic.id, privacy: .public) nome=\(mic.name, privacy: .public)")
+                continue
+            }
             if let device = AVCaptureDevice(uniqueID: mic.id) {
+                logger.info("getPreferredDevice: escolhido id=\(mic.id, privacy: .public) nome=\(mic.name, privacy: .public)")
                 return device
+            } else {
+                logger.info("getPreferredDevice: AVCaptureDevice(uniqueID:) retornou nil para id=\(mic.id, privacy: .public) nome=\(mic.name, privacy: .public)")
             }
         }
+        logger.info("getPreferredDevice: nenhum mic da lista disponível → fallback para system default")
         return nil
     }
 

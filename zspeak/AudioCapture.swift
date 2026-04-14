@@ -73,26 +73,59 @@ actor AudioCapture {
     /// Default input device original do HAL, salvo quando trocamos temporariamente.
     /// Restaurado em `stop()` ou em caso de erro durante `start()`.
     private var originalDefaultInputDeviceID: AudioDeviceID?
+    /// Timestamp (CFAbsoluteTime) do momento em que `start()` foi invocada.
+    /// Marca a intenção do usuário — usado para medir latência total até o
+    /// primeiro sample chegar (critério que o usuário percebe).
+    private(set) var startCalledTimestamp: CFAbsoluteTime?
+    /// Timestamp (CFAbsoluteTime) do momento em que `engine.start()` retornou.
+    /// Usado para medir a latência até o primeiro buffer de áudio chegar.
+    private(set) var engineStartTimestamp: CFAbsoluteTime?
+    /// Timestamp do primeiro sample recebido no tap após `engine.start()`.
+    /// Permanece nil até o primeiro callback.
+    private(set) var firstSampleTimestamp: CFAbsoluteTime?
+    /// Indica se o engine foi pré-preparado via `warmUp(deviceUID:)`.
+    /// Quando true, `start()` pula toda a configuração pesada (criação do
+    /// engine, installTap, prepare) e chama apenas `engine.start()` — ganho
+    /// de ~200ms na latência total.
+    private var isWarmed = false
+    /// uniqueID do device usado no warmUp — se divergir do que `start()`
+    /// recebe, descartamos o warm e reconfiguramos.
+    private var warmedDeviceUID: String?
 
     var isCapturing: Bool { isRunning }
 
     /// Inicia captura do microfone, opcionalmente usando um device específico pelo uniqueID
     func start(deviceUID: String? = nil) async throws {
+        let callTime = CFAbsoluteTimeGetCurrent()
+
         // Recria engine limpo (necessário após setInputDevice com device incompatível)
         if isRunning {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
             isRunning = false
         }
-        engine = AVAudioEngine()
 
         samplesBuffer.clear()
         resampleErrors = 0
         currentDeviceUID = deviceUID
         audioLevel = 0
+        startCalledTimestamp = callTime
+        engineStartTimestamp = nil
+        firstSampleTimestamp = nil
+
+        let canFastPath = isWarmed && warmedDeviceUID == deviceUID
+        isWarmed = false
 
         do {
-            try startEngine(deviceUID: deviceUID)
+            if canFastPath {
+                // Fast path: engine já foi criado + installTap + prepare no warmUp.
+                // Só liga o IO agora — economiza ~200ms de cold setup.
+                try engine.start()
+                engineStartTimestamp = CFAbsoluteTimeGetCurrent()
+            } else {
+                engine = AVAudioEngine()
+                try startEngine(deviceUID: deviceUID)
+            }
         } catch {
             // Garante que o default do sistema volte ao original se a inicialização
             // falhou depois de termos trocado — senão o usuário fica com um default
@@ -103,6 +136,55 @@ actor AudioCapture {
         observeConfigurationChanges()
 
         isRunning = true
+    }
+
+    /// Pré-prepara o engine com o device indicado SEM abrir o HAL (sem acender
+    /// o indicador de microfone nem consumir bateria em captura). Aloca buffers,
+    /// instala tap e chama `prepare()`. O próximo `start()` chamado com o mesmo
+    /// `deviceUID` pula toda a configuração e invoca apenas `engine.start()`.
+    ///
+    /// Idempotente: se já aquecido para o mesmo device, retorna imediatamente.
+    /// Se aquecido para outro device, descarta e re-aquece.
+    func warmUp(deviceUID: String? = nil) async throws {
+        // Se já estamos gravando, warmUp seria destrutivo — ignora.
+        guard !isRunning else { return }
+
+        // Já aquecido para o device certo: no-op.
+        if isWarmed && warmedDeviceUID == deviceUID {
+            return
+        }
+
+        // Estado anterior (seja aquecido para outro device, seja fresco): limpa.
+        if isWarmed {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            isWarmed = false
+            restoreSystemDefaultInput()
+        }
+
+        if let uid = deviceUID {
+            logger.info("warmUp: trocando default input do HAL para \(uid, privacy: .public)")
+            try overrideSystemDefaultInput(uniqueID: uid)
+        }
+
+        // Recria engine DEPOIS da troca de HAL (mesmo raciocínio de configureAndStartEngine).
+        engine = AVAudioEngine()
+
+        let inputNode = engine.inputNode
+        inputNode.removeTap(onBus: 0)
+
+        let hwFormat = inputNode.outputFormat(forBus: 0)
+        guard hwFormat.channelCount > 0, hwFormat.sampleRate > 0 else {
+            restoreSystemDefaultInput()
+            throw AudioCaptureError.invalidFormat
+        }
+
+        installTap(on: inputNode)
+        engine.prepare()
+
+        isWarmed = true
+        warmedDeviceUID = deviceUID
+        logger.info("warmUp: engine pré-preparado para deviceUID=\(deviceUID ?? "system-default", privacy: .public)")
     }
 
     /// Configura e inicia o engine (usado no start e na reconexão)
@@ -121,10 +203,8 @@ actor AudioCapture {
             logger.info("configureAndStartEngine: usando system default (deviceUID=nil)")
         }
 
-        // Recria engine DEPOIS de trocar o default do HAL — AVAudioEngine()
-        // lê o input device atual na primeira inicialização do inputNode, então
-        // precisamos garantir que a troca do default já aconteceu.
-        engine = AVAudioEngine()
+        // NB: engine já foi recriado pelo chamador (`start()`), garantindo que
+        // nasça alinhado com o default do HAL recém-trocado.
 
         let inputNode = engine.inputNode
         inputNode.removeTap(onBus: 0)
@@ -136,8 +216,20 @@ actor AudioCapture {
             throw AudioCaptureError.invalidFormat
         }
 
+        installTap(on: inputNode)
+
+        engine.prepare()
+        try engine.start()
+        engineStartTimestamp = CFAbsoluteTimeGetCurrent()
+    }
+
+    /// Instala o tap que alimenta `samplesBuffer` e atualiza `audioLevel`.
+    /// Extraído para ser reutilizado por `configureAndStartEngine` e `warmUp`.
+    private func installTap(on inputNode: AVAudioInputNode) {
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
             guard let self else { return }
+
+            let tapTime = CFAbsoluteTimeGetCurrent()
 
             if let channelData = buffer.floatChannelData?[0] {
                 let frameLength = Int(buffer.frameLength)
@@ -149,6 +241,7 @@ actor AudioCapture {
                     let rms = sqrt(sum / Float(frameLength))
                     let scaledLevel = min(rms * 12.0, 1.0)
                     Task {
+                        await self.markFirstSampleIfNeeded(at: tapTime)
                         await self.updateAudioLevel(scaledLevel)
                     }
                 }
@@ -161,9 +254,17 @@ actor AudioCapture {
                 self.resampleErrors += 1
             }
         }
+    }
 
-        engine.prepare()
-        try engine.start()
+    /// Registra o timestamp do primeiro sample recebido após `engine.start()` e
+    /// loga a latência. No-op depois do primeiro sample de cada sessão.
+    private func markFirstSampleIfNeeded(at timestamp: CFAbsoluteTime) {
+        guard firstSampleTimestamp == nil else { return }
+        firstSampleTimestamp = timestamp
+        if let start = engineStartTimestamp {
+            let delayMs = (timestamp - start) * 1000
+            logger.info("markFirstSampleIfNeeded: primeiro sample após \(String(format: "%.1f", delayMs), privacy: .public)ms do engine.start()")
+        }
     }
 
     /// Para a captura e retorna todas as amostras acumuladas

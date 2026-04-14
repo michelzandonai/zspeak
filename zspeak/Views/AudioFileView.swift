@@ -34,6 +34,36 @@ struct AudioFileView: View {
     @State private var currentRecordID: UUID?
     @StateObject private var speakerPlayer = SpeakerAudioPlayer()
 
+    init(
+        appState: AppState,
+        store: TranscriptionStore,
+        initialState: ViewState = .initial,
+        initialMode: AudioFileTranscriber.Mode = .plain,
+        initialPhase: FileTranscriptionPhase = .loadingSamples,
+        initialFileName: String = "",
+        initialDropTargeted: Bool = false,
+        initialDiarizerState: DiarizationManager.ModelState = .notReady,
+        initialPreparingDiarizer: Bool = false,
+        initialNumSpeakersHint: Int? = nil,
+        initialSpeakerNames: [String: String] = [:],
+        initialRecordID: UUID? = nil
+    ) {
+        self.appState = appState
+        self.store = store
+        _state = State(initialValue: initialState)
+        _mode = State(initialValue: initialMode)
+        _phase = State(initialValue: initialPhase)
+        _processingTask = State(initialValue: nil)
+        _currentFileName = State(initialValue: initialFileName)
+        _isDropTargeted = State(initialValue: initialDropTargeted)
+        _diarizerState = State(initialValue: initialDiarizerState)
+        _isPreparingDiarizer = State(initialValue: initialPreparingDiarizer)
+        _numSpeakersHint = State(initialValue: initialNumSpeakersHint)
+        _speakerNames = State(initialValue: initialSpeakerNames)
+        _currentRecordID = State(initialValue: initialRecordID)
+        _speakerPlayer = StateObject(wrappedValue: SpeakerAudioPlayer())
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {

@@ -344,11 +344,13 @@ struct BenchmarkStoreTests {
         let result = try #require(loaded.lastResult)
         #expect(result.transcribedText == "teste")
         #expect(result.similarity == 1.0)
+        #expect(result.wordErrorRate == 0)
+        #expect(result.characterErrorRate == 0)
         #expect(result.latency > 0)
     }
 
-    @Test("wordSimilarity via runBenchmark: match exato = 1.0")
-    func testWordSimilarityExactMatch() async throws {
+    @Test("runBenchmark: match exato gera WER/CER zero")
+    func testRunBenchmarkExactMatch() async throws {
         let tmpDir = try makeTmpDir()
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
@@ -363,10 +365,12 @@ struct BenchmarkStoreTests {
 
         let result = try #require(store.fixtures.first?.lastResult)
         #expect(result.similarity == 1.0)
+        #expect(result.wordErrorRate == 0)
+        #expect(result.characterErrorRate == 0)
     }
 
-    @Test("wordSimilarity via runBenchmark: match parcial")
-    func testWordSimilarityPartialMatch() async throws {
+    @Test("runBenchmark: substituição parcial gera WER previsível")
+    func testRunBenchmarkPartialMatch() async throws {
         let tmpDir = try makeTmpDir()
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
@@ -381,13 +385,13 @@ struct BenchmarkStoreTests {
         try await store.runBenchmark(fixture: fixture) { _ in "olá bonito errado" }
 
         let result = try #require(store.fixtures.first?.lastResult)
-        // 2 palavras de 3 = 2/3 ≈ 0.6667
         let tolerance = 0.01
-        #expect(abs(result.similarity - (2.0 / 3.0)) < tolerance)
+        #expect(abs((result.wordErrorRate ?? 0) - (2.0 / 3.0)) < tolerance)
+        #expect(abs(result.accuracyScore - (1.0 / 3.0)) < tolerance)
     }
 
-    @Test("wordSimilarity via runBenchmark: nenhum match = 0.0")
-    func testWordSimilarityNoMatch() async throws {
+    @Test("runBenchmark: nenhum match gera WER 100%")
+    func testRunBenchmarkNoMatch() async throws {
         let tmpDir = try makeTmpDir()
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
@@ -402,10 +406,11 @@ struct BenchmarkStoreTests {
 
         let result = try #require(store.fixtures.first?.lastResult)
         #expect(result.similarity == 0.0)
+        #expect(result.wordErrorRate == 1.0)
     }
 
-    @Test("wordSimilarity via runBenchmark: case insensitive")
-    func testWordSimilarityCaseInsensitive() async throws {
+    @Test("runBenchmark: comparação é case insensitive")
+    func testRunBenchmarkCaseInsensitive() async throws {
         let tmpDir = try makeTmpDir()
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
@@ -420,10 +425,11 @@ struct BenchmarkStoreTests {
 
         let result = try #require(store.fixtures.first?.lastResult)
         #expect(result.similarity == 1.0)
+        #expect(result.wordErrorRate == 0)
     }
 
-    @Test("wordSimilarity via runBenchmark: ambos vazios = 1.0")
-    func testWordSimilarityBothEmpty() async throws {
+    @Test("runBenchmark: ambos vazios gera WER zero")
+    func testRunBenchmarkBothEmpty() async throws {
         let tmpDir = try makeTmpDir()
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
@@ -438,10 +444,12 @@ struct BenchmarkStoreTests {
 
         let result = try #require(store.fixtures.first?.lastResult)
         #expect(result.similarity == 1.0)
+        #expect(result.wordErrorRate == 0)
+        #expect(result.characterErrorRate == 0)
     }
 
-    @Test("wordSimilarity via runBenchmark: esperado vazio + transcrito não-vazio = 0.0")
-    func testWordSimilarityEmptyExpectedNonEmptyActual() async throws {
+    @Test("runBenchmark: esperado vazio e transcrito não-vazio gera erro máximo")
+    func testRunBenchmarkEmptyExpectedNonEmptyActual() async throws {
         let tmpDir = try makeTmpDir()
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
@@ -456,6 +464,8 @@ struct BenchmarkStoreTests {
 
         let result = try #require(store.fixtures.first?.lastResult)
         #expect(result.similarity == 0.0)
+        #expect(result.wordErrorRate == 1.0)
+        #expect(result.characterErrorRate == 1.0)
     }
 
     @Test("importFromHistory cria fixtures a partir do histórico")

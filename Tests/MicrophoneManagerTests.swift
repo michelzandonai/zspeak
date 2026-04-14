@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import zspeak
@@ -121,6 +122,101 @@ struct MicrophoneManagerTests {
         ]
 
         #expect(manager.getPreferredDevice() == nil)
+    }
+
+    @Test("getPreferredDevice existente continua funcionando (compat)")
+    func getPreferredDevice_existente_continuaFuncionando() {
+        // Garante que toggle ligado sempre devolve nil (sem pesquisar na lista)
+        let manager = MicrophoneManager()
+        manager.useSystemDefault = true
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-001", name: "Built-in", isConnected: true),
+            MicrophoneInfo(id: "mic-002", name: "External", isConnected: true),
+        ]
+        #expect(manager.getPreferredDevice() == nil)
+
+        // Toggle desligado: método ainda é chamável e não crasheia ao percorrer lista.
+        // AVCaptureDevice(uniqueID:) com IDs fake devolve nil → método retorna nil sem erro.
+        manager.useSystemDefault = false
+        manager.microphones = [
+            MicrophoneInfo(id: "fake-uid-nao-existe", name: "Fake", isConnected: true),
+        ]
+        #expect(manager.getPreferredDevice() == nil)
+    }
+
+    // MARK: - connectedMicrophones: priorizacao e toggle
+
+    @Test("connectedMicrophones quando toggle ligado retorna vazio")
+    func connectedMicrophones_quandoToggleLigado_retornaVazio() {
+        let manager = MicrophoneManager()
+        manager.useSystemDefault = true
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-001", name: "Built-in", isConnected: true),
+            MicrophoneInfo(id: "mic-002", name: "Blue Yeti", isConnected: true),
+        ]
+
+        #expect(manager.connectedMicrophones().isEmpty)
+    }
+
+    @Test("connectedMicrophones quando toggle desligado retorna somente conectados na ordem de prioridade")
+    func connectedMicrophones_quandoToggleDesligado_retornaSomenteConectados_naOrdemDePrioridade() {
+        let manager = MicrophoneManager()
+        manager.useSystemDefault = false
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-A", name: "Mic A", isConnected: true),
+            MicrophoneInfo(id: "mic-B", name: "Mic B", isConnected: false),
+            MicrophoneInfo(id: "mic-C", name: "Mic C", isConnected: true),
+            MicrophoneInfo(id: "mic-D", name: "Mic D", isConnected: true),
+        ]
+
+        let resultado = manager.connectedMicrophones()
+
+        #expect(resultado.count == 3)
+        #expect(resultado.map(\.id) == ["mic-A", "mic-C", "mic-D"])
+    }
+
+    @Test("connectedMicrophones filtra desconectados")
+    func connectedMicrophones_filtraDesconectados() {
+        let manager = MicrophoneManager()
+        manager.useSystemDefault = false
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-1", name: "Desconectado 1", isConnected: false),
+            MicrophoneInfo(id: "mic-2", name: "Desconectado 2", isConnected: false),
+        ]
+
+        #expect(manager.connectedMicrophones().isEmpty)
+    }
+
+    // MARK: - activeMicrophoneName: cenarios especificos
+
+    @Test("activeMicrophoneName quando ID definido retorna nome da lista")
+    func activeMicrophoneName_quandoIDDefinido_retornaNomeDaLista() {
+        let manager = MicrophoneManager()
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-001", name: "Built-in Microphone", isConnected: true),
+            MicrophoneInfo(id: "mic-002", name: "Blue Yeti", isConnected: true),
+            MicrophoneInfo(id: "mic-003", name: "Shure SM7B", isConnected: true),
+        ]
+        manager.activeMicrophoneID = "mic-003"
+
+        #expect(manager.activeMicrophoneName == "Shure SM7B")
+    }
+
+    @Test("activeMicrophoneName quando ID nao definido retorna nome do default do sistema")
+    func activeMicrophoneName_quandoIDNaoDefinido_retornaNomeDoDefaultDoSistema() {
+        // Depende de hardware real (AVCaptureDevice.default) — skip em CI
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        let manager = MicrophoneManager()
+        manager.activeMicrophoneID = nil
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-001", name: "Built-in Microphone", isConnected: true),
+        ]
+
+        let nome = manager.activeMicrophoneName
+        // Deve resolver nome real do device padrao (nao e o "Built-in Microphone" mockado da lista)
+        #expect(!nome.isEmpty)
+        #expect(nome != "Built-in Microphone" || AVCaptureDevice.default(for: .audio)?.localizedName == "Built-in Microphone")
     }
 
     // MARK: - Filtragem de dispositivos agregados

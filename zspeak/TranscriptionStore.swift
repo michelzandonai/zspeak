@@ -6,6 +6,11 @@ import Foundation
 final class TranscriptionStore {
     var records: [TranscriptionRecord] = []
 
+    /// Lookup O(1) por ID. Recalculado quando `records` muda.
+    var recordsByID: [UUID: TranscriptionRecord] {
+        Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+    }
+
     private let appSupportDir: URL
     private let audioDir: URL
     private let historyFile: URL
