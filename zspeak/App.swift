@@ -96,8 +96,11 @@ final class OverlayController {
         // Nota: o tamanho do panel é auto-ajustado via KVO em OverlayPanel
         // (NSHostingController.preferredContentSize → adjustToPreferredSize)
 
-        // Show/hide: visível durante gravação/processamento OU se modo prompt ativo
-        let shouldShow = appState.state == .recording
+        // Show/hide: visível durante preparação/gravação/processamento OU se modo prompt ativo.
+        // Inclui `.preparing` para feedback imediato no press da hotkey (overlay
+        // aparece com spinner antes do engine capturar o 1º sample).
+        let shouldShow = appState.state == .preparing
+            || appState.state == .recording
             || appState.state == .processing
             || promptModeManager.isEnabled
 
@@ -152,7 +155,7 @@ struct ZSpeakApp: App {
         switch appState.state {
         case .idle:
             return "mic"
-        case .recording:
+        case .preparing, .recording:
             return "mic.fill"
         case .processing:
             return "waveform"

@@ -65,7 +65,7 @@ struct MenuBarView: View {
         Divider()
 
         // Toggle de gravação
-        Button(appState.state == .recording ? "Parar Gravação" : "Iniciar Gravação") {
+        Button(appState.isRecordingOrPreparing ? "Parar Gravação" : "Iniciar Gravação") {
             appState.toggleRecording()
         }
         .keyboardShortcut("r", modifiers: [.command])
@@ -140,6 +140,7 @@ struct MenuBarView: View {
         case .idle:
             if appState.microphoneManager.permissionState != .authorized { return .orange }
             return appState.isModelReady ? .green : .gray
+        case .preparing: return .orange
         case .recording: return .red
         case .processing: return .yellow
         }
@@ -150,6 +151,7 @@ struct MenuBarView: View {
         if !appState.isModelReady { return "Carregando modelo..." }
         switch appState.state {
         case .idle: return "Pronto"
+        case .preparing: return "Preparando..."
         case .recording: return "Gravando..."
         case .processing: return "Transcrevendo..."
         }

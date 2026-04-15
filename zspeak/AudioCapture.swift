@@ -91,11 +91,20 @@ actor AudioCapture {
     /// uniqueID do device usado no warmUp — se divergir do que `start()`
     /// recebe, descartamos o warm e reconfiguramos.
     private var warmedDeviceUID: String?
+    /// Callback invocado uma única vez quando o primeiro sample da sessão atual
+    /// chega no tap. Usado pelo AppState para transicionar do estado `.preparing`
+    /// (overlay com spinner) para `.recording` (overlay com waveform) apenas
+    /// quando o engine está de fato capturando áudio.
+    private var onFirstSampleCallback: (@Sendable () -> Void)?
 
     var isCapturing: Bool { isRunning }
 
-    /// Inicia captura do microfone, opcionalmente usando um device específico pelo uniqueID
-    func start(deviceUID: String? = nil) async throws {
+    /// Inicia captura do microfone, opcionalmente usando um device específico pelo uniqueID.
+    /// - Parameter onFirstSample: callback invocado uma única vez quando o primeiro
+    ///   buffer de áudio chega no tap. Permite ao chamador sincronizar UI com a
+    ///   transição HAL→engine→tap real, eliminando a janela em que o usuário vê
+    ///   "gravando" mas nenhuma amostra foi capturada ainda.
+    func start(deviceUID: String? = nil, onFirstSample: (@Sendable () -> Void)? = nil) async throws {
         let callTime = CFAbsoluteTimeGetCurrent()
 
         // Recria engine limpo (necessário após setInputDevice com device incompatível)
@@ -112,6 +121,7 @@ actor AudioCapture {
         startCalledTimestamp = callTime
         engineStartTimestamp = nil
         firstSampleTimestamp = nil
+        onFirstSampleCallback = onFirstSample
 
         let canFastPath = isWarmed && warmedDeviceUID == deviceUID
         isWarmed = false
@@ -225,8 +235,13 @@ actor AudioCapture {
 
     /// Instala o tap que alimenta `samplesBuffer` e atualiza `audioLevel`.
     /// Extraído para ser reutilizado por `configureAndStartEngine` e `warmUp`.
+    ///
+    /// bufferSize=512 (em vez do default 4096): a 48 kHz, o HAL acumula ~11 ms
+    /// de áudio antes do primeiro callback, contra ~85 ms com 4096. Corte direto
+    /// de ~74 ms na latência percebida até o primeiro sample chegar. Custo: mais
+    /// callbacks/s (~94 vs ~12), cada um ainda é barato (RMS + resample).
     private func installTap(on inputNode: AVAudioInputNode) {
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 512, format: nil) { [weak self] buffer, _ in
             guard let self else { return }
 
             let tapTime = CFAbsoluteTimeGetCurrent()
@@ -258,6 +273,7 @@ actor AudioCapture {
 
     /// Registra o timestamp do primeiro sample recebido após `engine.start()` e
     /// loga a latência. No-op depois do primeiro sample de cada sessão.
+    /// Invoca `onFirstSampleCallback` (fora do actor) para notificar o chamador.
     private func markFirstSampleIfNeeded(at timestamp: CFAbsoluteTime) {
         guard firstSampleTimestamp == nil else { return }
         firstSampleTimestamp = timestamp
@@ -265,6 +281,9 @@ actor AudioCapture {
             let delayMs = (timestamp - start) * 1000
             logger.info("markFirstSampleIfNeeded: primeiro sample após \(String(format: "%.1f", delayMs), privacy: .public)ms do engine.start()")
         }
+        let callback = onFirstSampleCallback
+        onFirstSampleCallback = nil
+        callback?()
     }
 
     /// Para a captura e retorna todas as amostras acumuladas

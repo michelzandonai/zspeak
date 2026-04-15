@@ -59,39 +59,39 @@ struct IntegrationTests {
 
     // MARK: - 3. Transições de estado
 
-    @Test("Fluxo idle → recording quando pré-requisitos atendidos")
+    @Test("Fluxo idle → preparing quando pré-requisitos atendidos")
     func testStateTransitions() {
         let appState = makeReadyAppState()
 
         #expect(appState.state == .idle, "Estado inicial deve ser idle")
         #expect(appState.errorMessage == nil)
 
-        // Toggle deve transicionar para recording
+        // Toggle deve transicionar para preparing (engine ainda não capturou 1º sample)
         appState.toggleRecording()
 
-        #expect(appState.state == .recording, "Deve transicionar para recording")
+        #expect(appState.isRecordingOrPreparing, "Deve transicionar para preparing ou recording")
         #expect(appState.errorMessage == nil, "Não deve ter erro quando pré-requisitos ok")
     }
 
-    @Test("startRecordingIfIdle transiciona para recording quando idle e pré-requisitos ok")
+    @Test("startRecordingIfIdle transiciona para preparing/recording quando idle e pré-requisitos ok")
     func testStartRecordingIfIdleTransitions() {
         let appState = makeReadyAppState()
 
         appState.startRecordingIfIdle()
 
-        #expect(appState.state == .recording)
+        #expect(appState.isRecordingOrPreparing)
         #expect(appState.errorMessage == nil)
     }
 
-    @Test("startRecordingIfIdle não faz nada quando já está recording")
+    @Test("startRecordingIfIdle não faz nada quando já está gravando/preparando")
     func testStartRecordingIfIdleWhenRecording() {
         let appState = makeReadyAppState()
         appState.toggleRecording()
-        #expect(appState.state == .recording)
+        #expect(appState.isRecordingOrPreparing)
 
-        // Segunda chamada não deve causar erro
+        // Segunda chamada não deve causar erro nem alterar estado base
         appState.startRecordingIfIdle()
-        #expect(appState.state == .recording)
+        #expect(appState.isRecordingOrPreparing)
     }
 
     @Test("startRecordingIfIdle não faz nada quando está processing")
@@ -105,20 +105,20 @@ struct IntegrationTests {
 
     // MARK: - 4. Cancelamento durante gravação
 
-    @Test("cancelRecording durante recording deve voltar para idle")
+    @Test("cancelRecording durante preparing/recording deve voltar para idle")
     func testCancelRecordingFromRecording() async throws {
         let appState = makeReadyAppState()
 
         // Inicia gravação
         appState.toggleRecording()
-        #expect(appState.state == .recording)
+        #expect(appState.isRecordingOrPreparing)
 
         // Cancela
         appState.cancelRecording()
 
         // cancelRecording usa Task interno, aguardar a transição
         try await waitUntilOnMain(timeout: .seconds(3)) {
-            appState.state != .recording
+            !appState.isRecordingOrPreparing
         }
 
         #expect(appState.state == .idle, "Deve voltar para idle após cancelamento")
@@ -213,7 +213,7 @@ struct IntegrationTests {
 
         appState.toggleRecording()
 
-        #expect(appState.state == .recording)
+        #expect(appState.isRecordingOrPreparing)
         #expect(appState.errorMessage == nil, "Erro anterior deve ser limpo ao gravar com sucesso")
     }
 
@@ -225,7 +225,7 @@ struct IntegrationTests {
 
         // Simula hold mode: key-down → key-up imediato
         appState.startRecordingIfIdle()
-        #expect(appState.state == .recording)
+        #expect(appState.isRecordingOrPreparing)
 
         appState.stopRecordingIfActive()
 
@@ -234,12 +234,12 @@ struct IntegrationTests {
         // Em ambiente de teste, o estado final pode ser .idle ou .processing
         // dependendo da disponibilidade do microfone — o importante é NÃO crashar
         try await waitUntilOnMain(timeout: .seconds(3)) {
-            appState.state != .recording
+            !appState.isRecordingOrPreparing
         }
 
         // Aceita .idle (mic disponível) ou .processing (mic indisponível, task pendente)
         let validStates: [AppState.RecordingState] = [.idle, .processing]
-        #expect(validStates.contains(appState.state), "Deve estar em idle ou processing, não recording")
+        #expect(validStates.contains(appState.state), "Deve estar em idle ou processing")
     }
 
     @Test("cancelRecording imediatamente após startRecording não deve crashar")
@@ -247,7 +247,7 @@ struct IntegrationTests {
         let appState = makeReadyAppState()
 
         appState.startRecordingIfIdle()
-        #expect(appState.state == .recording)
+        #expect(appState.isRecordingOrPreparing)
 
         appState.cancelRecording()
 
@@ -261,15 +261,15 @@ struct IntegrationTests {
 
         for _ in 0..<5 {
             appState.startRecordingIfIdle()
-            // Só chama stop se realmente entrou em recording
-            if appState.state == .recording {
+            // Só chama stop se realmente entrou em preparing/recording
+            if appState.isRecordingOrPreparing {
                 appState.stopRecordingIfActive()
             }
         }
 
         // Aguarda resolução (com tolerância para hardware indisponível)
         try await waitUntilOnMain(timeout: .seconds(3)) {
-            appState.state != .recording
+            !appState.isRecordingOrPreparing
         }
 
         let validStates: [AppState.RecordingState] = [.idle, .processing]
@@ -299,15 +299,15 @@ struct IntegrationTests {
         ]
 
         appState.toggleRecording()
-        #expect(appState.state == .recording)
+        #expect(appState.isRecordingOrPreparing)
 
-        // Aguarda recordingTask percorrer candidato invalido + cair para default
+        // Aguarda recordingTask percorrer candidato invalido + cair para default + 1º sample
         try await waitUntilOnMain(timeout: .seconds(5)) {
             appState.microphoneManager.activeMicrophoneID == nil
                 && appState.state == .recording
         }
 
-        // Fallback aconteceu: ID ativo e nil (indicando default), estado ainda recording
+        // Fallback aconteceu: ID ativo e nil (indicando default), estado = recording
         #expect(appState.microphoneManager.activeMicrophoneID == nil)
         #expect(appState.state == .recording)
         #expect(appState.errorMessage == nil)
