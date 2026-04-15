@@ -14,8 +14,16 @@ final class AppState {
 
     enum RecordingState: Equatable {
         case idle          // Pronto para usar
-        case recording     // Gravando audio
+        case preparing     // Hotkey acionado; engine subindo, aguardando 1º sample
+        case recording     // Engine capturando áudio (1º sample já chegou)
         case processing    // Transcrevendo
+    }
+
+    /// Retorna true quando o usuário disparou a gravação e o pipeline está ativo,
+    /// independente de o engine já estar capturando samples ou ainda subindo.
+    /// Cobre `.preparing` e `.recording` — útil em guards que tratam ambos igual.
+    var isRecordingOrPreparing: Bool {
+        state == .preparing || state == .recording
     }
 
     var state: RecordingState = .idle
@@ -372,7 +380,7 @@ final class AppState {
         switch state {
         case .idle:
             startRecording()
-        case .recording:
+        case .preparing, .recording:
             stopRecording()
         case .processing:
             logger.info("toggleRecording: ignorado durante processing")
@@ -385,15 +393,17 @@ final class AppState {
         startRecording()
     }
 
-    /// Para gravação se estiver gravando — usado pelo modo Hold
+    /// Para gravação se estiver gravando OU preparando — usado pelo modo Hold
     func stopRecordingIfActive() {
-        guard state == .recording else { return }
+        guard isRecordingOrPreparing else { return }
         stopRecording()
     }
 
-    /// Cancela gravação em andamento — usado pelo Escape
+    /// Cancela gravação em andamento — usado pelo Escape.
+    /// Aceita tanto `.preparing` quanto `.recording`: se o usuário aperta ESC
+    /// durante o gap engine-subindo, ainda precisa limpar o pipeline.
     func cancelRecording() {
-        guard state == .recording else { return }
+        guard isRecordingOrPreparing else { return }
         state = .idle
         Task {
             await recordingTask?.value
@@ -420,10 +430,22 @@ final class AppState {
             return
         }
 
-        state = .recording
+        state = .preparing
         errorMessage = nil
         TextInserter.saveFocusedApp()
-        logger.info("startRecording: estado → recording")
+        logger.info("startRecording: estado → preparing")
+
+        // Callback @Sendable que faz hop para MainActor e promove preparing→recording.
+        // Só transiciona se ainda estiver em .preparing (caso o usuário tenha cancelado
+        // ou parado antes do 1º sample chegar, ignoramos).
+        let onFirstSample: @Sendable () -> Void = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.state == .preparing else { return }
+                self.state = .recording
+                logger.info("startRecording: 1º sample chegou → estado → recording")
+            }
+        }
 
         recordingTask = Task {
             // Lista ordenada de candidatos. Vazia → usa apenas system default.
@@ -433,7 +455,7 @@ final class AppState {
                 logger.info("startRecording: candidatos vazios, usando system default")
                 microphoneManager.activeMicrophoneID = nil
                 do {
-                    try await audioCapture.start(deviceUID: nil)
+                    try await audioCapture.start(deviceUID: nil, onFirstSample: onFirstSample)
                     logger.info("startRecording: mic ativo = system default")
                 } catch {
                     logger.error("startRecording: system default falhou → \(String(describing: error), privacy: .public)")
@@ -453,7 +475,7 @@ final class AppState {
                 logger.info("startRecording: tentando mic \(mic.name, privacy: .public) (pos \(idx + 1)/\(candidatos.count))")
                 microphoneManager.activeMicrophoneID = mic.id
                 do {
-                    try await audioCapture.start(deviceUID: mic.id)
+                    try await audioCapture.start(deviceUID: mic.id, onFirstSample: onFirstSample)
                     logger.info("startRecording: mic \(mic.name, privacy: .public) OK")
                     logger.info("startRecording: mic ativo = \(mic.name, privacy: .public) (\(mic.id, privacy: .public))")
                     sucesso = true
@@ -470,7 +492,7 @@ final class AppState {
                 logger.info("startRecording: caindo para system default")
                 microphoneManager.activeMicrophoneID = nil
                 do {
-                    try await audioCapture.start(deviceUID: nil)
+                    try await audioCapture.start(deviceUID: nil, onFirstSample: onFirstSample)
                     logger.info("startRecording: mic ativo = system default")
                 } catch {
                     logger.error("startRecording: system default falhou → \(String(describing: error), privacy: .public)")

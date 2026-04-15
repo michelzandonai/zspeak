@@ -110,7 +110,20 @@ struct OverlayView: View {
             }
 
             // Bloco central por estado
-            if state == .recording {
+            if state == .preparing {
+                // Engine subindo entre o press do hotkey e o 1º sample real.
+                // Mostra um spinner discreto com o mesmo footprint vertical da
+                // waveform para evitar "pulo" de layout na transição → recording.
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white.opacity(0.6))
+                    Text("Preparando microfone...")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                .frame(height: 20)
+            } else if state == .recording {
                 WaveformView(model: model)
                     .frame(height: 20)
 
