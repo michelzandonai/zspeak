@@ -18,8 +18,8 @@ concurrency:
 
 jobs:
   test:
-    name: Build & Test (macos-14 / Apple Silicon)
-    runs-on: macos-14
+    name: Build & Test (macos-15 / Apple Silicon)
+    runs-on: macos-15
     timeout-minutes: 30
     env:
       # Pula testes lentos de integracao que baixam modelos do HuggingFace.
@@ -71,7 +71,7 @@ jobs:
 
   lint:
     name: Lint (swift-format, best-effort)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 10
     needs: []
     steps:
