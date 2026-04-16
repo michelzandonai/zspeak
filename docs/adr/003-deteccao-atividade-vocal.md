@@ -2,7 +2,9 @@
 
 ## Status
 
-Aceito
+**Superseded — 2026-04-16** (ver secao "Revisao 2026-04-16" abaixo).
+
+Originalmente: Aceito.
 
 ## Contexto
 
@@ -72,3 +74,41 @@ Adotamos **Silero VAD v5 via FluidAudio** (CoreML).
 - **WebRTC VAD**: Mais leve mas significativamente menos preciso, mais falsos positivos
 - **Threshold de amplitude**: Falha com ruido de fundo, ar condicionado, ventilador
 - **Silero VAD via ONNX**: Mesma qualidade mas requer runtime adicional (FluidAudio ja tem)
+
+---
+
+## Revisao 2026-04-16 — VAD removido
+
+Esta ADR esta **superseded**. O `VADManager` foi removido do app (commit `afb4c6d`) e
+nao ha mais detecao de atividade vocal no pipeline.
+
+### Motivos da remocao
+
+- A versao atual do FluidAudio (v0.12.6) **nao expoe mais o Silero VAD** pela API publica
+  do `AsrManager`. O modelo CoreML continua no pacote, mas os wrappers que este ADR
+  assumia (classe `VadManager` / configuracao por threshold/min-speech/min-silence)
+  foram descontinuados.
+- O fluxo real hoje e **push-to-talk**: o usuario controla inicio e fim da gravacao
+  explicitamente via hotkey global (ver ADR 007). A janela de silencio entre
+  pressionar/soltar a hotkey e o frame de audio e curta o suficiente para que
+  alucinacoes do Parakeet TDT por "silencio" nao sejam um problema observado em uso real.
+- Parakeet TDT v3 lida bem com silencio de bordas — o risco de alucinacao que motivou
+  o VAD originalmente e caracteristico de Whisper, nao do modelo atual.
+- Remover o VAD simplificou drasticamente o pipeline (menos estado, menos codigo,
+  menos latencia de ~320ms na deteccao).
+
+### Estado atual do pipeline
+
+```
+Mic → AVAudioEngine (captura continua enquanto hotkey ativa) → Parakeet TDT → Clipboard
+```
+
+Sem VAD, sem deteccao de fim-de-fala automatica. Fim de gravacao = usuario solta/pressiona
+a hotkey.
+
+### Se o VAD precisar voltar
+
+- Reavaliar quando/se FluidAudio reexpor o Silero VAD na API publica
+- Alternativa: integrar Silero VAD diretamente via CoreML (arquivo `.mlmodelc`),
+  sem depender do wrapper do FluidAudio
+- Reabrir esta ADR ou criar uma sucessora (ADR 003-revisao-YYYY)

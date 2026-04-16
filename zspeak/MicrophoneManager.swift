@@ -58,6 +58,18 @@ final class MicrophoneManager {
     var permissionState: MicrophonePermissionState
     private let skipBundlePermissionCheck: Bool
 
+    // Tokens dos observers de NotificationCenter — removidos no deinit para evitar
+    // callbacks em instâncias liberadas durante testes (onde várias instâncias são
+    // criadas e descartadas em sequência).
+    //
+    // `@ObservationIgnored` evita que o macro @Observable injete tracking numa
+    // property puramente interna. `nonisolated(unsafe)` é necessário porque em
+    // Swift 6 o deinit de classe @MainActor é não-isolado; o acesso é seguro porque
+    // escritas só ocorrem no init/observe* (main actor) e a leitura no deinit só
+    // roda quando nenhuma outra referência existe.
+    @ObservationIgnored
+    private nonisolated(unsafe) var observerTokens: [NSObjectProtocol] = []
+
     // Fonte de verdade do nome do microfone mostrado no overlay durante a gravação.
     // Se `activeMicrophoneID` está setado (device específico em uso), resolve pela lista.
     // Caso contrário (toggle "System Default" ligado OU fallback), devolve o nome real do
@@ -100,6 +112,16 @@ final class MicrophoneManager {
         refreshDevices()
         observeDeviceChanges()
         observeAppActivation()
+    }
+
+    deinit {
+        // Remove observers registrados por self para evitar callbacks após liberação.
+        // Os closures usam [weak self] e o Task { @MainActor in ... } faz hop para a
+        // main thread — aqui só invalidamos a subscrição.
+        let center = NotificationCenter.default
+        for token in observerTokens {
+            center.removeObserver(token)
+        }
     }
 
     // MARK: - Public methods
@@ -186,24 +208,32 @@ final class MicrophoneManager {
         }
     }
 
+    /// Retorna o primeiro `AVCaptureDevice` na ordem de prioridade, ou `nil` se
+    /// `useSystemDefault == true` (caller deve usar o default do sistema).
+    ///
+    /// Não é mais usado no app real — o pipeline de captura itera `connectedMicrophones()`
+    /// diretamente em `AppState.startRecording` e troca o default do HAL via
+    /// `AudioCapture.overrideSystemDefaultInput`. Mantido apenas para não quebrar testes
+    /// legados em `Tests/MicrophoneManagerTests.swift`.
+    @available(*, deprecated, message: "Use connectedMicrophones() + AudioCapture.overrideSystemDefaultInput")
     func getPreferredDevice() -> AVCaptureDevice? {
         guard !useSystemDefault else {
-            logger.info("getPreferredDevice: useSystemDefault=true → usando device padrão do sistema")
+            logger.debug("getPreferredDevice: useSystemDefault=true → usando device padrão do sistema")
             return nil
         }
         for mic in microphones {
             guard mic.isConnected else {
-                logger.info("getPreferredDevice: pulando mic desconectado id=\(mic.id, privacy: .public) nome=\(mic.name, privacy: .public)")
+                logger.debug("getPreferredDevice: pulando mic desconectado id=\(mic.id, privacy: .public) nome=\(mic.name, privacy: .public)")
                 continue
             }
             if let device = AVCaptureDevice(uniqueID: mic.id) {
-                logger.info("getPreferredDevice: escolhido id=\(mic.id, privacy: .public) nome=\(mic.name, privacy: .public)")
+                logger.debug("getPreferredDevice: escolhido id=\(mic.id, privacy: .public) nome=\(mic.name, privacy: .public)")
                 return device
             } else {
-                logger.info("getPreferredDevice: AVCaptureDevice(uniqueID:) retornou nil para id=\(mic.id, privacy: .public) nome=\(mic.name, privacy: .public)")
+                logger.debug("getPreferredDevice: AVCaptureDevice(uniqueID:) retornou nil para id=\(mic.id, privacy: .public) nome=\(mic.name, privacy: .public)")
             }
         }
-        logger.info("getPreferredDevice: nenhum mic da lista disponível → fallback para system default")
+        logger.debug("getPreferredDevice: nenhum mic da lista disponível → fallback para system default")
         return nil
     }
 
@@ -232,7 +262,9 @@ final class MicrophoneManager {
     }
 
     private func observeDeviceChanges() {
-        NotificationCenter.default.addObserver(
+        let center = NotificationCenter.default
+
+        let connectedToken = center.addObserver(
             forName: .AVCaptureDeviceWasConnected,
             object: nil,
             queue: .main
@@ -241,8 +273,9 @@ final class MicrophoneManager {
                 self?.refreshDevices()
             }
         }
+        observerTokens.append(connectedToken)
 
-        NotificationCenter.default.addObserver(
+        let disconnectedToken = center.addObserver(
             forName: .AVCaptureDeviceWasDisconnected,
             object: nil,
             queue: .main
@@ -251,10 +284,11 @@ final class MicrophoneManager {
                 self?.refreshDevices()
             }
         }
+        observerTokens.append(disconnectedToken)
     }
 
     private func observeAppActivation() {
-        NotificationCenter.default.addObserver(
+        let token = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
@@ -264,5 +298,6 @@ final class MicrophoneManager {
                 self?.refreshDevices()
             }
         }
+        observerTokens.append(token)
     }
 }
