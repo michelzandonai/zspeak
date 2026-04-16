@@ -4,7 +4,13 @@ import Testing
 @testable import zspeak
 
 @MainActor
-@Suite("Visual Snapshots")
+@Suite(
+    "Visual Snapshots",
+    .disabled(
+        if: ProcessInfo.processInfo.environment["CI"] != nil,
+        "Rendering SwiftUI difere entre runner CI e Xcode local (fonts, materials); baselines são locais."
+    )
+)
 struct VisualSnapshotTests {
 
     @Test("Overlay recording permanece estável")

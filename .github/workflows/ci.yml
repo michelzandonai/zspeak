@@ -78,15 +78,10 @@ jobs:
       - name: Build (debug)
         run: swift build --configuration debug
 
-      - name: Test (parallel, skipping env-dependent suites)
-        run: |
-          swift test --parallel \
-            --skip "Visual Snapshots" \
-            --skip "AccessibilityManager" \
-            --skip "HotkeyManager" \
-            --skip "TextInserter" \
-            --skip "AudioCapture - Hardware real" \
-            --skip "Transcriber Integration"
+      - name: Test (parallel)
+        # Suites ambient-dependent se auto-desativam via @Suite(..., .disabled(if: CI))
+        # em Tests/*.swift. Ver comentário no topo deste arquivo para a lista.
+        run: swift test --parallel
 
   lint:
     name: Lint (swift-format, best-effort)

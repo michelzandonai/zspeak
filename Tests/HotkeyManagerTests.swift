@@ -1,7 +1,14 @@
+import Foundation
 import Testing
 @testable import zspeak
 
-@Suite("HotkeyManager")
+@Suite(
+    "HotkeyManager",
+    .disabled(
+        if: ProcessInfo.processInfo.environment["CI"] != nil,
+        "Depende de AXIsProcessTrusted() — no runner CI retorna true e falsifica asserções."
+    )
+)
 @MainActor
 struct HotkeyManagerTests {
 
