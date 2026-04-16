@@ -2,8 +2,17 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AppKit
 
-/// Tela de transcrição de arquivo de áudio
-/// Estados: initial (drop zone) → processing (progresso) → result (texto/segmentos)
+/// Tela de transcrição de arquivo de áudio.
+///
+/// Estados: `initial` (drop zone) → `processing` (progresso) → `result` (texto/segmentos).
+///
+/// Decomposição (issue #27): o corpo principal orquestra o fluxo e delega cada
+/// bloco para uma sub-view `private struct` coesa — `AudioFileDropZone`,
+/// `AudioFileProcessingView`, `AudioFileResultView`, `DiarizerStatusSection`,
+/// `SpeakersPanel`, `MeetingSegmentRow`, `AudioFileErrorView`. O `@State` fica
+/// neste nível porque várias propriedades são orquestração (task, fileName,
+/// recordID) e o fluxo síncrono entre elas é mais claro no owner do que num
+/// `ObservableObject` separado.
 struct AudioFileView: View {
     let appState: AppState
     let store: TranscriptionStore
@@ -67,7 +76,7 @@ struct AudioFileView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                header
+                AudioFileHeader()
 
                 // Picker de modo (sempre visível)
                 Picker("Modo", selection: $mode) {
@@ -77,22 +86,47 @@ struct AudioFileView: View {
                 .pickerStyle(.segmented)
                 .disabled(state.isProcessing)
 
-                // Aviso de download de modelos de diarização
+                // Aviso de download de modelos de diarização + picker de speakers
                 if mode == .meeting {
-                    diarizerStatusView
-                    speakersHintPicker
+                    DiarizerStatusSection(
+                        diarizerState: diarizerState,
+                        isPreparingDiarizer: isPreparingDiarizer,
+                        onPrepare: prepareDiarizer
+                    )
+                    SpeakersHintPicker(
+                        numSpeakersHint: $numSpeakersHint,
+                        isDisabled: state.isProcessing
+                    )
                 }
 
                 // Conteúdo principal
                 switch state {
                 case .initial:
-                    dropZone
+                    AudioFileDropZone(
+                        isDropTargeted: $isDropTargeted,
+                        onPickFile: openFilePicker,
+                        onDrop: handleDrop
+                    )
                 case .processing:
-                    processingView
+                    AudioFileProcessingView(
+                        phase: phase,
+                        fileName: currentFileName,
+                        onCancel: cancelProcessing
+                    )
                 case .result(let result):
-                    resultView(result)
+                    AudioFileResultView(
+                        result: result,
+                        speakerNames: $speakerNames,
+                        currentRecordID: currentRecordID,
+                        appState: appState,
+                        speakerPlayer: speakerPlayer,
+                        onTranscribeAnother: { state = .initial }
+                    )
                 case .error(let message):
-                    errorView(message)
+                    AudioFileErrorView(
+                        message: message,
+                        onRetry: { state = .initial }
+                    )
                 }
             }
             .padding()
@@ -105,431 +139,15 @@ struct AudioFileView: View {
         }
     }
 
-    // MARK: - Header
+    // MARK: - Ações
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Transcrever arquivo de áudio")
-                .font(.title2)
-                .fontWeight(.semibold)
-            Text("Qualquer formato: WAV, MP3, M4A, FLAC, OPUS (WhatsApp), OGG, WMA, AMR e mais.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
+    private func cancelProcessing() {
+        processingTask?.cancel()
+        processingTask = nil
+        state = .initial
     }
 
-    // MARK: - Drop zone
-
-    private var dropZone: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "waveform.badge.plus")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
-
-            Text("Arraste um arquivo de áudio aqui")
-                .font(.headline)
-
-            Text("ou")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Button {
-                openFilePicker()
-            } label: {
-                Label("Selecionar arquivo...", systemImage: "folder")
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .frame(maxWidth: .infinity, minHeight: 240)
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isDropTargeted ? Color.accentColor.opacity(0.1) : Color(.textBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(
-                    isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.3),
-                    style: StrokeStyle(lineWidth: 2, dash: [8])
-                )
-        )
-        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
-            handleDrop(providers: providers)
-        }
-    }
-
-    // MARK: - Processing
-
-    private var processingView: some View {
-        VStack(spacing: 16) {
-            // Barra determinada quando temos progresso, indeterminada caso contrário
-            if let progress = phaseProgress {
-                VStack(spacing: 6) {
-                    ProgressView(value: progress, total: 1.0)
-                        .progressViewStyle(.linear)
-                        .frame(maxWidth: 360)
-                    Text("\(Int(progress * 100))%")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospaced()
-                }
-            } else {
-                ProgressView()
-                    .progressViewStyle(.circular)
-            }
-
-            Text(phaseDescription)
-                .font(.headline)
-                .multilineTextAlignment(.center)
-
-            if !currentFileName.isEmpty {
-                Text(currentFileName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Button(role: .destructive) {
-                processingTask?.cancel()
-                processingTask = nil
-                state = .initial
-            } label: {
-                Label("Cancelar", systemImage: "xmark.circle")
-            }
-            .padding(.top, 4)
-        }
-        .frame(maxWidth: .infinity, minHeight: 240)
-        .padding()
-    }
-
-    /// Progresso 0.0-1.0 da fase atual, ou nil se indeterminado
-    private var phaseProgress: Double? {
-        switch phase {
-        case .transcoding(let progress):
-            return progress
-        case .transcribing(let current, let total):
-            guard total > 0 else { return nil }
-            return Double(current) / Double(total)
-        case .loadingSamples, .diarizing:
-            return nil
-        }
-    }
-
-    private var phaseDescription: String {
-        switch phase {
-        case .transcoding(let progress):
-            if let progress {
-                return "Convertendo formato de áudio... (\(Int(progress * 100))%)"
-            }
-            return "Convertendo formato de áudio..."
-        case .loadingSamples:
-            return "Carregando áudio..."
-        case .diarizing(let elapsed, let estimated):
-            let sub = AudioFileTranscriber.diarizingSubphase(elapsed: elapsed, estimated: estimated)
-            return "\(sub) \(Int(elapsed))s de ~\(Int(estimated))s estimados"
-        case .transcribing(let current, let total):
-            if total > 1 {
-                return "Transcrevendo \(current) de \(total)..."
-            }
-            return "Transcrevendo..."
-        }
-    }
-
-    // MARK: - Result
-
-    @ViewBuilder
-    private func resultView(_ result: FileTranscriptionResult) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Cabeçalho do resultado
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(result.sourceFileName)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text("\(String(format: "%.1fs", result.durationSeconds)) · \((result.segments?.count).map { "\($0) segmentos" } ?? "texto corrido")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Transcrever outro") {
-                    state = .initial
-                }
-            }
-
-            // Painel de identificação de speakers (modo Reunião)
-            if let segments = result.segments, !segments.isEmpty {
-                speakersPanel(result: result, segments: segments)
-            }
-
-            // Botões de ação
-            HStack(spacing: 8) {
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(exportedText(for: result), forType: .string)
-                } label: {
-                    Label("Copiar", systemImage: "doc.on.doc")
-                }
-
-                Button {
-                    saveTxt(result: result)
-                } label: {
-                    Label("Baixar .txt", systemImage: "square.and.arrow.down")
-                }
-
-                if !appState.lastTranscription.isEmpty {
-                    Button {
-                        appState.applyPrompt()
-                    } label: {
-                        Label("Aplicar prompt LLM", systemImage: "sparkles")
-                    }
-                    .disabled(appState.isApplyingPrompt)
-                }
-            }
-
-            Divider()
-
-            // Conteúdo
-            if let segments = result.segments, !segments.isEmpty {
-                meetingView(segments: segments)
-            } else {
-                plainView(text: result.text)
-            }
-        }
-    }
-
-    /// Painel para identificar e nomear cada speaker — toca snippet de ~10s em loop
-    private func speakersPanel(result: FileTranscriptionResult, segments: [TranscribedSegment]) -> some View {
-        let speakerIds = Array(Set(segments.map(\.speakerId))).sorted()
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("Interlocutores")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-            VStack(spacing: 4) {
-                ForEach(speakerIds, id: \.self) { speakerId in
-                    speakerRow(speakerId: speakerId, result: result, segments: segments)
-                }
-            }
-            .padding(8)
-            .background(Color(.textBackgroundColor).opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-        }
-    }
-
-    private func speakerRow(speakerId: String, result: FileTranscriptionResult, segments: [TranscribedSegment]) -> some View {
-        let isPlaying = speakerPlayer.playingSpeakerId == speakerId
-        let nameBinding = Binding<String>(
-            get: { speakerNames[speakerId] ?? speakerId },
-            set: { newValue in
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                speakerNames[speakerId] = trimmed.isEmpty ? speakerId : trimmed
-                if let id = currentRecordID {
-                    appState.updateSpeakerNames(recordID: id, names: speakerNames)
-                }
-            }
-        )
-        return HStack(spacing: 8) {
-            Button {
-                if isPlaying {
-                    speakerPlayer.stop()
-                } else {
-                    let snippet = SpeakerSnippetBuilder.buildSnippet(
-                        samples: result.samples,
-                        segments: segments,
-                        speakerId: speakerId
-                    )
-                    if !snippet.isEmpty {
-                        speakerPlayer.play(samples: snippet, for: speakerId)
-                    }
-                }
-            } label: {
-                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(colorForSpeaker(speakerId))
-            }
-            .buttonStyle(.plain)
-
-            TextField(speakerId, text: nameBinding)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 220)
-
-            Spacer()
-        }
-    }
-
-    /// Texto exportado (Copiar / Baixar) usando os nomes renomeados se houver
-    private func exportedText(for result: FileTranscriptionResult) -> String {
-        guard let segments = result.segments, !segments.isEmpty else {
-            return result.text
-        }
-        return segments.map { seg in
-            let name = speakerNames[seg.speakerId] ?? seg.speakerId
-            return "\(AudioFileTranscriber.formatTimestamp(seg.startTimeSeconds)) \(name): \(seg.text)"
-        }.joined(separator: "\n\n")
-    }
-
-    private func plainView(text: String) -> some View {
-        ScrollView {
-            Text(text)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-        }
-        .frame(minHeight: 280)
-        .background(Color(.textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func meetingView(segments: [TranscribedSegment]) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                ForEach(segments) { segment in
-                    meetingSegmentRow(segment)
-                }
-            }
-            .padding()
-        }
-        .frame(minHeight: 280)
-        .background(Color(.textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func meetingSegmentRow(_ segment: TranscribedSegment) -> some View {
-        let displayName = speakerNames[segment.speakerId] ?? segment.speakerId
-        return HStack(alignment: .top, spacing: 12) {
-            // Badge colorida do speaker
-            Text(displayName)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(colorForSpeaker(segment.speakerId).opacity(0.2), in: Capsule())
-                .foregroundStyle(colorForSpeaker(segment.speakerId))
-                .frame(minWidth: 80, alignment: .leading)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(AudioFileTranscriber.formatTimestamp(segment.startTimeSeconds))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .monospaced()
-
-                Text(segment.text)
-                    .textSelection(.enabled)
-            }
-
-            Spacer()
-        }
-    }
-
-    /// Cores estáveis por speakerId (hash-based)
-    private func colorForSpeaker(_ speakerId: String) -> Color {
-        let palette: [Color] = [.blue, .green, .orange, .purple, .pink, .teal, .red, .indigo]
-        let hash = abs(speakerId.hashValue)
-        return palette[hash % palette.count]
-    }
-
-    // MARK: - Error
-
-    private func errorView(_ message: String) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(.orange)
-            Text(message)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            Button("Tentar outro arquivo") {
-                state = .initial
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .frame(maxWidth: .infinity, minHeight: 240)
-        .padding()
-    }
-
-    // MARK: - Speakers hint picker
-
-    /// Picker para informar (opcionalmente) quantos interlocutores há no áudio.
-    /// Quando informado, força o clustering — elimina over-segmentation.
-    private var speakersHintPicker: some View {
-        HStack(spacing: 8) {
-            Text("Interlocutores:")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Picker("", selection: $numSpeakersHint) {
-                Text("Automático").tag(Int?.none)
-                Text("2").tag(Int?.some(2))
-                Text("3").tag(Int?.some(3))
-                Text("4").tag(Int?.some(4))
-                Text("5").tag(Int?.some(5))
-                Text("6").tag(Int?.some(6))
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .disabled(state.isProcessing)
-        }
-    }
-
-    // MARK: - Diarizer status
-
-    @ViewBuilder
-    private var diarizerStatusView: some View {
-        switch diarizerState {
-        case .ready:
-            Label("Modelos de diarização prontos", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .font(.caption)
-
-        case .preparing(let progress):
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Preparando modelos de diarização...", systemImage: "arrow.down.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.blue)
-                ProgressView(value: progress, total: 1.0)
-                    .progressViewStyle(.linear)
-                    .frame(maxWidth: 360)
-                Text(diarizerProgressText(progress))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .monospaced()
-            }
-
-        case .notReady:
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Modo Reunião precisa baixar modelos de diarização (~600 MB)", systemImage: "arrow.down.circle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                Button {
-                    prepareDiarizer()
-                } label: {
-                    if isPreparingDiarizer {
-                        HStack {
-                            ProgressView().controlSize(.small)
-                            Text("Iniciando download...")
-                        }
-                    } else {
-                        Text("Baixar modelos agora")
-                    }
-                }
-                .disabled(isPreparingDiarizer)
-            }
-
-        case .error(let message):
-            Label("Erro: \(message)", systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
-                .font(.caption)
-        }
-    }
-
-    /// Texto descritivo do progresso de download (ex.: "243 MB de ~600 MB · 40%")
-    private func diarizerProgressText(_ progress: Double) -> String {
-        let totalMB = DiarizationManager.expectedTotalBytes / 1_000_000
-        let currentMB = Int64(Double(totalMB) * progress)
-        let pct = Int(progress * 100)
-        return "\(currentMB) MB de ~\(totalMB) MB · \(pct)%"
-    }
+    // MARK: - Diarizer lifecycle
 
     private func refreshDiarizerState() async {
         guard let diarizer = appState.diarizationManager else {
@@ -539,7 +157,13 @@ struct AudioFileView: View {
         diarizerState = await diarizer.modelState
     }
 
-    /// Polling do modelState do diarizer enquanto está em .preparing — atualiza UI a cada 400ms
+    /// Polling do modelState do diarizer enquanto está em .preparing — atualiza
+    /// UI a cada 400ms.
+    ///
+    /// Nota (issue #27): `DiarizationManager` é um `actor` hoje, sem API
+    /// `@Observable` exposta. Quando evoluirmos o manager para expor
+    /// `modelState` como stream observável (AsyncSequence ou @Observable),
+    /// este polling pode ser substituído por `for await state in ...`.
     private func startDiarizerStatePolling() {
         Task {
             while isPreparingDiarizer {
@@ -567,8 +191,8 @@ struct AudioFileView: View {
         }
     }
 
-    /// Garante que o diarizer está pronto antes de prosseguir.
-    /// Se não estiver, dispara prepare() e aguarda. Lança erro se falhar.
+    /// Garante que o diarizer está pronto antes de prosseguir. Se não estiver,
+    /// dispara `prepare()` e aguarda. Lança erro se falhar.
     private func ensureDiarizerReady() async throws {
         guard let diarizer = appState.diarizationManager else {
             throw AudioFileTranscriber.TranscriberError.diarizerUnavailable
@@ -664,8 +288,224 @@ struct AudioFileView: View {
             processingTask = nil
         }
     }
+}
 
-    private func saveTxt(result: FileTranscriptionResult) {
+// MARK: - Header
+
+private struct AudioFileHeader: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Transcrever arquivo de áudio")
+                .font(.title2)
+                .fontWeight(.semibold)
+            Text("Qualquer formato: WAV, MP3, M4A, FLAC, OPUS (WhatsApp), OGG, WMA, AMR e mais.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Drop zone
+
+private struct AudioFileDropZone: View {
+    @Binding var isDropTargeted: Bool
+    let onPickFile: () -> Void
+    let onDrop: ([NSItemProvider]) -> Bool
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "waveform.badge.plus")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+
+            Text("Arraste um arquivo de áudio aqui")
+                .font(.headline)
+
+            Text("ou")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button(action: onPickFile) {
+                Label("Selecionar arquivo...", systemImage: "folder")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, minHeight: 240)
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(isDropTargeted ? Color.accentColor.opacity(0.1) : Color(.textBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(
+                    isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.3),
+                    style: StrokeStyle(lineWidth: 2, dash: [8])
+                )
+        )
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            onDrop(providers)
+        }
+    }
+}
+
+// MARK: - Processing
+
+private struct AudioFileProcessingView: View {
+    let phase: FileTranscriptionPhase
+    let fileName: String
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            // Barra determinada quando temos progresso, indeterminada caso contrário
+            if let progress = phaseProgress {
+                VStack(spacing: 6) {
+                    ProgressView(value: progress, total: 1.0)
+                        .progressViewStyle(.linear)
+                        .frame(maxWidth: 360)
+                    Text("\(Int(progress * 100))%")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospaced()
+                }
+            } else {
+                ProgressView()
+                    .progressViewStyle(.circular)
+            }
+
+            Text(phaseDescription)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+
+            if !fileName.isEmpty {
+                Text(fileName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Button(role: .destructive, action: onCancel) {
+                Label("Cancelar", systemImage: "xmark.circle")
+            }
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, minHeight: 240)
+        .padding()
+    }
+
+    /// Progresso 0.0-1.0 da fase atual, ou nil se indeterminado
+    private var phaseProgress: Double? {
+        switch phase {
+        case .transcoding(let progress):
+            return progress
+        case .transcribing(let current, let total):
+            guard total > 0 else { return nil }
+            return Double(current) / Double(total)
+        case .loadingSamples, .diarizing:
+            return nil
+        }
+    }
+
+    private var phaseDescription: String {
+        switch phase {
+        case .transcoding(let progress):
+            if let progress {
+                return "Convertendo formato de áudio... (\(Int(progress * 100))%)"
+            }
+            return "Convertendo formato de áudio..."
+        case .loadingSamples:
+            return "Carregando áudio..."
+        case .diarizing(let elapsed, let estimated):
+            let sub = AudioFileTranscriber.diarizingSubphase(elapsed: elapsed, estimated: estimated)
+            return "\(sub) \(Int(elapsed))s de ~\(Int(estimated))s estimados"
+        case .transcribing(let current, let total):
+            if total > 1 {
+                return "Transcrevendo \(current) de \(total)..."
+            }
+            return "Transcrevendo..."
+        }
+    }
+}
+
+// MARK: - Result
+
+private struct AudioFileResultView: View {
+    let result: FileTranscriptionResult
+    @Binding var speakerNames: [String: String]
+    let currentRecordID: UUID?
+    let appState: AppState
+    @ObservedObject var speakerPlayer: SpeakerAudioPlayer
+    let onTranscribeAnother: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Cabeçalho do resultado
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(result.sourceFileName)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text("\(String(format: "%.1fs", result.durationSeconds)) · \((result.segments?.count).map { "\($0) segmentos" } ?? "texto corrido")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Transcrever outro", action: onTranscribeAnother)
+            }
+
+            // Painel de identificação de speakers (modo Reunião)
+            if let segments = result.segments, !segments.isEmpty {
+                SpeakersPanel(
+                    result: result,
+                    segments: segments,
+                    speakerNames: $speakerNames,
+                    currentRecordID: currentRecordID,
+                    appState: appState,
+                    speakerPlayer: speakerPlayer
+                )
+            }
+
+            // Botões de ação
+            HStack(spacing: 8) {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(exportedText(for: result, speakerNames: speakerNames), forType: .string)
+                } label: {
+                    Label("Copiar", systemImage: "doc.on.doc")
+                }
+
+                Button {
+                    saveTxt(result: result, speakerNames: speakerNames)
+                } label: {
+                    Label("Baixar .txt", systemImage: "square.and.arrow.down")
+                }
+
+                if !appState.lastTranscription.isEmpty {
+                    Button {
+                        appState.applyPrompt()
+                    } label: {
+                        Label("Aplicar prompt LLM", systemImage: "sparkles")
+                    }
+                    .disabled(appState.isApplyingPrompt)
+                }
+            }
+
+            Divider()
+
+            // Conteúdo
+            if let segments = result.segments, !segments.isEmpty {
+                MeetingResultView(segments: segments, speakerNames: speakerNames)
+            } else {
+                PlainResultView(text: result.text)
+            }
+        }
+    }
+
+    private func saveTxt(result: FileTranscriptionResult, speakerNames: [String: String]) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.plainText]
         panel.nameFieldStringValue = URL(fileURLWithPath: result.sourceFileName)
@@ -674,7 +514,294 @@ struct AudioFileView: View {
         panel.canCreateDirectories = true
 
         if panel.runModal() == .OK, let url = panel.url {
-            try? exportedText(for: result).write(to: url, atomically: true, encoding: .utf8)
+            try? exportedText(for: result, speakerNames: speakerNames).write(to: url, atomically: true, encoding: .utf8)
         }
     }
+}
+
+// MARK: - Speakers panel (modo Reunião)
+
+private struct SpeakersPanel: View {
+    let result: FileTranscriptionResult
+    let segments: [TranscribedSegment]
+    @Binding var speakerNames: [String: String]
+    let currentRecordID: UUID?
+    let appState: AppState
+    @ObservedObject var speakerPlayer: SpeakerAudioPlayer
+
+    var body: some View {
+        let speakerIds = Array(Set(segments.map(\.speakerId))).sorted()
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Interlocutores")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            VStack(spacing: 4) {
+                ForEach(speakerIds, id: \.self) { speakerId in
+                    SpeakerRow(
+                        speakerId: speakerId,
+                        result: result,
+                        segments: segments,
+                        speakerNames: $speakerNames,
+                        currentRecordID: currentRecordID,
+                        appState: appState,
+                        speakerPlayer: speakerPlayer
+                    )
+                }
+            }
+            .padding(8)
+            .background(Color(.textBackgroundColor).opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+    }
+}
+
+private struct SpeakerRow: View {
+    let speakerId: String
+    let result: FileTranscriptionResult
+    let segments: [TranscribedSegment]
+    @Binding var speakerNames: [String: String]
+    let currentRecordID: UUID?
+    let appState: AppState
+    @ObservedObject var speakerPlayer: SpeakerAudioPlayer
+
+    var body: some View {
+        let isPlaying = speakerPlayer.playingSpeakerId == speakerId
+        let nameBinding = Binding<String>(
+            get: { speakerNames[speakerId] ?? speakerId },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                speakerNames[speakerId] = trimmed.isEmpty ? speakerId : trimmed
+                if let id = currentRecordID {
+                    appState.updateSpeakerNames(recordID: id, names: speakerNames)
+                }
+            }
+        )
+        HStack(spacing: 8) {
+            Button {
+                if isPlaying {
+                    speakerPlayer.stop()
+                } else {
+                    let snippet = SpeakerSnippetBuilder.buildSnippet(
+                        samples: result.samples,
+                        segments: segments,
+                        speakerId: speakerId
+                    )
+                    if !snippet.isEmpty {
+                        speakerPlayer.play(samples: snippet, for: speakerId)
+                    }
+                }
+            } label: {
+                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(colorForSpeaker(speakerId))
+            }
+            .buttonStyle(.plain)
+
+            TextField(speakerId, text: nameBinding)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 220)
+
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Plain + Meeting views
+
+private struct PlainResultView: View {
+    let text: String
+
+    var body: some View {
+        ScrollView {
+            Text(text)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+        }
+        .frame(minHeight: 280)
+        .background(Color(.textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct MeetingResultView: View {
+    let segments: [TranscribedSegment]
+    let speakerNames: [String: String]
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                ForEach(segments) { segment in
+                    MeetingSegmentRow(segment: segment, speakerNames: speakerNames)
+                }
+            }
+            .padding()
+        }
+        .frame(minHeight: 280)
+        .background(Color(.textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct MeetingSegmentRow: View {
+    let segment: TranscribedSegment
+    let speakerNames: [String: String]
+
+    var body: some View {
+        let displayName = speakerNames[segment.speakerId] ?? segment.speakerId
+        HStack(alignment: .top, spacing: 12) {
+            // Badge colorida do speaker
+            Text(displayName)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(colorForSpeaker(segment.speakerId).opacity(0.2), in: Capsule())
+                .foregroundStyle(colorForSpeaker(segment.speakerId))
+                .frame(minWidth: 80, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(AudioFileTranscriber.formatTimestamp(segment.startTimeSeconds))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospaced()
+
+                Text(segment.text)
+                    .textSelection(.enabled)
+            }
+
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Error state
+
+private struct AudioFileErrorView: View {
+    let message: String
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(.orange)
+            Text(message)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            Button("Tentar outro arquivo", action: onRetry)
+                .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, minHeight: 240)
+        .padding()
+    }
+}
+
+// MARK: - Speakers hint picker
+
+private struct SpeakersHintPicker: View {
+    @Binding var numSpeakersHint: Int?
+    let isDisabled: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Interlocutores:")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("", selection: $numSpeakersHint) {
+                Text("Automático").tag(Int?.none)
+                Text("2").tag(Int?.some(2))
+                Text("3").tag(Int?.some(3))
+                Text("4").tag(Int?.some(4))
+                Text("5").tag(Int?.some(5))
+                Text("6").tag(Int?.some(6))
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(isDisabled)
+        }
+    }
+}
+
+// MARK: - Diarizer status
+
+private struct DiarizerStatusSection: View {
+    let diarizerState: DiarizationManager.ModelState
+    let isPreparingDiarizer: Bool
+    let onPrepare: () -> Void
+
+    var body: some View {
+        switch diarizerState {
+        case .ready:
+            Label("Modelos de diarização prontos", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.caption)
+
+        case .preparing(let progress):
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Preparando modelos de diarização...", systemImage: "arrow.down.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+                ProgressView(value: progress, total: 1.0)
+                    .progressViewStyle(.linear)
+                    .frame(maxWidth: 360)
+                Text(Self.diarizerProgressText(progress))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospaced()
+            }
+
+        case .notReady:
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Modo Reunião precisa baixar modelos de diarização (~600 MB)", systemImage: "arrow.down.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Button(action: onPrepare) {
+                    if isPreparingDiarizer {
+                        HStack {
+                            ProgressView().controlSize(.small)
+                            Text("Iniciando download...")
+                        }
+                    } else {
+                        Text("Baixar modelos agora")
+                    }
+                }
+                .disabled(isPreparingDiarizer)
+            }
+
+        case .error(let message):
+            Label("Erro: \(message)", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .font(.caption)
+        }
+    }
+
+    /// Texto descritivo do progresso de download (ex.: "243 MB de ~600 MB · 40%")
+    private static func diarizerProgressText(_ progress: Double) -> String {
+        let totalMB = DiarizationManager.expectedTotalBytes / 1_000_000
+        let currentMB = Int64(Double(totalMB) * progress)
+        let pct = Int(progress * 100)
+        return "\(currentMB) MB de ~\(totalMB) MB · \(pct)%"
+    }
+}
+
+// MARK: - Helpers compartilhados
+
+/// Texto exportado (Copiar / Baixar) usando os nomes renomeados se houver.
+/// Usado por `AudioFileResultView`.
+private func exportedText(for result: FileTranscriptionResult, speakerNames: [String: String]) -> String {
+    guard let segments = result.segments, !segments.isEmpty else {
+        return result.text
+    }
+    return segments.map { seg in
+        let name = speakerNames[seg.speakerId] ?? seg.speakerId
+        return "\(AudioFileTranscriber.formatTimestamp(seg.startTimeSeconds)) \(name): \(seg.text)"
+    }.joined(separator: "\n\n")
+}
+
+/// Cores estáveis por speakerId (hash-based).
+private func colorForSpeaker(_ speakerId: String) -> Color {
+    let palette: [Color] = [.blue, .green, .orange, .purple, .pink, .teal, .red, .indigo]
+    let hash = abs(speakerId.hashValue)
+    return palette[hash % palette.count]
 }

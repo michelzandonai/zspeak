@@ -9,10 +9,15 @@ final class VocabularyStore {
 
     private let vocabularyFile: URL
 
+    /// Fila serial dedicada a encode + I/O. Fora da main thread.
+    @ObservationIgnored
+    private let persistQueue: DispatchQueue
+
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let appDir = base.appendingPathComponent("zspeak", isDirectory: true)
         vocabularyFile = appDir.appendingPathComponent("vocabulary.json")
+        persistQueue = StorePersistQueue.shared(forFileAt: vocabularyFile)
         try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
         entries = loadEntries()
         seedDefaultsIfNeeded(in: appDir)
@@ -21,6 +26,7 @@ final class VocabularyStore {
     /// Inicializador com DI para testes
     init(baseDirectory: URL) {
         vocabularyFile = baseDirectory.appendingPathComponent("vocabulary.json")
+        persistQueue = StorePersistQueue.shared(forFileAt: vocabularyFile)
         try? FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         entries = loadEntries()
         seedDefaultsIfNeeded(in: baseDirectory)
@@ -106,29 +112,68 @@ final class VocabularyStore {
         saveJSON()
     }
 
-    private func saveJSON() {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = .prettyPrinted
+    /// Envelope versionado: `{ schemaVersion: 1, entries: [...] }`.
+    fileprivate struct Envelope: Codable {
+        let schemaVersion: Int
+        let entries: [VocabularyEntry]
+    }
 
-        guard let data = try? encoder.encode(entries) else { return }
-        try? data.write(to: vocabularyFile, options: .atomic)
+    /// Captura snapshot no main e enfileira encode+write no background.
+    private func saveJSON() {
+        let snapshot = entries
+        let file = vocabularyFile
+        persistQueue.async {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+
+            let envelope = Envelope(
+                schemaVersion: VocabularyStoreSchema.currentVersion,
+                entries: snapshot
+            )
+
+            guard let data = try? encoder.encode(envelope) else { return }
+            try? data.write(to: file, options: .atomic)
+        }
     }
 
     private func loadEntries() -> [VocabularyEntry] {
-        guard FileManager.default.fileExists(atPath: vocabularyFile.path),
-              let data = try? Data(contentsOf: vocabularyFile) else {
+        // Drena writes pendentes antes de reler (testes em mesmo diretório).
+        persistQueue.sync { }
+
+        guard FileManager.default.fileExists(atPath: vocabularyFile.path) else {
+            return []
+        }
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: vocabularyFile)
+        } catch {
+            StoreLog.shared.log("VocabularyStore: falha ao ler \(vocabularyFile.lastPathComponent): \(error)")
             return []
         }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        guard let loaded = try? decoder.decode([VocabularyEntry].self, from: data) else {
+        // Formato novo (envelope).
+        if let envelope = try? decoder.decode(Envelope.self, from: data) {
+            if envelope.schemaVersion == VocabularyStoreSchema.currentVersion {
+                return envelope.entries
+            }
+            StoreLog.shared.log("VocabularyStore: schemaVersion desconhecida \(envelope.schemaVersion); fazendo backup e começando vazio")
+            StoreLog.shared.backup(fileURL: vocabularyFile)
             return []
         }
 
-        return loaded
+        // Formato legado (array direto) — migra para v1.
+        if let legacy = try? decoder.decode([VocabularyEntry].self, from: data) {
+            return legacy
+        }
+
+        StoreLog.shared.log("VocabularyStore: JSON malformado em \(vocabularyFile.lastPathComponent); fazendo backup")
+        StoreLog.shared.backup(fileURL: vocabularyFile)
+        return []
     }
 
     // MARK: - Defaults
@@ -167,4 +212,11 @@ final class VocabularyStore {
         }
         try? Data().write(to: flagURL)
     }
+}
+
+// MARK: - Constants / schema
+
+/// Versão corrente do schema persistido de `VocabularyStore`.
+enum VocabularyStoreSchema {
+    static let currentVersion = 1
 }

@@ -10,6 +10,10 @@ final class BenchmarkStore {
     private let audioDir: URL
     private let fixturesFile: URL
 
+    /// Fila serial dedicada a encode + I/O do JSON de fixtures. Fora da main thread.
+    @ObservationIgnored
+    private let persistQueue: DispatchQueue
+
     /// Init padrão do app — NÃO faz I/O síncrono. A view deve chamar `loadFixturesAsync()`.
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -18,6 +22,7 @@ final class BenchmarkStore {
         baseDir = defaultBase
         audioDir = defaultBase.appendingPathComponent("audio", isDirectory: true)
         fixturesFile = defaultBase.appendingPathComponent("fixtures.json")
+        persistQueue = StorePersistQueue.shared(forFileAt: fixturesFile)
         try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
         // Não carrega fixtures no init — evita bloquear startup/abertura da aba.
     }
@@ -27,6 +32,7 @@ final class BenchmarkStore {
         baseDir = baseDirectory
         audioDir = baseDirectory.appendingPathComponent("audio", isDirectory: true)
         fixturesFile = baseDirectory.appendingPathComponent("fixtures.json")
+        persistQueue = StorePersistQueue.shared(forFileAt: fixturesFile)
         try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
         fixtures = loadFixtures()
     }
@@ -35,13 +41,7 @@ final class BenchmarkStore {
     func loadFixturesAsync() async {
         let file = fixturesFile
         let loaded = await Task.detached(priority: .utility) { () -> [BenchmarkFixture] in
-            guard FileManager.default.fileExists(atPath: file.path),
-                  let data = try? Data(contentsOf: file) else {
-                return []
-            }
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            return (try? decoder.decode([BenchmarkFixture].self, from: data)) ?? []
+            return decodeFixturesFile(at: file)
         }.value
         // Só sobrescreve se ainda estiver vazio — evita sobrescrever edições feitas enquanto carregava.
         if fixtures.isEmpty {
@@ -72,7 +72,9 @@ final class BenchmarkStore {
         saveJSON()
     }
 
-    /// Remove fixture e seu arquivo WAV do disco
+    /// Remove fixture e seu arquivo WAV do disco.
+    /// O `removeItem` é rápido e fica síncrono para que callers que checam
+    /// `fileExists` imediatamente após a remoção vejam o arquivo removido.
     func deleteFixture(_ fixture: BenchmarkFixture) {
         fixtures.removeAll { $0.id == fixture.id }
         let fileURL = audioDir.appendingPathComponent(fixture.audioFileName)
@@ -80,7 +82,8 @@ final class BenchmarkStore {
         saveJSON()
     }
 
-    /// Copia WAV para benchmarks/audio/, retorna fileName (UUID.wav)
+    /// Copia WAV para benchmarks/audio/, retorna fileName (UUID.wav).
+    /// Síncrono pois callers (view de import) esperam o fileName retornado logo em seguida.
     func importWAV(from sourceURL: URL) throws -> String {
         let fileName = "\(UUID().uuidString).wav"
         let destURL = audioDir.appendingPathComponent(fileName)
@@ -88,8 +91,10 @@ final class BenchmarkStore {
         return fileName
     }
 
-    /// Retorna URL do arquivo WAV se existir
+    /// Retorna URL do arquivo WAV se existir.
+    /// Drena writes pendentes antes de consultar.
     func audioURL(for fixture: BenchmarkFixture) -> URL? {
+        persistQueue.sync { }
         let url = audioDir.appendingPathComponent(fixture.audioFileName)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
@@ -204,26 +209,80 @@ final class BenchmarkStore {
 
     // MARK: - Persistência JSON
 
+    /// Envelope versionado: `{ schemaVersion: 1, fixtures: [...] }`.
+    fileprivate struct Envelope: Codable {
+        let schemaVersion: Int
+        let fixtures: [BenchmarkFixture]
+    }
+
+    /// Captura snapshot no main e enfileira encode+write no background.
     private func saveJSON() {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = .prettyPrinted
+        let snapshot = fixtures
+        let file = fixturesFile
+        persistQueue.async {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
-        guard let data = try? encoder.encode(fixtures) else { return }
-        try? data.write(to: fixturesFile, options: .atomic)
-    }
+            let envelope = Envelope(
+                schemaVersion: BenchmarkStoreSchema.currentVersion,
+                fixtures: snapshot
+            )
 
-    private func loadFixtures() -> [BenchmarkFixture] {
-        guard FileManager.default.fileExists(atPath: fixturesFile.path),
-              let data = try? Data(contentsOf: fixturesFile) else {
-            return []
+            guard let data = try? encoder.encode(envelope) else { return }
+            try? data.write(to: file, options: .atomic)
         }
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-
-        return (try? decoder.decode([BenchmarkFixture].self, from: data)) ?? []
     }
+
+    /// Load síncrono do disco — drena pendentes antes de ler.
+    /// Só chamado pelo init de testes; o app usa `loadFixturesAsync()`.
+    private func loadFixtures() -> [BenchmarkFixture] {
+        persistQueue.sync { }
+        return decodeFixturesFile(at: fixturesFile)
+    }
+}
+
+// MARK: - Constants / schema
+
+/// Versão corrente do schema persistido de `BenchmarkStore`.
+enum BenchmarkStoreSchema {
+    static let currentVersion = 1
+}
+
+/// Decodifica o arquivo de fixtures com fallback de versão / legado.
+/// Pure (sem estado) — safe para `Task.detached`.
+fileprivate func decodeFixturesFile(at file: URL) -> [BenchmarkFixture] {
+    guard FileManager.default.fileExists(atPath: file.path) else {
+        return []
+    }
+
+    let data: Data
+    do {
+        data = try Data(contentsOf: file)
+    } catch {
+        StoreLog.shared.log("BenchmarkStore: falha ao ler \(file.lastPathComponent): \(error)")
+        return []
+    }
+
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+
+    if let envelope = try? decoder.decode(BenchmarkStore.Envelope.self, from: data) {
+        if envelope.schemaVersion == BenchmarkStoreSchema.currentVersion {
+            return envelope.fixtures
+        }
+        StoreLog.shared.log("BenchmarkStore: schemaVersion desconhecida \(envelope.schemaVersion); fazendo backup e começando vazio")
+        StoreLog.shared.backup(fileURL: file)
+        return []
+    }
+
+    if let legacy = try? decoder.decode([BenchmarkFixture].self, from: data) {
+        return legacy
+    }
+
+    StoreLog.shared.log("BenchmarkStore: JSON malformado em \(file.lastPathComponent); fazendo backup")
+    StoreLog.shared.backup(fileURL: file)
+    return []
 }
 
 // MARK: - Erros
