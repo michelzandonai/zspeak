@@ -656,17 +656,21 @@ struct WaveformView: View {
     private let barSpacing: CGFloat = 2.5
     private let minHeight: CGFloat = 3
     private let maxHeight: CGFloat = 24
-    /// Período de amostragem — 0.033 s ≈ 30 fps, mesma cadência do timer anterior.
-    private let samplePeriod: TimeInterval = 0.033
+    /// Período de amostragem — 0.016 s ≈ 60 fps, acompanha display a 60/120 Hz.
+    /// Em monitor ProMotion (120 Hz) o TimelineView interpola visualmente.
+    private let samplePeriod: TimeInterval = 0.016
 
     @State private var history: [Float] = Array(repeating: 0, count: 30)
     @State private var smoothedLevel: Float = 0
 
-    /// Fator de suavização EMA — 0.8 = 80% valor novo, 20% histórico
-    private let smoothingFactor: Float = 0.8
+    /// Fator de suavização EMA — 0.35 = transição visual natural.
+    /// Com sample a 60 Hz, um fator alto tornaria a resposta errática
+    /// (picos de RMS entre buffers). 0.35 dá rise/decay perceptível
+    /// sem eco e sem gelatinosidade.
+    private let smoothingFactor: Float = 0.35
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: samplePeriod)) { context in
+        TimelineView(.animation(minimumInterval: samplePeriod)) { context in
             HStack(spacing: barSpacing) {
                 ForEach(0..<barCount, id: \.self) { index in
                     RoundedRectangle(cornerRadius: barWidth / 2)
@@ -675,19 +679,20 @@ struct WaveformView: View {
                 }
             }
             // `.task(id: context.date)` re-executa a cada tick do TimelineView.
-            // Lê o nível via closure async (read sync no AudioLevelMonitor),
-            // atualiza histórico dentro de `withAnimation` para a transição de
-            // altura ser fluida sem `.animation(value:)` reavaliando per-frame.
+            // Atualização SEM `withAnimation`: o redraw periódico do
+            // TimelineView já pinta cada frame com os valores atuais de
+            // `history`, resultando em movimento fluido. `withAnimation` +
+            // spring por tick fazia 30 springs concorrentes se cancelarem
+            // entre si (duração 80 ms > intervalo 16-33 ms), dando sensação
+            // de travamento.
             .task(id: context.date) {
                 let level = await model.getAudioLevel?() ?? 0
                 let amplified = min(level * 2.5, 1.0)
                 let newSmoothed = smoothingFactor * amplified + (1 - smoothingFactor) * smoothedLevel
-                withAnimation(.spring(duration: 0.08, bounce: 0.1)) {
-                    smoothedLevel = newSmoothed
-                    history.append(newSmoothed)
-                    if history.count > barCount {
-                        history.removeFirst(history.count - barCount)
-                    }
+                smoothedLevel = newSmoothed
+                history.append(newSmoothed)
+                if history.count > barCount {
+                    history.removeFirst(history.count - barCount)
                 }
             }
         }
