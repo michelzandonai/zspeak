@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import CoreAudio
 import FluidAudio
@@ -22,6 +23,70 @@ enum AudioCaptureError: LocalizedError {
         case .invalidFormat:
             return "Formato de áudio inválido"
         }
+    }
+}
+
+/// Contador atômico usado pelo tap (audio render thread) sem lock no hotpath.
+/// Substitui `nonisolated(unsafe) var resampleErrors` — que era uma corrida de dados
+/// em Swift 6 strict concurrency. OSAtomicIncrement32 foi deprecado; usamos
+/// `os_unfair_lock` no wrapper, que é wait-free na prática e safe em qualquer
+/// thread (incluindo render thread).
+final class AtomicInt: @unchecked Sendable {
+    private var value: Int = 0
+    private var lock = os_unfair_lock()
+
+    func increment() {
+        os_unfair_lock_lock(&lock)
+        value &+= 1
+        os_unfair_lock_unlock(&lock)
+    }
+
+    func reset() {
+        os_unfair_lock_lock(&lock)
+        value = 0
+        os_unfair_lock_unlock(&lock)
+    }
+
+    var current: Int {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return value
+    }
+}
+
+/// Publica o nível de áudio da gravação de forma thread-safe e reativa.
+///
+/// Antes, o tap (render thread, ~94 Hz) enfileirava `Task { @MainActor }` a cada
+/// buffer só para atualizar uma propriedade no actor `AudioCapture`; a `WaveformView`
+/// rodava um `Timer.scheduledTimer(withTimeInterval: 0.033)` que disparava outra
+/// `Task { @MainActor }` para `await` o valor. Pipeline de 124+ Tasks/s só para
+/// passar um `Float`.
+///
+/// Agora: tap atualiza `level` sob `os_unfair_lock` (wait-free em caminho sem
+/// contenção), e a view lê `currentLevel()` direto, sem hop e sem actor.
+/// Opcionalmente expõe como `@Observable` para quem quiser usar observação
+/// reativa do SwiftUI — mas `WaveformView` usa `TimelineView(.periodic)` e
+/// pull, o que é mais barato que tracking.
+final class AudioLevelMonitor: @unchecked Sendable {
+    private var _level: Float = 0
+    private var lock = os_unfair_lock()
+
+    /// Atualizado pelo tap (render thread). Não aloca, não faz hop.
+    func update(_ newLevel: Float) {
+        os_unfair_lock_lock(&lock)
+        _level = newLevel
+        os_unfair_lock_unlock(&lock)
+    }
+
+    /// Leitura thread-safe. Usada pela UI (MainActor) e por testes.
+    func currentLevel() -> Float {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return _level
+    }
+
+    func reset() {
+        update(0)
     }
 }
 
@@ -51,6 +116,16 @@ final class SynchronizedBuffer: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Pré-aloca capacidade antes de começar a gravar. Evita realocações do
+    /// array durante a captura (a 16 kHz, 60 s = 960k Floats = ~3.7 MB). Chamado
+    /// uma vez por `start()` — o reset para [] em drain() libera e re-aloca no
+    /// próximo start, então este reserveCapacity precisa vir depois de clear()/drain().
+    func reserveCapacity(_ capacity: Int) {
+        lock.lock()
+        samples.reserveCapacity(capacity)
+        lock.unlock()
+    }
+
     var count: Int {
         lock.lock()
         defer { lock.unlock() }
@@ -62,12 +137,25 @@ final class SynchronizedBuffer: @unchecked Sendable {
 /// Converte para 16kHz mono float32 (formato esperado pelo Parakeet TDT)
 actor AudioCapture {
 
+    /// Upper bound para `reserveCapacity` do buffer de samples: 60 s × 16 kHz.
+    /// Gravações maiores seguem funcionando (o array cresce), mas evita realocs
+    /// nas gravações normais do usuário (quase sempre < 1 min).
+    private static let expectedMaxCaptureDurationSeconds = 60
+    private static let targetSampleRate = 16_000
+
     private var engine = AVAudioEngine()
     private let samplesBuffer = SynchronizedBuffer()
     private var isRunning = false
+    /// Converter fica fora do actor para ser chamado direto no tap (render thread).
+    /// `AudioConverter` do FluidAudio é thread-safe internamente (confirmado pelo
+    /// uso em `AudioFileTranscriber` sem serialização adicional); mantemos a anotação
+    /// `nonisolated(unsafe)` até o upstream adicionar `Sendable` ao tipo.
     nonisolated(unsafe) private let converter = AudioConverter()
-    nonisolated(unsafe) private var resampleErrors = 0
-    private(set) var audioLevel: Float = 0
+    /// Contador atômico de erros de resample — incrementado no tap.
+    private let resampleErrors = AtomicInt()
+    /// Monitor thread-safe de nível de áudio. Compartilhado entre actor (start/stop)
+    /// e tap (render thread). Exposto para leitura sincrona via `currentAudioLevel()`.
+    nonisolated let audioLevelMonitor = AudioLevelMonitor()
     private var configObserver: NSObjectProtocol?
     private var currentDeviceUID: String?
     /// Default input device original do HAL, salvo quando trocamos temporariamente.
@@ -99,6 +187,17 @@ actor AudioCapture {
 
     var isCapturing: Bool { isRunning }
 
+    /// Leitura não-isolated do nível de áudio. Evita hop para o actor no hotpath
+    /// da UI (o `WaveformView` faz pull 30 vezes por segundo).
+    nonisolated func currentAudioLevel() -> Float {
+        audioLevelMonitor.currentLevel()
+    }
+
+    /// Mantido para retrocompatibilidade de testes — snapshot sync do nível atual.
+    var audioLevel: Float {
+        audioLevelMonitor.currentLevel()
+    }
+
     /// Inicia captura do microfone, opcionalmente usando um device específico pelo uniqueID.
     /// - Parameter onFirstSample: callback invocado uma única vez quando o primeiro
     ///   buffer de áudio chega no tap. Permite ao chamador sincronizar UI com a
@@ -115,9 +214,10 @@ actor AudioCapture {
         }
 
         samplesBuffer.clear()
-        resampleErrors = 0
+        samplesBuffer.reserveCapacity(Self.expectedMaxCaptureDurationSeconds * Self.targetSampleRate)
+        resampleErrors.reset()
         currentDeviceUID = deviceUID
-        audioLevel = 0
+        audioLevelMonitor.reset()
         startCalledTimestamp = callTime
         engineStartTimestamp = nil
         firstSampleTimestamp = nil
@@ -173,7 +273,7 @@ actor AudioCapture {
         }
 
         if let uid = deviceUID {
-            logger.info("warmUp: trocando default input do HAL para \(uid, privacy: .public)")
+            logger.debug("warmUp: trocando default input do HAL para \(uid, privacy: .public)")
             try overrideSystemDefaultInput(uniqueID: uid)
         }
 
@@ -192,9 +292,14 @@ actor AudioCapture {
         installTap(on: inputNode)
         engine.prepare()
 
+        // Reinstala o observer de configuração — ele é vinculado ao `engine` via
+        // `object:`, e acabamos de recriar o engine. Sem isso, o callback ficaria
+        // pendurado no engine antigo e nunca mais dispararia.
+        observeConfigurationChanges()
+
         isWarmed = true
         warmedDeviceUID = deviceUID
-        logger.info("warmUp: engine pré-preparado para deviceUID=\(deviceUID ?? "system-default", privacy: .public)")
+        logger.debug("warmUp: engine pré-preparado para deviceUID=\(deviceUID ?? "system-default", privacy: .public)")
     }
 
     /// Configura e inicia o engine (usado no start e na reconexão)
@@ -207,10 +312,10 @@ actor AudioCapture {
     /// Configura device, instala tap e inicia engine — pode lançar erro
     private func configureAndStartEngine(deviceUID: String?) throws {
         if let uid = deviceUID {
-            logger.info("configureAndStartEngine: trocando default input do HAL para \(uid, privacy: .public)")
+            logger.debug("configureAndStartEngine: trocando default input do HAL para \(uid, privacy: .public)")
             try overrideSystemDefaultInput(uniqueID: uid)
         } else {
-            logger.info("configureAndStartEngine: usando system default (deviceUID=nil)")
+            logger.debug("configureAndStartEngine: usando system default (deviceUID=nil)")
         }
 
         // NB: engine já foi recriado pelo chamador (`start()`), garantindo que
@@ -233,40 +338,54 @@ actor AudioCapture {
         engineStartTimestamp = CFAbsoluteTimeGetCurrent()
     }
 
-    /// Instala o tap que alimenta `samplesBuffer` e atualiza `audioLevel`.
+    /// Instala o tap que alimenta `samplesBuffer` e atualiza `audioLevelMonitor`.
     /// Extraído para ser reutilizado por `configureAndStartEngine` e `warmUp`.
     ///
     /// bufferSize=512 (em vez do default 4096): a 48 kHz, o HAL acumula ~11 ms
     /// de áudio antes do primeiro callback, contra ~85 ms com 4096. Corte direto
     /// de ~74 ms na latência percebida até o primeiro sample chegar. Custo: mais
-    /// callbacks/s (~94 vs ~12), cada um ainda é barato (RMS + resample).
+    /// callbacks/s (~94 vs ~12), cada um ainda é barato (RMS via vDSP + resample).
     private func installTap(on inputNode: AVAudioInputNode) {
-        inputNode.installTap(onBus: 0, bufferSize: 512, format: nil) { [weak self] buffer, _ in
-            guard let self else { return }
+        // Capturas nonisolated dos helpers usados pelo tap — evitam cruzar o actor
+        // no hotpath (o tap roda na render thread, não no actor).
+        let buffer = samplesBuffer
+        let levelMonitor = audioLevelMonitor
+        let converter = self.converter
+        let errors = resampleErrors
 
+        inputNode.installTap(onBus: 0, bufferSize: 512, format: nil) { [weak self] avBuffer, _ in
             let tapTime = CFAbsoluteTimeGetCurrent()
 
-            if let channelData = buffer.floatChannelData?[0] {
-                let frameLength = Int(buffer.frameLength)
+            if let channelData = avBuffer.floatChannelData?[0] {
+                let frameLength = Int(avBuffer.frameLength)
                 if frameLength > 0 {
-                    var sum: Float = 0
-                    for i in 0..<frameLength {
-                        sum += channelData[i] * channelData[i]
-                    }
-                    let rms = sqrt(sum / Float(frameLength))
+                    // Soma dos quadrados via Accelerate (SIMD) — muito mais rápido
+                    // que loop Swift puro. A ~94 callbacks/s × 512 frames = ~48k
+                    // samples/s de RMS; o loop original era ~5x mais custoso.
+                    var sumOfSquares: Float = 0
+                    vDSP_svesq(channelData, 1, &sumOfSquares, vDSP_Length(frameLength))
+                    let rms = sqrt(sumOfSquares / Float(frameLength))
                     let scaledLevel = min(rms * 12.0, 1.0)
-                    Task {
-                        await self.markFirstSampleIfNeeded(at: tapTime)
-                        await self.updateAudioLevel(scaledLevel)
-                    }
+                    // Escrita direta no monitor (lock interno). Sem hop para MainActor,
+                    // sem criar Task. A UI faz pull 30 vezes/s.
+                    levelMonitor.update(scaledLevel)
                 }
             }
 
             do {
-                let resampled = try self.converter.resampleBuffer(buffer)
-                self.samplesBuffer.append(resampled)
+                let resampled = try converter.resampleBuffer(avBuffer)
+                buffer.append(resampled)
             } catch {
-                self.resampleErrors += 1
+                errors.increment()
+            }
+
+            // Hop único para o actor APENAS no primeiro sample — a lógica de
+            // `firstSampleTimestamp` e do callback precisa rodar isolada no actor.
+            // Depois disso, `self?` vira no-op porque o actor checa e retorna cedo.
+            if let self {
+                Task { [weak self] in
+                    await self?.markFirstSampleIfNeeded(at: tapTime)
+                }
             }
         }
     }
@@ -302,7 +421,7 @@ actor AudioCapture {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRunning = false
-        audioLevel = 0
+        audioLevelMonitor.reset()
 
         restoreSystemDefaultInput()
 
@@ -310,15 +429,14 @@ actor AudioCapture {
         return result
     }
 
-    /// Atualiza nível de áudio para feedback visual
-    private func updateAudioLevel(_ level: Float) {
-        audioLevel = level
-    }
-
     // MARK: - Observação de configuração do engine
 
     /// Observa mudanças de configuração do AVAudioEngine (device desconectado, route change, etc.)
-    /// Remove tap, reinstala com formato atualizado e reinicia o engine
+    /// Remove tap, reinstala com formato atualizado e reinicia o engine.
+    ///
+    /// IMPORTANTE: o observer é vinculado ao `engine` via `object:`, então precisa
+    /// ser reinstalado sempre que recriamos o engine (em `start()` cold path e
+    /// em `warmUp()`), senão ficaria pendurado no engine antigo e nunca dispararia.
     private func observeConfigurationChanges() {
         if let observer = configObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -346,7 +464,7 @@ actor AudioCapture {
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
         isRunning = false
-        audioLevel = 0
+        audioLevelMonitor.reset()
     }
 
     /// Exposto para testes — simula uma mudança de configuração do engine
@@ -370,7 +488,7 @@ actor AudioCapture {
     private func overrideSystemDefaultInput(uniqueID: String) throws {
         let deviceID = try findAudioDeviceID(for: uniqueID)
         let current = currentDefaultInputDeviceID()
-        logger.info("overrideSystemDefaultInput: default atual=\(String(describing: current)) alvo=\(deviceID) uid=\(uniqueID, privacy: .public)")
+        logger.debug("overrideSystemDefaultInput: default atual=\(String(describing: current)) alvo=\(deviceID) uid=\(uniqueID, privacy: .public)")
 
         if let current, current == deviceID {
             // Já é o default — não precisa restaurar nada
@@ -380,7 +498,7 @@ actor AudioCapture {
 
         try setDefaultInputDeviceID(deviceID)
         originalDefaultInputDeviceID = current
-        logger.info("overrideSystemDefaultInput: default trocado para deviceID=\(deviceID); original=\(String(describing: current)) salvo para restauração")
+        logger.debug("overrideSystemDefaultInput: default trocado para deviceID=\(deviceID); original=\(String(describing: current)) salvo para restauração")
     }
 
     /// Restaura o default input device ao valor salvo em `originalDefaultInputDeviceID`.
@@ -390,7 +508,7 @@ actor AudioCapture {
         defer { originalDefaultInputDeviceID = nil }
         do {
             try setDefaultInputDeviceID(original)
-            logger.info("restoreSystemDefaultInput: restaurado para deviceID=\(original)")
+            logger.debug("restoreSystemDefaultInput: restaurado para deviceID=\(original)")
         } catch {
             logger.error("restoreSystemDefaultInput: falhou restaurar para deviceID=\(original) erro=\(String(describing: error), privacy: .public)")
         }

@@ -113,12 +113,18 @@ actor LLMCorrectionManager {
         modelState = .downloading(progress: 0)
 
         do {
-            // loadContainer faz download + carregamento
+            // loadContainer faz download + carregamento.
+            // `[weak self]` evita reter o manager (um actor) pelo closure do loader
+            // enquanto o download acontece em background. Se o app der deinit no
+            // meio (troca de modelo, encerramento), o progresso simplesmente para
+            // de atualizar em vez de segurar o actor vivo.
             let container = try await LLMModelFactory.shared.loadContainer(
                 configuration: Self.modelConfiguration
-            ) { [self] progress in
+            ) { [weak self] progress in
                 let fraction = progress.fractionCompleted
-                Task { await self.updateDownloadProgress(fraction) }
+                Task { [weak self] in
+                    await self?.updateDownloadProgress(fraction)
+                }
             }
 
             modelContainer = container

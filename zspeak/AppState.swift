@@ -195,12 +195,20 @@ final class AppState {
 
     /// Aplica um prompt específico na última transcrição, substituindo o texto colado.
     /// Salva o resultado no histórico linkado ao registro original via sourceRecordID.
+    ///
+    /// Se já existe uma correção LLM em andamento, ela é cancelada antes de
+    /// iniciar a nova — evita que o usuário trocando de prompt no meio acabe com
+    /// dois streams competindo pelo `lastLLMResult` e pelo clipboard.
     func applyPromptToLast(_ prompt: CorrectionPrompt) {
         guard !lastTranscription.isEmpty else {
             errorMessage = "Nenhuma transcrição para processar."
             return
         }
-        guard !isApplyingPrompt else { return }
+
+        // Cancela uma correção anterior ainda em andamento antes de começar outra.
+        // O `Task.isCancelled` é checado após cada chunk do stream; a correção
+        // antiga descarta o resultado parcial e libera `isApplyingPrompt`.
+        llmCorrectionTask?.cancel()
 
         // Re-salva o app em foco atual (pode ter mudado desde a transcrição)
         TextInserter.saveFocusedApp()
@@ -213,17 +221,29 @@ final class AppState {
         let originalID = lastTranscriptionRecordID
         let originalText = lastTranscription
 
-        Task {
+        llmCorrectionTask = Task {
             do {
                 let corrected = try await llmManager.correct(
                     text: originalText,
                     systemPrompt: prompt.systemPrompt,
                     onPartial: { [weak self] partial in
                         Task { @MainActor in
-                            self?.lastLLMResult = partial
+                            guard let self else { return }
+                            // Ignora chunks que chegaram depois de cancelamento —
+                            // senão um stream cancelado ainda sobrescreveria o
+                            // preview do stream novo.
+                            guard !Task.isCancelled else { return }
+                            self.lastLLMResult = partial
                         }
                     }
                 )
+
+                // Se o usuário cancelou (nova correção, shutdown, etc.), não aplica
+                // o resultado nem salva no histórico.
+                if Task.isCancelled {
+                    return
+                }
+
                 let trimmed = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
                     // Substituir texto já colado no app via Cmd+Z + novo Cmd+V
@@ -252,11 +272,21 @@ final class AppState {
                 } else {
                     errorMessage = "LLM retornou vazio."
                 }
+            } catch is CancellationError {
+                // Cancelamento explícito — não é erro do usuário.
+                logger.debug("applyPromptToLast cancelado")
             } catch {
-                errorMessage = "Erro ao aplicar prompt: \(error.localizedDescription)"
-                logger.error("applyPromptToLast falhou: \(error.localizedDescription)")
+                if !Task.isCancelled {
+                    errorMessage = "Erro ao aplicar prompt: \(error.localizedDescription)"
+                    logger.error("applyPromptToLast falhou: \(error.localizedDescription)")
+                }
             }
-            isApplyingPrompt = false
+            // Só desliga o spinner se não fomos cancelados pela próxima correção
+            // (ela já ligou `isApplyingPrompt = true` e vai gerenciar o próprio ciclo).
+            if !Task.isCancelled {
+                isApplyingPrompt = false
+            }
+            llmCorrectionTask = nil
         }
     }
 
@@ -320,15 +350,23 @@ final class AppState {
     }
 
     private var recordingTask: Task<Void, Never>?
+    /// Task que aplica o prompt LLM na última transcrição. Cancelada quando o
+    /// usuário dispara uma nova aplicação (ex: troca de prompt, novo clipboard).
+    /// Evita duas correções concorrentes competindo pelo texto colado e pelo
+    /// `lastLLMResult` streaming.
+    private var llmCorrectionTask: Task<Void, Never>?
     private var isRequestingMicrophonePermission = false
 
     init(skipBundlePermissionCheck: Bool = false) {
         self.microphoneManager = MicrophoneManager(skipBundlePermissionCheck: skipBundlePermissionCheck)
     }
 
-    /// Lê nível de áudio direto do AudioCapture (usado pelo WaveformView)
-    func currentAudioLevel() async -> Float {
-        await audioCapture.audioLevel
+    /// Lê nível de áudio direto do AudioCapture (usado pelo WaveformView).
+    /// `nonisolated` + `async` preserva a assinatura esperada pelo closure
+    /// `OverlayModel.getAudioLevel`, mas a leitura agora é sync contra o
+    /// `AudioLevelMonitor` interno — sem hop para o actor `AudioCapture`.
+    nonisolated func currentAudioLevel() async -> Float {
+        audioCapture.currentAudioLevel()
     }
 
     // MARK: - Inicializacao
@@ -376,14 +414,14 @@ final class AppState {
 
     /// Alterna entre gravar e parar — chamado pela hotkey
     func toggleRecording() {
-        logger.info("toggleRecording: estado atual = \(String(describing: self.state))")
+        logger.debug("toggleRecording: estado atual = \(String(describing: self.state))")
         switch state {
         case .idle:
             startRecording()
         case .preparing, .recording:
             stopRecording()
         case .processing:
-            logger.info("toggleRecording: ignorado durante processing")
+            logger.debug("toggleRecording: ignorado durante processing")
         }
     }
 
@@ -402,9 +440,15 @@ final class AppState {
     /// Cancela gravação em andamento — usado pelo Escape.
     /// Aceita tanto `.preparing` quanto `.recording`: se o usuário aperta ESC
     /// durante o gap engine-subindo, ainda precisa limpar o pipeline.
+    ///
+    /// `.cancel()` no recordingTask propaga `Task.isCancelled` para o loop de
+    /// tentativas de microfone em `startRecording`: se o usuário aperta ESC
+    /// enquanto ainda estamos iterando candidatos, interrompemos sem aguardar
+    /// o próximo `audioCapture.start()` (que pode demorar centenas de ms).
     func cancelRecording() {
         guard isRecordingOrPreparing else { return }
         state = .idle
+        recordingTask?.cancel()
         Task {
             await recordingTask?.value
             recordingTask = nil
@@ -423,7 +467,10 @@ final class AppState {
         }
 
         microphoneManager.refreshPermissionState()
-        logger.info("startRecording: permissão mic = \(self.microphoneManager.permissionState == .authorized ? "OK" : "NEGADA", privacy: .public)")
+        // Logs do hotpath rebaixados de .info para .debug: esses rodam em
+        // TODA gravação e poluem o log de sistema do usuário. Erros importantes
+        // (falha de permissão, falha de start) permanecem como .error.
+        logger.debug("startRecording: permissão mic = \(self.microphoneManager.permissionState == .authorized ? "OK" : "NEGADA", privacy: .public)")
         guard microphoneManager.isPermissionGranted else {
             logger.error("startRecording: sem permissão de microfone, estado = \(String(describing: self.microphoneManager.permissionState))")
             resolveMicrophonePermission()
@@ -433,7 +480,7 @@ final class AppState {
         state = .preparing
         errorMessage = nil
         TextInserter.saveFocusedApp()
-        logger.info("startRecording: estado → preparing")
+        logger.debug("startRecording: estado → preparing")
 
         // Callback @Sendable que faz hop para MainActor e promove preparing→recording.
         // Só transiciona se ainda estiver em .preparing (caso o usuário tenha cancelado
@@ -443,7 +490,7 @@ final class AppState {
                 guard let self else { return }
                 guard self.state == .preparing else { return }
                 self.state = .recording
-                logger.info("startRecording: 1º sample chegou → estado → recording")
+                logger.debug("startRecording: 1º sample chegou → estado → recording")
             }
         }
 
@@ -452,11 +499,11 @@ final class AppState {
             let candidatos = microphoneManager.connectedMicrophones()
 
             if candidatos.isEmpty {
-                logger.info("startRecording: candidatos vazios, usando system default")
+                logger.debug("startRecording: candidatos vazios, usando system default")
                 microphoneManager.activeMicrophoneID = nil
                 do {
                     try await audioCapture.start(deviceUID: nil, onFirstSample: onFirstSample)
-                    logger.info("startRecording: mic ativo = system default")
+                    logger.debug("startRecording: mic ativo = system default")
                 } catch {
                     logger.error("startRecording: system default falhou → \(String(describing: error), privacy: .public)")
                     microphoneManager.activeMicrophoneID = nil
@@ -467,17 +514,19 @@ final class AppState {
             }
 
             let nomes = candidatos.map(\.name).joined(separator: ", ")
-            logger.info("startRecording: candidatos = [\(nomes, privacy: .public)]")
+            logger.debug("startRecording: candidatos = [\(nomes, privacy: .public)]")
 
             // Tenta cada candidato em ordem. Primeiro sucesso encerra.
+            // Respeita cancelamento: se `cancelRecording()` foi chamado, sai sem
+            // tentar mais nada (o fluxo de stop já limpou o engine).
             var sucesso = false
             for (idx, mic) in candidatos.enumerated() {
-                logger.info("startRecording: tentando mic \(mic.name, privacy: .public) (pos \(idx + 1)/\(candidatos.count))")
+                if Task.isCancelled { return }
+                logger.debug("startRecording: tentando mic \(mic.name, privacy: .public) (pos \(idx + 1)/\(candidatos.count))")
                 microphoneManager.activeMicrophoneID = mic.id
                 do {
                     try await audioCapture.start(deviceUID: mic.id, onFirstSample: onFirstSample)
-                    logger.info("startRecording: mic \(mic.name, privacy: .public) OK")
-                    logger.info("startRecording: mic ativo = \(mic.name, privacy: .public) (\(mic.id, privacy: .public))")
+                    logger.debug("startRecording: mic \(mic.name, privacy: .public) OK; mic ativo = \(mic.id, privacy: .public)")
                     sucesso = true
                     break
                 } catch {
@@ -489,11 +538,12 @@ final class AppState {
 
             // Se nenhum da lista funcionou, tenta system default como último recurso
             if !sucesso {
-                logger.info("startRecording: caindo para system default")
+                if Task.isCancelled { return }
+                logger.debug("startRecording: caindo para system default")
                 microphoneManager.activeMicrophoneID = nil
                 do {
                     try await audioCapture.start(deviceUID: nil, onFirstSample: onFirstSample)
-                    logger.info("startRecording: mic ativo = system default")
+                    logger.debug("startRecording: mic ativo = system default")
                 } catch {
                     logger.error("startRecording: system default falhou → \(String(describing: error), privacy: .public)")
                     microphoneManager.activeMicrophoneID = nil
