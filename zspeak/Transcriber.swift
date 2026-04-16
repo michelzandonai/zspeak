@@ -1,8 +1,8 @@
 import Foundation
 import FluidAudio
 
-/// Wrapper para transcrição de áudio usando Parakeet TDT 0.6B V3 via FluidAudio
-/// Modelo roda 100% local no Apple Neural Engine via CoreML
+/// Wrapper para transcrição de áudio usando Parakeet TDT 0.6B V3 via FluidAudio.
+/// Modelo roda 100% local no Apple Neural Engine via CoreML.
 actor Transcriber {
 
     private var asrManager: AsrManager?
@@ -15,8 +15,8 @@ actor Transcriber {
             .appendingPathComponent("Models", isDirectory: true)
     }()
 
-    /// Carrega o modelo Parakeet TDT v3
-    /// Primeiro uso: download automático do HuggingFace (~496 MB)
+    /// Carrega o modelo Parakeet TDT v3.
+    /// Primeiro uso: download automático do HuggingFace (~496 MB).
     func initialize() async throws {
         let models = try await AsrModels.downloadAndLoad(to: Self.modelsDirectory, version: .v3)
         let manager = AsrManager(config: .default)
@@ -25,8 +25,11 @@ actor Transcriber {
         self.isReady = true
     }
 
-    /// Transcreve amostras de áudio (16kHz mono float32)
-    /// Retorna o texto transcrito
+    /// Transcreve amostras de áudio (16kHz mono float32).
+    /// Retorna o texto transcrito. O vocabulário customizado é aplicado em
+    /// pós-processamento via `VocabularyStore.applyReplacements(to:)` no
+    /// pipeline (`RecordingController` / `FileTranscriptionCoordinator`) —
+    /// a API nativa de context biasing foi removida do FluidAudio na v0.12+.
     func transcribe(_ samples: [Float]) async throws -> String {
         guard let manager = asrManager else {
             throw TranscriberError.notInitialized
@@ -34,28 +37,6 @@ actor Transcriber {
 
         let result = try await manager.transcribe(samples, source: .microphone)
         return result.text
-    }
-
-    /// Configura vocabulário customizado com context biasing nativo.
-    ///
-    /// TASK-001: a API `configureVocabularyBoosting` foi removida do `AsrManager` na v0.12+
-    /// do FluidAudio (migrou para `SlidingWindowAsrManager`). Este método é mantido como
-    /// no-op silencioso para não quebrar callers existentes enquanto a migração não ocorre.
-    /// O fallback real é pós-processamento em Swift via `VocabularyStore.applyReplacements(to:)`,
-    /// aplicado no pipeline do `AppState` após a transcrição.
-    @available(*, deprecated, message: "API removida na v0.12+ do FluidAudio; use VocabularyStore.applyReplacements")
-    func configureVocabulary(_ context: CustomVocabularyContext) async throws {
-        guard asrManager != nil else {
-            throw TranscriberError.notInitialized
-        }
-        // No-op: context biasing nativo indisponível — fallback via VocabularyStore.applyReplacements
-        _ = context
-    }
-
-    /// Desativa vocabulário customizado — no-op (ver TASK-001).
-    @available(*, deprecated, message: "API removida na v0.12+ do FluidAudio; use VocabularyStore.applyReplacements")
-    func disableVocabulary() async {
-        // No-op
     }
 
     enum TranscriberError: LocalizedError {

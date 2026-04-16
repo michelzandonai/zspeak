@@ -1,661 +1,329 @@
 import SwiftUI
 import AppKit
-import FluidAudio
-import os.log
 
-private let logger = Logger(subsystem: "com.zspeak", category: "AppState")
-
-/// Estado global da aplicacao — controla o fluxo de gravacao e transcricao
+/// Façade do estado global do app.
+///
+/// `AppState` não contém mais lógica de negócio: ele instancia os controllers
+/// especializados (`RecordingController`, `LLMCoordinator`, `FileTranscriptionCoordinator`)
+/// e expõe as mesmas propriedades/métodos que as Views sempre consumiram,
+/// delegando internamente. Isso preserva a API pública — `appState.state`,
+/// `appState.applyPromptToLast(...)`, etc. continuam funcionando sem mudança
+/// nos call sites.
+///
+/// Responsabilidades que permanecem aqui (escopo pequeno, sem valor em extrair):
+/// - Wiring entre controllers (sincronização `lastTranscription` / accessibility)
+/// - Configuração dos stores (`TranscriptionStore`, `VocabularyStore`, etc.)
+///   — setados externamente por `App.swift`
 @MainActor
 @Observable
 final class AppState {
 
-    // MARK: - Estado
+    // MARK: - Tipos reexportados
 
-    enum RecordingState: Equatable {
-        case idle          // Pronto para usar
-        case preparing     // Hotkey acionado; engine subindo, aguardando 1º sample
-        case recording     // Engine capturando áudio (1º sample já chegou)
-        case processing    // Transcrevendo
+    typealias RecordingState = RecordingController.RecordingState
+
+    // MARK: - Controllers
+
+    let recordingController: RecordingController
+    let llmCoordinator: LLMCoordinator
+    let fileCoordinator: FileTranscriptionCoordinator
+
+    // MARK: - Stores externos (setados por App.swift)
+
+    var store: TranscriptionStore? {
+        didSet { wireStoreHooks() }
     }
-
-    /// Retorna true quando o usuário disparou a gravação e o pipeline está ativo,
-    /// independente de o engine já estar capturando samples ou ainda subindo.
-    /// Cobre `.preparing` e `.recording` — útil em guards que tratam ambos igual.
-    var isRecordingOrPreparing: Bool {
-        state == .preparing || state == .recording
-    }
-
-    var state: RecordingState = .idle
-    var lastTranscription: String = ""
-    var isModelReady: Bool = false
-    var errorMessage: String?
-    /// Estado da permissão de acessibilidade — setado externamente pelo App.swift
-    var accessibilityGranted: Bool = false
-    /// Store para persistir histórico de transcrições — setado externamente pelo App.swift
-    var store: TranscriptionStore?
-    /// Store de benchmark — setado externamente pelo App.swift
     var benchmarkStore: BenchmarkStore?
-    /// Store de vocabulário customizado — setado externamente pelo App.swift
-    var vocabularyStore: VocabularyStore?
-
-    /// Store de prompts de correção LLM — setado externamente pelo App.swift
-    var correctionPromptStore: CorrectionPromptStore?
-
-    /// Gerenciador do Modo Prompt LLM (overlay persistente) — setado externamente pelo App.swift
+    var vocabularyStore: VocabularyStore? {
+        didSet { wireVocabularyHook() }
+    }
+    var correctionPromptStore: CorrectionPromptStore? {
+        didSet { wireActivePromptProvider() }
+    }
     var promptModeManager: PromptModeManager?
-
-    /// Gerenciador de diarização de speakers — setado externamente pelo App.swift
-    /// Usado pelo modo Reunião na transcrição de arquivos
-    var diarizationManager: DiarizationManager?
-
-    /// ID do último registro de transcrição salvo — usado para linkar correções LLM
-    var lastTranscriptionRecordID: UUID?
-
-    /// Último resultado gerado pela correção LLM (para exibir no overlay)
-    var lastLLMResult: String?
-
-    /// Nome do prompt usado na última correção LLM
-    var lastLLMPromptName: String?
-
-    /// Toggle global de correção LLM — persiste em UserDefaults
-    var llmCorrectionEnabled: Bool = UserDefaults.standard.bool(forKey: "llmCorrectionEnabled") {
-        didSet { UserDefaults.standard.set(llmCorrectionEnabled, forKey: "llmCorrectionEnabled") }
+    var diarizationManager: DiarizationManager? {
+        didSet { fileCoordinator.diarizationManager = diarizationManager }
     }
 
-    // MARK: - Dependencias
+    // MARK: - Acessibilidade (sincroniza nos controllers)
+
+    var accessibilityGranted: Bool = false {
+        didSet {
+            recordingController.accessibilityGranted = accessibilityGranted
+            llmCoordinator.accessibilityGranted = accessibilityGranted
+        }
+    }
+
+    // MARK: - Propriedades espelhadas (API pública preservada)
+
+    var state: RecordingState {
+        get { recordingController.state }
+        set { recordingController.state = newValue }
+    }
+    var isRecordingOrPreparing: Bool { recordingController.isRecordingOrPreparing }
+    var isModelReady: Bool {
+        get { recordingController.isModelReady }
+        set { recordingController.isModelReady = newValue }
+    }
+
+    var lastTranscription: String {
+        get { recordingController.lastTranscription }
+        set {
+            recordingController.lastTranscription = newValue
+            llmCoordinator.lastTranscription = newValue
+        }
+    }
+
+    var lastTranscriptionRecordID: UUID? {
+        get { recordingController.lastTranscriptionRecordID }
+        set {
+            recordingController.lastTranscriptionRecordID = newValue
+            llmCoordinator.lastTranscriptionRecordID = newValue
+        }
+    }
+
+    /// Fonte única de verdade para mensagens de erro exibidas na UI.
+    /// Controllers setam seu próprio `errorMessage` e o didSet deles notifica
+    /// o façade (via callback instalado no init) — quem chegou por último ganha.
+    /// Setter externo (testes/UI) propaga para ambos controllers, mantendo-os
+    /// alinhados.
+    var errorMessage: String? {
+        didSet {
+            guard oldValue != errorMessage else { return }
+            // Sincroniza os controllers sem re-disparar didSet → evitar loop:
+            // o callback `onErrorMessageChange` só é invocado quando o valor
+            // muda lá, e aqui `oldValue != newValue` já foi checado.
+            if recordingController.errorMessage != errorMessage {
+                recordingController.errorMessage = errorMessage
+            }
+            if llmCoordinator.errorMessage != errorMessage {
+                llmCoordinator.errorMessage = errorMessage
+            }
+        }
+    }
+
+    // LLM — delegam direto
+    var isApplyingPrompt: Bool {
+        get { llmCoordinator.isApplyingPrompt }
+        set { llmCoordinator.isApplyingPrompt = newValue }
+    }
+    var lastLLMResult: String? {
+        get { llmCoordinator.lastLLMResult }
+        set { llmCoordinator.lastLLMResult = newValue }
+    }
+    var lastLLMPromptName: String? {
+        get { llmCoordinator.lastLLMPromptName }
+        set { llmCoordinator.lastLLMPromptName = newValue }
+    }
+    var llmCorrectionEnabled: Bool {
+        get { llmCoordinator.llmCorrectionEnabled }
+        set { llmCoordinator.llmCorrectionEnabled = newValue }
+    }
+
+    // MARK: - Dependências compartilhadas
 
     let microphoneManager: MicrophoneManager
-    private let audioCapture = AudioCapture()
-    private let transcriber = Transcriber()
-    private let textInserter = TextInserter()
-    private let llmManager = LLMCorrectionManager()
 
-    /// Expõe transcrição para uso externo (benchmark)
-    func transcribe(_ samples: [Float]) async throws -> String {
-        try await transcriber.transcribe(samples)
+    // Instâncias concretas usadas para compor os controllers; expostas como
+    // `private` porque os controllers já atendem o resto do app.
+    private let audioCapture: AudioCapture
+    private let transcriber: Transcriber
+    private let textInserter: TextInserter
+    private let llmManager: LLMCorrectionManager
+
+    // MARK: - Init
+
+    init(skipBundlePermissionCheck: Bool = false) {
+        let micManager = MicrophoneManager(skipBundlePermissionCheck: skipBundlePermissionCheck)
+        let audio = AudioCapture()
+        let asr = Transcriber()
+        let inserter = TextInserter()
+        let llm = LLMCorrectionManager()
+
+        self.microphoneManager = micManager
+        self.audioCapture = audio
+        self.transcriber = asr
+        self.textInserter = inserter
+        self.llmManager = llm
+
+        self.recordingController = RecordingController(
+            audioCapture: audio,
+            transcriber: asr,
+            textInserter: inserter,
+            microphoneManager: micManager
+        )
+        self.llmCoordinator = LLMCoordinator(
+            llmManager: llm,
+            textInserter: inserter
+        )
+        self.fileCoordinator = FileTranscriptionCoordinator(
+            transcribe: { [asr] samples in
+                try await asr.transcribe(samples)
+            },
+            textInserter: inserter
+        )
+
+        // Propagação bidirecional de erro: controller → façade.
+        // Setter do façade propaga na direção inversa, com guarda para evitar loop.
+        self.recordingController.onErrorMessageChange = { [weak self] newValue in
+            guard let self, self.errorMessage != newValue else { return }
+            self.errorMessage = newValue
+        }
+        self.llmCoordinator.onErrorMessageChange = { [weak self] newValue in
+            guard let self, self.errorMessage != newValue else { return }
+            self.errorMessage = newValue
+        }
+
+        // Hook inicial de persistência no RecordingController (pipeline de gravação).
+        // `store` começa nil — quando o `App.swift` setar, `wireStoreHooks()` é chamado
+        // pelo didSet e os closures finais são instalados. O hook temporário abaixo
+        // espelha `lastTranscription` entre controllers mesmo antes do store chegar.
+        recordingController.persistTranscription = { [weak self] text, modelName, duration, app, samples in
+            self?.persistRecordingRecord(text: text, modelName: modelName, duration: duration, targetAppName: app, samples: samples)
+        }
+        fileCoordinator.persistTranscription = { [weak self] text, modelName, duration, app, samples in
+            self?.persistRecordingRecord(text: text, modelName: modelName, duration: duration, targetAppName: app, samples: samples)
+        }
+        fileCoordinator.updateSpeakerNamesInStore = { [weak self] id, names in
+            self?.store?.updateSpeakerNames(recordID: id, names: names)
+        }
+        llmCoordinator.persistLLMResult = { [weak self] text, modelName, app, sourceID in
+            _ = self?.store?.addRecord(
+                text: text,
+                modelName: modelName,
+                duration: 0,
+                targetAppName: app,
+                samples: nil,
+                sourceRecordID: sourceID
+            )
+        }
     }
 
-    /// Transcreve um arquivo de áudio (qualquer formato suportado)
-    /// - Suporta modo `.plain` (texto corrido) e `.meeting` (com identificação de interlocutores)
-    /// - Salva automaticamente no histórico via TranscriptionStore.addRecord
-    /// - Copia o texto final para o clipboard
-    /// - Atualiza lastTranscription/lastTranscriptionRecordID para permitir "Aplicar prompt LLM" depois
+    // MARK: - Hooks com stores externos
+
+    private func wireStoreHooks() {
+        // Os closures já capturam `[weak self]` — só precisa revalidar
+        // se o store muda após init (ex: testes).
+    }
+
+    private func wireVocabularyHook() {
+        let replacer: @MainActor (String) -> String = { [weak self] text in
+            self?.vocabularyStore?.applyReplacements(to: text) ?? text
+        }
+        recordingController.applyVocabularyReplacements = replacer
+        fileCoordinator.applyVocabularyReplacements = replacer
+    }
+
+    private func wireActivePromptProvider() {
+        llmCoordinator.activePromptProvider = { [weak self] in
+            self?.correctionPromptStore?.activePrompt
+        }
+    }
+
+    /// Persiste um record no histórico e sincroniza `lastTranscription`
+    /// entre os controllers (para que o LLM possa consumir o texto recém-gravado).
+    private func persistRecordingRecord(
+        text: String,
+        modelName: String,
+        duration: Double,
+        targetAppName: String?,
+        samples: [Float]?
+    ) -> UUID? {
+        let newID = store?.addRecord(
+            text: text,
+            modelName: modelName,
+            duration: duration,
+            targetAppName: targetAppName,
+            samples: samples
+        )
+        // Sincroniza input do LLM
+        llmCoordinator.lastTranscription = text
+        llmCoordinator.lastTranscriptionRecordID = newID
+        return newID
+    }
+
+    // MARK: - Inicialização do modelo ASR
+
+    /// Carrega modelo ASR — chamado no startup do app.
+    func initialize() async {
+        await recordingController.initialize()
+    }
+
+    /// Pré-aquece o `AudioCapture` com o device prioritário atual.
+    func warmUpAudioCapture() async {
+        await recordingController.warmUpAudioCapture()
+    }
+
+    // MARK: - Audio level (UI)
+
+    nonisolated func currentAudioLevel() async -> Float {
+        await recordingController.currentAudioLevel()
+    }
+
+    // MARK: - Transcrição bruta (benchmark / arquivo)
+
+    /// Expõe transcrição para uso externo (benchmark).
+    func transcribe(_ samples: [Float]) async throws -> String {
+        try await recordingController.transcribe(samples)
+    }
+
+    /// Transcreve um arquivo de áudio (qualquer formato suportado).
     func transcribeFile(
         url: URL,
         mode: AudioFileTranscriber.Mode,
         numSpeakers: Int? = nil,
         onProgress: @escaping @MainActor (FileTranscriptionPhase) -> Void
     ) async throws -> FileTranscriptionResult {
-        let fileTranscriber = AudioFileTranscriber(
-            transcribe: { [weak self] samples in
-                guard let self else { throw AudioFileTranscriber.TranscriberError.transcriptionFailed("AppState liberado") }
-                return try await self.transcribe(samples)
-            },
-            diarizer: diarizationManager
+        let outcome = try await fileCoordinator.transcribeFile(
+            url: url,
+            mode: mode,
+            numSpeakers: numSpeakers,
+            onProgress: onProgress
         )
-
-        let rawResult = try await fileTranscriber.transcribe(url: url, mode: mode, numSpeakers: numSpeakers, onProgress: onProgress)
-
-        // Aplica vocabulário customizado (substituições alias → term) no texto final
-        let correctedText = vocabularyStore?.applyReplacements(to: rawResult.text) ?? rawResult.text
-        let result = FileTranscriptionResult(
-            text: correctedText,
-            segments: rawResult.segments,
-            sourceFileName: rawResult.sourceFileName,
-            durationSeconds: rawResult.durationSeconds,
-            samples: rawResult.samples
-        )
-
-        // Persiste no histórico
-        let modelName: String = {
-            switch mode {
-            case .plain: return "Parakeet TDT (arquivo)"
-            case .meeting: return "Parakeet TDT + Diarizer"
-            }
-        }()
-
-        let newID = store?.addRecord(
-            text: result.text,
-            modelName: modelName,
-            duration: result.durationSeconds,
-            targetAppName: nil,
-            samples: result.samples
-        )
-
-        lastTranscription = result.text
-        lastTranscriptionRecordID = newID
-
-        // Copia para o clipboard
-        textInserter.copyToClipboard(result.text)
-
-        return result
+        // Sincroniza estado do façade com o que o LLM vai consumir
+        lastTranscription = outcome.result.text
+        lastTranscriptionRecordID = outcome.recordID
+        return outcome.result
     }
 
-    /// Atualiza o map de nomes de speakers de um registro de transcrição (modo Reunião)
     func updateSpeakerNames(recordID: UUID, names: [String: String]) {
-        store?.updateSpeakerNames(recordID: recordID, names: names)
+        fileCoordinator.updateSpeakerNames(recordID: recordID, names: names)
     }
 
-    /// Aplica vocabulário customizado ao Transcriber (context biasing nativo)
+    // MARK: - Toggle de gravação (delegam)
+
+    func toggleRecording() { recordingController.toggleRecording() }
+    func startRecordingIfIdle() { recordingController.startRecordingIfIdle() }
+    func stopRecordingIfActive() { recordingController.stopRecordingIfActive() }
+    func cancelRecording() { recordingController.cancelRecording() }
+
+    // MARK: - LLM (delegam)
+
+    func applyPrompt() { llmCoordinator.applyPrompt() }
+    func applyPromptFromClipboard() { llmCoordinator.applyPromptFromClipboard() }
+    func applyPromptToTextInput(_ raw: String) { llmCoordinator.applyPromptToTextInput(raw) }
+    func applyPromptToLast(_ prompt: CorrectionPrompt) { llmCoordinator.applyPromptToLast(prompt) }
+
+    func downloadLLMModel() async -> LLMCorrectionManager.ModelState { await llmCoordinator.downloadModel() }
+    func llmModelState() async -> LLMCorrectionManager.ModelState { await llmCoordinator.modelState() }
+    func loadLLMModel() async -> LLMCorrectionManager.ModelState { await llmCoordinator.loadModel() }
+    func preloadLLMAndKeepAlive() { llmCoordinator.preloadAndKeepAlive() }
+    func releaseLLMKeepAlive() { llmCoordinator.releaseKeepAlive() }
+    func removeLLMModel() async { await llmCoordinator.removeModel() }
+    func llmModelSizeOnDisk() async -> Int64? { await llmCoordinator.modelSizeOnDisk() }
+
+    // MARK: - Vocabulário
+
+    /// Placeholder retrocompatível. A API nativa de context biasing do FluidAudio
+    /// (`configureVocabularyBoosting`) foi removida na v0.12+; as substituições
+    /// agora são feitas em Swift via `VocabularyStore.applyReplacements(to:)` no
+    /// pós-processamento das transcrições (ver `RecordingController` e
+    /// `FileTranscriptionCoordinator`).
+    ///
+    /// Ainda exposto porque `VocabularyView` chama este método no botão "Aplicar"
+    /// — agora apenas confirma que o store está conectado e retorna sucesso.
     func applyVocabulary() async throws {
-        guard let store = vocabularyStore else { return }
-        let enabledEntries = store.entries.filter(\.isEnabled)
-        if enabledEntries.isEmpty {
-            await transcriber.disableVocabulary()
-        } else {
-            let context = store.buildVocabularyContext()
-            try await transcriber.configureVocabulary(context)
-        }
+        // Re-wire caso o store tenha sido setado depois da criação do façade.
+        wireVocabularyHook()
     }
-
-    /// Aplica o prompt ativo na última transcrição e substitui o texto colado
-    var isApplyingPrompt = false
-
-    /// Aplica o prompt ativo (configurado em CorrectionPromptStore) na última transcrição
-    func applyPrompt() {
-        guard let prompt = correctionPromptStore?.activePrompt else {
-            errorMessage = "Nenhum prompt ativo."
-            return
-        }
-        applyPromptToLast(prompt)
-    }
-
-    /// Usa o texto atual do clipboard como input do LLM e aplica o prompt selecionado.
-    /// Permite ao usuário processar qualquer texto (não só transcrições) sem precisar gravar.
-    /// TASK-012.
-    func applyPromptFromClipboard() {
-        guard let raw = NSPasteboard.general.string(forType: .string) else {
-            errorMessage = "Clipboard vazio."
-            return
-        }
-        applyPromptToTextInput(raw)
-    }
-
-    /// Aplica o prompt ativo num texto arbitrário fornecido pelo usuário.
-    /// Usado pelo TextField do overlay quando o usuário cola/digita um texto e o paste é detectado.
-    /// TASK-013.
-    func applyPromptToTextInput(_ raw: String) {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
-            errorMessage = "Texto vazio."
-            return
-        }
-        guard let prompt = correctionPromptStore?.activePrompt else {
-            errorMessage = "Nenhum prompt ativo."
-            return
-        }
-        // Define como input do LLM — texto colado não tem record de gravação associado
-        lastTranscription = text
-        lastTranscriptionRecordID = nil
-        lastLLMResult = nil
-        lastLLMPromptName = nil
-        applyPromptToLast(prompt)
-    }
-
-    /// Aplica um prompt específico na última transcrição, substituindo o texto colado.
-    /// Salva o resultado no histórico linkado ao registro original via sourceRecordID.
-    ///
-    /// Se já existe uma correção LLM em andamento, ela é cancelada antes de
-    /// iniciar a nova — evita que o usuário trocando de prompt no meio acabe com
-    /// dois streams competindo pelo `lastLLMResult` e pelo clipboard.
-    func applyPromptToLast(_ prompt: CorrectionPrompt) {
-        guard !lastTranscription.isEmpty else {
-            errorMessage = "Nenhuma transcrição para processar."
-            return
-        }
-
-        // Cancela uma correção anterior ainda em andamento antes de começar outra.
-        // O `Task.isCancelled` é checado após cada chunk do stream; a correção
-        // antiga descarta o resultado parcial e libera `isApplyingPrompt`.
-        llmCorrectionTask?.cancel()
-
-        // Re-salva o app em foco atual (pode ter mudado desde a transcrição)
-        TextInserter.saveFocusedApp()
-
-        isApplyingPrompt = true
-        errorMessage = nil
-        // Limpa resultado anterior e seta nome do prompt para UI mostrar streaming
-        lastLLMResult = ""
-        lastLLMPromptName = prompt.name
-        let originalID = lastTranscriptionRecordID
-        let originalText = lastTranscription
-
-        llmCorrectionTask = Task {
-            do {
-                let corrected = try await llmManager.correct(
-                    text: originalText,
-                    systemPrompt: prompt.systemPrompt,
-                    onPartial: { [weak self] partial in
-                        Task { @MainActor in
-                            guard let self else { return }
-                            // Ignora chunks que chegaram depois de cancelamento —
-                            // senão um stream cancelado ainda sobrescreveria o
-                            // preview do stream novo.
-                            guard !Task.isCancelled else { return }
-                            self.lastLLMResult = partial
-                        }
-                    }
-                )
-
-                // Se o usuário cancelou (nova correção, shutdown, etc.), não aplica
-                // o resultado nem salva no histórico.
-                if Task.isCancelled {
-                    return
-                }
-
-                let trimmed = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    // Substituir texto já colado no app via Cmd+Z + novo Cmd+V
-                    if accessibilityGranted {
-                        _ = textInserter.replaceLastPaste(trimmed)
-                    } else {
-                        textInserter.copyToClipboard(trimmed)
-                    }
-
-                    // Salva no histórico linkado ao registro original.
-                    // Mantém apenas o record persistido — NÃO sobrescreve lastTranscription
-                    // nem lastTranscriptionRecordID (TASK-011): a fala original permanece
-                    // visível no overlay e um próximo prompt processa o mesmo texto base.
-                    _ = store?.addRecord(
-                        text: trimmed,
-                        modelName: "LLM: \(prompt.name)",
-                        duration: 0,
-                        targetAppName: TextInserter.previousApp?.localizedName,
-                        samples: nil,
-                        sourceRecordID: originalID
-                    )
-
-                    lastLLMResult = trimmed
-                    lastLLMPromptName = prompt.name
-                    logger.info("Prompt '\(prompt.name)' aplicado: \(trimmed.count) chars")
-                } else {
-                    errorMessage = "LLM retornou vazio."
-                }
-            } catch is CancellationError {
-                // Cancelamento explícito — não é erro do usuário.
-                logger.debug("applyPromptToLast cancelado")
-            } catch {
-                if !Task.isCancelled {
-                    errorMessage = "Erro ao aplicar prompt: \(error.localizedDescription)"
-                    logger.error("applyPromptToLast falhou: \(error.localizedDescription)")
-                }
-            }
-            // Só desliga o spinner se não fomos cancelados pela próxima correção
-            // (ela já ligou `isApplyingPrompt = true` e vai gerenciar o próprio ciclo).
-            if !Task.isCancelled {
-                isApplyingPrompt = false
-            }
-            llmCorrectionTask = nil
-        }
-    }
-
-    /// Baixa o modelo LLM para correção — retorna estado final
-    func downloadLLMModel() async -> LLMCorrectionManager.ModelState {
-        do {
-            try await llmManager.downloadModel()
-        } catch {
-            logger.error("Erro no download do modelo LLM: \(error.localizedDescription)")
-        }
-        return await llmManager.modelState
-    }
-
-    /// Estado atual do modelo LLM
-    func llmModelState() async -> LLMCorrectionManager.ModelState {
-        await llmManager.modelState
-    }
-
-    /// Carrega modelo LLM na memória (sem download)
-    func loadLLMModel() async -> LLMCorrectionManager.ModelState {
-        do {
-            try await llmManager.loadModel()
-        } catch {
-            logger.error("Erro ao carregar modelo LLM: \(error.localizedDescription)")
-        }
-        return await llmManager.modelState
-    }
-
-    /// Pré-carrega o modelo LLM em background (não-bloqueante) e ativa keep-alive.
-    /// Chamado quando o Modo Prompt é ligado para eliminar cold start.
-    func preloadLLMAndKeepAlive() {
-        Task.detached(priority: .userInitiated) { [llmManager] in
-            await llmManager.setKeepAlive(true)
-            let state = await llmManager.modelState
-            if case .downloaded = state {
-                try? await llmManager.loadModel()
-            }
-        }
-    }
-
-    /// Libera keep-alive do LLM — chamado quando o Modo Prompt é desligado.
-    /// O idle timer volta a rodar normalmente e descarrega após 120s.
-    func releaseLLMKeepAlive() {
-        Task.detached(priority: .utility) { [llmManager] in
-            await llmManager.setKeepAlive(false)
-        }
-    }
-
-    /// Remove modelo LLM do disco
-    func removeLLMModel() async {
-        do {
-            try await llmManager.deleteModel()
-        } catch {
-            logger.error("Erro ao remover modelo LLM: \(error.localizedDescription)")
-        }
-    }
-
-    /// Tamanho do modelo LLM no disco
-    func llmModelSizeOnDisk() async -> Int64? {
-        await llmManager.modelSizeOnDisk()
-    }
-
-    private var recordingTask: Task<Void, Never>?
-    /// Task que aplica o prompt LLM na última transcrição. Cancelada quando o
-    /// usuário dispara uma nova aplicação (ex: troca de prompt, novo clipboard).
-    /// Evita duas correções concorrentes competindo pelo texto colado e pelo
-    /// `lastLLMResult` streaming.
-    private var llmCorrectionTask: Task<Void, Never>?
-    private var isRequestingMicrophonePermission = false
-
-    init(skipBundlePermissionCheck: Bool = false) {
-        self.microphoneManager = MicrophoneManager(skipBundlePermissionCheck: skipBundlePermissionCheck)
-    }
-
-    /// Lê nível de áudio direto do AudioCapture (usado pelo WaveformView).
-    /// `nonisolated` + `async` preserva a assinatura esperada pelo closure
-    /// `OverlayModel.getAudioLevel`, mas a leitura agora é sync contra o
-    /// `AudioLevelMonitor` interno — sem hop para o actor `AudioCapture`.
-    nonisolated func currentAudioLevel() async -> Float {
-        audioCapture.currentAudioLevel()
-    }
-
-    // MARK: - Inicializacao
-
-    /// Carrega modelo ASR — chamado no startup do app
-    func initialize() async {
-        do {
-            try await transcriber.initialize()
-            isModelReady = true
-
-            // Aplica vocabulário customizado se configurado
-            do {
-                try await applyVocabulary()
-            } catch {
-                logger.error("Falha ao aplicar vocabulário: \(error.localizedDescription)")
-            }
-
-            // Pré-aquece o audio engine com o device prioritário para encurtar
-            // a latência do primeiro start() após o hotkey (de ~380ms para ~170ms).
-            // prepare() não abre o HAL → não acende o indicador de microfone.
-            await warmUpAudioCapture()
-        } catch {
-            errorMessage = "Erro ao carregar modelos: \(error.localizedDescription)"
-        }
-    }
-
-    /// Pré-aquece o `AudioCapture` com o device prioritário atual.
-    /// Chamado no startup e sempre que a lista/ordem de mics muda.
-    /// Silencia erros: se o warmUp falhar, o próximo `start()` cai no cold
-    /// path normal — mesmo comportamento pré-fix.
-    func warmUpAudioCapture() async {
-        guard microphoneManager.isPermissionGranted else { return }
-
-        // Mesma lógica de startRecording: primeiro da lista priorizada, ou nil
-        // (system default) se o toggle "Usar padrão do sistema" está ligado.
-        let preferredUID = microphoneManager.connectedMicrophones().first?.id
-        do {
-            try await audioCapture.warmUp(deviceUID: preferredUID)
-        } catch {
-            logger.info("warmUpAudioCapture: falhou (\(error.localizedDescription)) — start() usará cold path")
-        }
-    }
-
-    // MARK: - Toggle de gravacao
-
-    /// Alterna entre gravar e parar — chamado pela hotkey
-    func toggleRecording() {
-        logger.debug("toggleRecording: estado atual = \(String(describing: self.state))")
-        switch state {
-        case .idle:
-            startRecording()
-        case .preparing, .recording:
-            stopRecording()
-        case .processing:
-            logger.debug("toggleRecording: ignorado durante processing")
-        }
-    }
-
-    /// Inicia gravação se estiver idle — usado pelo modo Hold
-    func startRecordingIfIdle() {
-        guard state == .idle else { return }
-        startRecording()
-    }
-
-    /// Para gravação se estiver gravando OU preparando — usado pelo modo Hold
-    func stopRecordingIfActive() {
-        guard isRecordingOrPreparing else { return }
-        stopRecording()
-    }
-
-    /// Cancela gravação em andamento — usado pelo Escape.
-    /// Aceita tanto `.preparing` quanto `.recording`: se o usuário aperta ESC
-    /// durante o gap engine-subindo, ainda precisa limpar o pipeline.
-    ///
-    /// `.cancel()` no recordingTask propaga `Task.isCancelled` para o loop de
-    /// tentativas de microfone em `startRecording`: se o usuário aperta ESC
-    /// enquanto ainda estamos iterando candidatos, interrompemos sem aguardar
-    /// o próximo `audioCapture.start()` (que pode demorar centenas de ms).
-    func cancelRecording() {
-        guard isRecordingOrPreparing else { return }
-        state = .idle
-        recordingTask?.cancel()
-        Task {
-            await recordingTask?.value
-            recordingTask = nil
-            _ = await audioCapture.stop()
-            await warmUpAudioCapture()
-        }
-    }
-
-    // MARK: - Gravacao
-
-    private func startRecording() {
-        guard isModelReady else {
-            logger.error("startRecording: modelo não pronto")
-            errorMessage = "Modelo ainda carregando, aguarde..."
-            return
-        }
-
-        microphoneManager.refreshPermissionState()
-        // Logs do hotpath rebaixados de .info para .debug: esses rodam em
-        // TODA gravação e poluem o log de sistema do usuário. Erros importantes
-        // (falha de permissão, falha de start) permanecem como .error.
-        logger.debug("startRecording: permissão mic = \(self.microphoneManager.permissionState == .authorized ? "OK" : "NEGADA", privacy: .public)")
-        guard microphoneManager.isPermissionGranted else {
-            logger.error("startRecording: sem permissão de microfone, estado = \(String(describing: self.microphoneManager.permissionState))")
-            resolveMicrophonePermission()
-            return
-        }
-
-        state = .preparing
-        errorMessage = nil
-        TextInserter.saveFocusedApp()
-        logger.debug("startRecording: estado → preparing")
-
-        // Callback @Sendable que faz hop para MainActor e promove preparing→recording.
-        // Só transiciona se ainda estiver em .preparing (caso o usuário tenha cancelado
-        // ou parado antes do 1º sample chegar, ignoramos).
-        let onFirstSample: @Sendable () -> Void = { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                guard self.state == .preparing else { return }
-                self.state = .recording
-                logger.debug("startRecording: 1º sample chegou → estado → recording")
-            }
-        }
-
-        recordingTask = Task {
-            // Lista ordenada de candidatos. Vazia → usa apenas system default.
-            let candidatos = microphoneManager.connectedMicrophones()
-
-            if candidatos.isEmpty {
-                logger.debug("startRecording: candidatos vazios, usando system default")
-                microphoneManager.activeMicrophoneID = nil
-                do {
-                    try await audioCapture.start(deviceUID: nil, onFirstSample: onFirstSample)
-                    logger.debug("startRecording: mic ativo = system default")
-                } catch {
-                    logger.error("startRecording: system default falhou → \(String(describing: error), privacy: .public)")
-                    microphoneManager.activeMicrophoneID = nil
-                    state = .idle
-                    errorMessage = "Não foi possível iniciar gravação em nenhum microfone disponível"
-                }
-                return
-            }
-
-            let nomes = candidatos.map(\.name).joined(separator: ", ")
-            logger.debug("startRecording: candidatos = [\(nomes, privacy: .public)]")
-
-            // Tenta cada candidato em ordem. Primeiro sucesso encerra.
-            // Respeita cancelamento: se `cancelRecording()` foi chamado, sai sem
-            // tentar mais nada (o fluxo de stop já limpou o engine).
-            var sucesso = false
-            for (idx, mic) in candidatos.enumerated() {
-                if Task.isCancelled { return }
-                logger.debug("startRecording: tentando mic \(mic.name, privacy: .public) (pos \(idx + 1)/\(candidatos.count))")
-                microphoneManager.activeMicrophoneID = mic.id
-                do {
-                    try await audioCapture.start(deviceUID: mic.id, onFirstSample: onFirstSample)
-                    logger.debug("startRecording: mic \(mic.name, privacy: .public) OK; mic ativo = \(mic.id, privacy: .public)")
-                    sucesso = true
-                    break
-                } catch {
-                    logger.error("startRecording: mic \(mic.name, privacy: .public) (\(mic.id, privacy: .public)) falhou (\(String(describing: error), privacy: .public)), tentando próximo")
-                    // Limpeza preventiva: engine pode ter ficado semi-iniciado
-                    _ = await audioCapture.stop()
-                }
-            }
-
-            // Se nenhum da lista funcionou, tenta system default como último recurso
-            if !sucesso {
-                if Task.isCancelled { return }
-                logger.debug("startRecording: caindo para system default")
-                microphoneManager.activeMicrophoneID = nil
-                do {
-                    try await audioCapture.start(deviceUID: nil, onFirstSample: onFirstSample)
-                    logger.debug("startRecording: mic ativo = system default")
-                } catch {
-                    logger.error("startRecording: system default falhou → \(String(describing: error), privacy: .public)")
-                    microphoneManager.activeMicrophoneID = nil
-                    state = .idle
-                    errorMessage = "Não foi possível iniciar gravação em nenhum microfone disponível"
-                }
-            }
-        }
-    }
-
-    private func stopRecording() {
-        state = .processing
-
-        Task {
-            do {
-                // Aguarda engine iniciar completamente antes de parar
-                await recordingTask?.value
-                recordingTask = nil
-
-                let samples = await audioCapture.stop()
-
-                // Se nao ha audio suficiente, volta para idle
-                guard samples.count > 8000 else { // Menos de 0.5s de audio
-                    state = .idle
-                    return
-                }
-
-                // Transcreve o audio
-                let rawText = try await transcriber.transcribe(samples)
-
-                // Aplica vocabulário customizado (substituições alias → term)
-                let text = vocabularyStore?.applyReplacements(to: rawText) ?? rawText
-
-                // Se o texto esta vazio (silencio), volta para idle
-                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    state = .idle
-                    return
-                }
-
-                // Persiste no histórico
-                lastTranscription = text
-                let newID = store?.addRecord(
-                    text: text,
-                    modelName: "Parakeet TDT 0.6B V3",
-                    duration: Double(samples.count) / 16000.0,
-                    targetAppName: TextInserter.previousApp?.localizedName,
-                    samples: samples
-                )
-                lastTranscriptionRecordID = newID
-
-                if accessibilityGranted {
-                    let inserted = textInserter.insert(text)
-                    if !inserted {
-                        textInserter.copyToClipboard(text)
-                        errorMessage = "Falha ao inserir automaticamente. Texto copiado para o clipboard."
-                    }
-                } else {
-                    textInserter.copyToClipboard(text)
-                    errorMessage = "Transcrição copiada para o clipboard. Ative Acessibilidade para colar automaticamente."
-                }
-
-                state = .idle
-
-                // Re-aquece para a próxima gravação ficar no fast path
-                await warmUpAudioCapture()
-            } catch {
-                state = .idle
-                errorMessage = "Erro na transcricao: \(error.localizedDescription)"
-                await warmUpAudioCapture()
-            }
-        }
-    }
-
-    private func resolveMicrophonePermission() {
-        switch microphoneManager.permissionState {
-        case .authorized:
-            startRecording()
-
-        case .notDetermined:
-            guard !isRequestingMicrophonePermission else { return }
-            isRequestingMicrophonePermission = true
-            errorMessage = "Solicitando acesso ao microfone..."
-
-            Task {
-                let granted = await microphoneManager.requestPermissionIfNeeded()
-                isRequestingMicrophonePermission = false
-
-                guard state == .idle else { return }
-
-                if granted {
-                    startRecording()
-                } else {
-                    updateMicrophonePermissionError()
-                }
-            }
-
-        case .denied, .restricted, .unavailable:
-            updateMicrophonePermissionError()
-        }
-    }
-
-    private func updateMicrophonePermissionError() {
-        switch microphoneManager.permissionState {
-        case .unavailable:
-            errorMessage = "O build atual não expõe NSMicrophoneUsageDescription. Rode zspeak como app bundle para liberar o microfone."
-        case .denied, .restricted:
-            errorMessage = "Microfone necessário para gravar. Ative em Ajustes do Sistema → Privacidade → Microfone."
-        case .notDetermined:
-            errorMessage = "Solicitando acesso ao microfone..."
-        case .authorized:
-            errorMessage = nil
-        }
-    }
-
 }
