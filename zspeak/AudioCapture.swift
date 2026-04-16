@@ -47,6 +47,18 @@ final class AtomicInt: @unchecked Sendable {
         os_unfair_lock_unlock(&lock)
     }
 
+    /// Tenta transicionar de 0 → 1 atômico. Retorna `true` se foi quem setou;
+    /// `false` se já estava em 1 (ou qualquer outro valor). Usado como latch
+    /// "rode isso apenas uma vez" no hotpath do tap, evitando enfileirar
+    /// Tasks repetidas no actor a cada buffer (~94 Hz).
+    func setIfZero() -> Bool {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        guard value == 0 else { return false }
+        value = 1
+        return true
+    }
+
     var current: Int {
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
@@ -153,6 +165,10 @@ actor AudioCapture {
     nonisolated(unsafe) private let converter = AudioConverter()
     /// Contador atômico de erros de resample — incrementado no tap.
     private let resampleErrors = AtomicInt()
+    /// Latch atômico usado pelo tap para agendar UMA única `Task` no actor
+    /// quando o primeiro sample chega. Sem isso, o tap (~94 Hz) enfileirava
+    /// uma Task a cada callback durante toda a gravação. Resetado em `start()`.
+    private let firstSampleScheduled = AtomicInt()
     /// Monitor thread-safe de nível de áudio. Compartilhado entre actor (start/stop)
     /// e tap (render thread). Exposto para leitura sincrona via `currentAudioLevel()`.
     nonisolated let audioLevelMonitor = AudioLevelMonitor()
@@ -216,6 +232,7 @@ actor AudioCapture {
         samplesBuffer.clear()
         samplesBuffer.reserveCapacity(Self.expectedMaxCaptureDurationSeconds * Self.targetSampleRate)
         resampleErrors.reset()
+        firstSampleScheduled.reset()
         currentDeviceUID = deviceUID
         audioLevelMonitor.reset()
         startCalledTimestamp = callTime
@@ -352,6 +369,7 @@ actor AudioCapture {
         let levelMonitor = audioLevelMonitor
         let converter = self.converter
         let errors = resampleErrors
+        let firstSampleLatch = firstSampleScheduled
 
         inputNode.installTap(onBus: 0, bufferSize: 512, format: nil) { [weak self] avBuffer, _ in
             let tapTime = CFAbsoluteTimeGetCurrent()
@@ -379,10 +397,13 @@ actor AudioCapture {
                 errors.increment()
             }
 
-            // Hop único para o actor APENAS no primeiro sample — a lógica de
-            // `firstSampleTimestamp` e do callback precisa rodar isolada no actor.
-            // Depois disso, `self?` vira no-op porque o actor checa e retorna cedo.
-            if let self {
+            // Hop único para o actor APENAS no primeiro sample. O latch atômico
+            // garante que só UMA Task seja enfileirada por sessão, mesmo que o
+            // tap rode ~94 vezes/s. Sem esse latch, cada callback criava uma
+            // Task nova que só virava no-op DENTRO do actor — gerando pressão
+            // de scheduler que podia atrasar a invocação de onFirstSample e
+            // deixar o app preso em "Preparando microfone...".
+            if firstSampleLatch.setIfZero(), let self {
                 Task { [weak self] in
                     await self?.markFirstSampleIfNeeded(at: tapTime)
                 }
@@ -460,6 +481,19 @@ actor AudioCapture {
     /// amostras vazias como "áudio curto" e volta para idle.
     private func handleConfigurationChange() {
         guard isRunning else { return }
+
+        // Ignorar mudanças ocorridas durante estabilização do engine (antes do
+        // primeiro sample chegar no tap). Nesse intervalo o HAL ainda está
+        // negociando formato com o device recém-selecionado e dispara
+        // `AVAudioEngineConfigurationChange` como parte do setup normal.
+        // Parar o engine aqui deixa o app preso em "Preparando microfone..."
+        // porque o tap nunca chega a receber o primeiro buffer. Regressão
+        // intermitente introduzida na Onda 1 (reinstalação do observer em
+        // warmUp expôs mais esses callbacks benignos).
+        guard firstSampleTimestamp != nil else {
+            logger.debug("handleConfigurationChange: ignorado (pré-primeiro-sample, HAL estabilizando)")
+            return
+        }
 
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
