@@ -14,8 +14,8 @@ xcuserdata/
 # Swift Package Manager
 .build/
 .swiftpm/
-Package.resolved
 Packages/
+# Package.resolved: commitado para lock de versões no CI (app executável)
 
 # macOS
 .DS_Store
