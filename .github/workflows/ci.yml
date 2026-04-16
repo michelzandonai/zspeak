@@ -1,0 +1,96 @@
+# CI do zspeak — build + testes rapidos em macOS Sonoma (Apple Silicon).
+# Testes lentos (integracao real com Parakeet, baixa ~496MB) sao pulados
+# via ZSPEAK_SKIP_SLOW=1 para manter o PR rapido e barato.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & Test (macos-14 / Apple Silicon)
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      # Pula testes lentos de integracao que baixam modelos do HuggingFace.
+      ZSPEAK_SKIP_SLOW: "1"
+      # Garante que o CI NUNCA regrave baselines de snapshot visual.
+      ZSPEAK_RECORD_SNAPSHOTS: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain info
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Cache SwiftPM build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cache DerivedData
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: dd-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            dd-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Build (debug)
+        run: swift build --configuration debug
+
+      - name: Test (parallel, skipping slow integration)
+        run: swift test --parallel
+
+  lint:
+    name: Lint (swift-format, best-effort)
+    runs-on: macos-14
+    timeout-minutes: 10
+    needs: []
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run swift-format lint if available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v swift-format >/dev/null 2>&1; then
+            echo "swift-format encontrado: $(swift-format --version || true)"
+            # Lint nao-bloqueante em fontes Swift do app e dos testes.
+            swift-format lint --recursive --strict zspeak Tests || {
+              echo "::warning::swift-format lint reportou problemas (nao-bloqueante nesta fase)."
+              exit 0
+            }
+          elif xcrun --find swift-format >/dev/null 2>&1; then
+            FORMAT_BIN="$(xcrun --find swift-format)"
+            echo "swift-format via xcrun: $FORMAT_BIN"
+            "$FORMAT_BIN" lint --recursive --strict zspeak Tests || {
+              echo "::warning::swift-format lint reportou problemas (nao-bloqueante nesta fase)."
+              exit 0
+            }
+          else
+            echo "swift-format nao disponivel no runner; pulando lint."
+          fi
