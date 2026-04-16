@@ -2,7 +2,13 @@ import Foundation
 import Testing
 @testable import zspeak
 
-@Suite("AccessibilityManager")
+@Suite(
+    "AccessibilityManager",
+    .disabled(
+        if: ProcessInfo.processInfo.environment["CI"] != nil,
+        "AXIsProcessTrusted() retorna true no runner GitHub Actions (sudo); invalidam asserções que esperam false."
+    )
+)
 @MainActor
 struct AccessibilityManagerTests {
 

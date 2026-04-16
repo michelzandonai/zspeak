@@ -4,7 +4,13 @@ import Testing
 @testable import zspeak
 
 @MainActor
-@Suite("Visual Snapshots")
+@Suite(
+    "Visual Snapshots",
+    .disabled(
+        if: ProcessInfo.processInfo.environment["CI"] != nil,
+        "Rendering SwiftUI difere entre runner CI e Xcode local (fonts, materials); baselines são locais."
+    )
+)
 struct VisualSnapshotTests {
 
     @Test("Overlay recording permanece estável")
@@ -116,6 +122,81 @@ struct VisualSnapshotTests {
             size: CGSize(width: 720, height: 700)
         )
     }
+
+    // MARK: - Overlay states
+
+    @Test("Overlay preparing permanece estável")
+    func testOverlayPreparingSnapshot() throws {
+        let model = OverlayModel()
+        model.state = .preparing
+        model.focusedAppName = "Cursor"
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "overlay-preparing",
+            of: OverlayView(model: model),
+            size: CGSize(width: 320, height: 88)
+        )
+    }
+
+    @Test("Overlay transcribing permanece estável")
+    func testOverlayTranscribingSnapshot() throws {
+        let model = OverlayModel()
+        model.state = .processing
+        model.focusedAppName = "Cursor"
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "overlay-transcribing",
+            of: OverlayView(model: model),
+            size: CGSize(width: 320, height: 88)
+        )
+    }
+
+    @Test("Overlay idle vazio permanece estável")
+    func testOverlayIdleEmptySnapshot() throws {
+        let model = OverlayModel()
+        model.state = .idle
+        model.focusedAppName = "Cursor"
+        model.promptModeEnabled = false
+        model.lastTranscription = ""
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "overlay-idle-empty",
+            of: OverlayView(model: model),
+            size: CGSize(width: 320, height: 88)
+        )
+    }
+
+    @Test("Overlay prompt mode sem prompts permanece estável")
+    func testOverlayPromptModeNoPromptsSnapshot() throws {
+        // Cenário do bug UX da issue #13: modo prompt ativo mas sem prompts
+        // cadastrados — o seletor deve mostrar "Selecionar prompt" e o botão
+        // Aplicar fica desabilitado.
+        let model = OverlayModel()
+        model.state = .idle
+        model.promptModeEnabled = true
+        model.focusedAppName = "VS Code"
+        model.prompts = []
+        model.selectedPromptID = nil
+        model.lastTranscription = ""
+        model.lastLLMResult = nil
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "overlay-prompt-mode-no-prompts",
+            of: OverlayView(model: model),
+            size: CGSize(width: 440, height: 200)
+        )
+    }
+
+    // MARK: - MenuBar
+    //
+    // Snapshots de `MenuBarView` ficam pra Onda 2: hoje ele depende de
+    // `microphoneManager.permissionState` (global, lido via AVCaptureDevice) e
+    // `accessibilityManager.isGranted` (global, AXIsProcessTrusted). Ambos
+    // variam com o ambiente de execução e tornam o snapshot não-determinístico.
+    // Depois da refatoração do AppState (issue #24) os managers terão injeção
+    // de dependência com estado mockável e esses testes voltam.
+
+    // MARK: - Helpers
 
     private func makeTemporaryDirectory() -> URL {
         let url = FileManager.default.temporaryDirectory

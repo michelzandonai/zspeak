@@ -160,7 +160,14 @@ struct AudioCaptureTests {
 // Sub-suite serializada: testes que tocam o HAL real ou mexem no default input
 // device. Rodar em paralelo causa interferência entre si (engine.start() falha
 // com -10868 porque outro teste trocou o default no meio).
-@Suite("AudioCapture - Hardware real", .serialized)
+@Suite(
+    "AudioCapture - Hardware real",
+    .serialized,
+    .disabled(
+        if: ProcessInfo.processInfo.environment["CI"] != nil,
+        "Requer microfone físico e HAL real; runner CI não tem device de entrada."
+    )
+)
 struct AudioCaptureHardwareTests {
 
     // MARK: - Regressão: engine.start() falha com -10868 após setInputDevice (#mic-priority-fallback)

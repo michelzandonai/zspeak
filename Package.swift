@@ -27,7 +27,7 @@ let package = Package(
             name: "zspeakTests",
             dependencies: ["zspeak"],
             path: "Tests",
-            exclude: ["__Snapshots__"]
+            exclude: ["__Snapshots__", "Fixtures", "README.md"]
         ),
     ]
 )
