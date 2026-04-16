@@ -1,6 +1,18 @@
 # CI do zspeak — build + testes rapidos em macOS Sonoma (Apple Silicon).
-# Testes lentos (integracao real com Parakeet, baixa ~496MB) sao pulados
-# via ZSPEAK_SKIP_SLOW=1 para manter o PR rapido e barato.
+#
+# Escopo do CI: compilacao + testes de logica pura (stores, state machine,
+# vocabulario, transcription records, benchmark metrics, LLM inference).
+#
+# Testes pulados no CI (precisam ambiente local):
+#   - Integracao real com Parakeet (baixa modelo ~496MB) -> ZSPEAK_SKIP_SLOW=1
+#   - Snapshots visuais -> rendering difere sutilmente entre Xcode local vs CI
+#     (baselines sao geradas em Xcode 26.4; CI hoje roda 26.3)
+#   - Accessibility/Hotkey/TextInserter -> AXIsProcessTrusted() no runner CI
+#     retorna true porque roda como sudo, invalidando os testes que assumem
+#     ambiente sem permissao AX
+#   - AudioCapture - Hardware real -> requer HAL fisico
+#
+# Esses testes devem ser rodados localmente antes de abrir PR (ver Tests/README.md).
 name: CI
 
 on:
@@ -66,8 +78,15 @@ jobs:
       - name: Build (debug)
         run: swift build --configuration debug
 
-      - name: Test (parallel, skipping slow integration)
-        run: swift test --parallel
+      - name: Test (parallel, skipping env-dependent suites)
+        run: |
+          swift test --parallel \
+            --skip "Visual Snapshots" \
+            --skip "AccessibilityManager" \
+            --skip "HotkeyManager" \
+            --skip "TextInserter" \
+            --skip "AudioCapture - Hardware real" \
+            --skip "Transcriber Integration"
 
   lint:
     name: Lint (swift-format, best-effort)
