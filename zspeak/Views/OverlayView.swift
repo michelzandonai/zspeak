@@ -458,21 +458,55 @@ struct LLMResultView: View {
     }
 }
 
-/// Campo de texto editável dentro do overlay no Modo Prompt (TASK-013).
-/// Aceita digitação e paste; ao detectar paste (mudança brusca > 20 chars), dispara
-/// automaticamente o LLM via `model.onTextInputApply`. Limpa o campo após disparar
-/// para indicar que o texto foi consumido.
+/// Campo de texto editável dentro do overlay no Modo Prompt (issue #13, #27).
+///
+/// UX explícita: o usuário digita ou cola texto e confirma com o botão "Aplicar
+/// prompt". A heurística antiga de detectar paste via `delta > 20 chars` era
+/// frágil — disparava em IME/autocomplete e perdia paste curto. Agora a decisão
+/// de aplicar é sempre do usuário.
+///
+/// Empty state: quando não há prompt selecionado, o campo é substituído por uma
+/// mensagem instrutiva com CTA para abrir a aba de prompts em Settings.
 struct TextInputBlock: View {
     let model: OverlayModel
     @State private var text: String = ""
+    @FocusState private var isFocused: Bool
+    @Environment(\.openSettings) private var openSettings
+
+    /// Botão só habilita quando: (1) existe prompt selecionado, (2) campo não
+    /// está vazio após trim, (3) LLM não está ocupado. Evita disparos espúrios.
+    private var canApply: Bool {
+        guard model.selectedPrompt != nil, !model.isApplyingPrompt else { return false }
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if model.selectedPrompt == nil && model.prompts.isEmpty {
+                // Empty state: nenhum prompt cadastrado ainda
+                emptyState(
+                    message: "Nenhum prompt cadastrado. Crie um para começar.",
+                    buttonTitle: "Abrir configurações de prompts"
+                )
+            } else if model.selectedPrompt == nil {
+                // Empty state: há prompts, mas nenhum selecionado
+                emptyState(
+                    message: "Selecione um prompt na lista abaixo para aplicar.",
+                    buttonTitle: "Abrir configurações de prompts"
+                )
+            } else {
+                inputField
+                applyButton
+            }
+        }
+    }
+
+    /// Campo de entrada — TextField com placeholder manual (o nativo fica
+    /// invisível em fundo escuro).
+    private var inputField: some View {
         ZStack(alignment: .topLeading) {
-            // Placeholder manual — TextField padrão tem placeholder com cor de sistema
-            // que fica invisível em fundo escuro. Subimos a opacidade p/ 0.6 pra
-            // ficar acima do limite WCAG AA em dark.
             if text.isEmpty {
-                Text("Cole um texto aqui para o LLM processar...")
+                Text("Cole ou digite um texto para o prompt processar...")
                     .font(.body)
                     .foregroundStyle(.white.opacity(0.6))
                     .padding(.horizontal, 4)
@@ -487,23 +521,105 @@ struct TextInputBlock: View {
                 .font(.body)
                 .foregroundStyle(.white.opacity(0.95))
                 .tint(.white.opacity(0.85))
-                .accessibilityLabel("Campo de entrada do prompt")
-                .accessibilityHint("Cole ou digite um texto para o LLM processar")
-                .onChange(of: text) { oldValue, newValue in
-                    // Heurística: aumento brusco (> 20 chars) é provável paste.
-                    // Digitação humana raramente adiciona mais de ~5 chars por evento.
-                    let delta = newValue.count - oldValue.count
-                    if delta > 20 {
-                        let pasted = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !pasted.isEmpty {
-                            model.onTextInputApply?(pasted)
-                            // Limpa o campo após consumir — feedback visual de "processado"
-                            text = ""
-                        }
-                    }
+                .focused($isFocused)
+                .onSubmit {
+                    if canApply { apply() }
                 }
+                .accessibilityLabel("Campo de entrada do prompt")
+                .accessibilityHint("Digite ou cole um texto e confirme com o botão Aplicar prompt")
         }
         .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.white.opacity(isFocused ? 0.35 : 0.2), lineWidth: 0.5)
+        )
+    }
+
+    /// Botão explícito — substitui a heurística de detecção automática de paste.
+    private var applyButton: some View {
+        HStack {
+            Spacer()
+            Button(action: apply) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.caption.weight(.semibold))
+                    Text("Aplicar prompt")
+                        .font(.body.weight(.semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(canApply ? Color.accentColor.opacity(0.85) : Color.white.opacity(0.12))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!canApply)
+            .help(canApply ? "Aplica o prompt selecionado ao texto" : "Digite um texto e selecione um prompt")
+            .accessibilityLabel("Aplicar prompt ao texto do campo")
+            .accessibilityHint(
+                canApply
+                    ? "Envia o texto para o prompt \(model.selectedPrompt?.name ?? "selecionado")"
+                    : "Desabilitado: campo vazio ou nenhum prompt selecionado"
+            )
+        }
+    }
+
+    private func apply() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        model.onTextInputApply?(trimmed)
+        text = ""
+    }
+
+    /// Bloco de empty state com mensagem + CTA para abrir Settings na aba de prompts.
+    /// Usa `openSettings()` do macOS 14+ — a aba específica não é selecionável
+    /// via API pública, mas o usuário já abre a janela certa e navega.
+    private func emptyState(message: String, buttonTitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "lightbulb")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .accessibilityHidden(true)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button {
+                openSettings()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "gear")
+                        .font(.caption2)
+                    Text(buttonTitle)
+                        .font(.caption.weight(.medium))
+                }
+                .foregroundStyle(.white.opacity(0.9))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(.white.opacity(0.1))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(.white.opacity(0.25), lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(buttonTitle)
+            .accessibilityHint("Abre a janela de configurações para gerenciar prompts")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(.white.opacity(0.05))

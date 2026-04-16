@@ -8,10 +8,15 @@ final class CorrectionPromptStore {
 
     private let promptsFile: URL
 
+    /// Fila serial dedicada a encode + I/O. Fora da main thread.
+    @ObservationIgnored
+    private let persistQueue: DispatchQueue
+
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let appDir = base.appendingPathComponent("zspeak", isDirectory: true)
         promptsFile = appDir.appendingPathComponent("correction-prompts.json")
+        persistQueue = StorePersistQueue.shared(forFileAt: promptsFile)
         try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
         prompts = loadPrompts()
 
@@ -34,6 +39,7 @@ final class CorrectionPromptStore {
     /// Inicializador com DI para testes
     init(baseDirectory: URL) {
         promptsFile = baseDirectory.appendingPathComponent("correction-prompts.json")
+        persistQueue = StorePersistQueue.shared(forFileAt: promptsFile)
         try? FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         prompts = loadPrompts()
 
@@ -87,28 +93,72 @@ final class CorrectionPromptStore {
 
     // MARK: - Persistência JSON
 
-    private func saveJSON() {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = .prettyPrinted
+    /// Envelope versionado: `{ schemaVersion: 1, prompts: [...] }`.
+    fileprivate struct Envelope: Codable {
+        let schemaVersion: Int
+        let prompts: [CorrectionPrompt]
+    }
 
-        guard let data = try? encoder.encode(prompts) else { return }
-        try? data.write(to: promptsFile, options: .atomic)
+    /// Captura snapshot no main e enfileira encode+write no background.
+    private func saveJSON() {
+        let snapshot = prompts
+        let file = promptsFile
+        persistQueue.async {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+
+            let envelope = Envelope(
+                schemaVersion: CorrectionPromptStoreSchema.currentVersion,
+                prompts: snapshot
+            )
+
+            guard let data = try? encoder.encode(envelope) else { return }
+            try? data.write(to: file, options: .atomic)
+        }
     }
 
     private func loadPrompts() -> [CorrectionPrompt] {
-        guard FileManager.default.fileExists(atPath: promptsFile.path),
-              let data = try? Data(contentsOf: promptsFile) else {
+        // Drena writes pendentes antes de reler.
+        persistQueue.sync { }
+
+        guard FileManager.default.fileExists(atPath: promptsFile.path) else {
+            return []
+        }
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: promptsFile)
+        } catch {
+            StoreLog.shared.log("CorrectionPromptStore: falha ao ler \(promptsFile.lastPathComponent): \(error)")
             return []
         }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        guard let loaded = try? decoder.decode([CorrectionPrompt].self, from: data) else {
+        if let envelope = try? decoder.decode(Envelope.self, from: data) {
+            if envelope.schemaVersion == CorrectionPromptStoreSchema.currentVersion {
+                return envelope.prompts
+            }
+            StoreLog.shared.log("CorrectionPromptStore: schemaVersion desconhecida \(envelope.schemaVersion); fazendo backup e começando vazio")
+            StoreLog.shared.backup(fileURL: promptsFile)
             return []
         }
 
-        return loaded
+        if let legacy = try? decoder.decode([CorrectionPrompt].self, from: data) {
+            return legacy
+        }
+
+        StoreLog.shared.log("CorrectionPromptStore: JSON malformado em \(promptsFile.lastPathComponent); fazendo backup")
+        StoreLog.shared.backup(fileURL: promptsFile)
+        return []
     }
+}
+
+// MARK: - Constants / schema
+
+/// Versão corrente do schema persistido de `CorrectionPromptStore`.
+enum CorrectionPromptStoreSchema {
+    static let currentVersion = 1
 }
