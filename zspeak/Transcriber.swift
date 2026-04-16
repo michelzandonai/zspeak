@@ -36,11 +36,14 @@ actor Transcriber {
         return result.text
     }
 
-    /// Configura vocabulário customizado com context biasing nativo
-    /// TASK-001: API configureVocabularyBoosting/disableVocabularyBoosting foi removida do
-    /// AsrManager na versão atual do FluidAudio (migrou para SlidingWindowAsrManager).
-    /// Mantido como no-op — o fallback atual é pós-processamento em Swift via
-    /// `VocabularyStore.applyReplacements(to:)`, aplicado no pipeline do AppState.
+    /// Configura vocabulário customizado com context biasing nativo.
+    ///
+    /// TASK-001: a API `configureVocabularyBoosting` foi removida do `AsrManager` na v0.12+
+    /// do FluidAudio (migrou para `SlidingWindowAsrManager`). Este método é mantido como
+    /// no-op silencioso para não quebrar callers existentes enquanto a migração não ocorre.
+    /// O fallback real é pós-processamento em Swift via `VocabularyStore.applyReplacements(to:)`,
+    /// aplicado no pipeline do `AppState` após a transcrição.
+    @available(*, deprecated, message: "API removida na v0.12+ do FluidAudio; use VocabularyStore.applyReplacements")
     func configureVocabulary(_ context: CustomVocabularyContext) async throws {
         guard asrManager != nil else {
             throw TranscriberError.notInitialized
@@ -49,7 +52,8 @@ actor Transcriber {
         _ = context
     }
 
-    /// Desativa vocabulário customizado — no-op (ver TASK-001)
+    /// Desativa vocabulário customizado — no-op (ver TASK-001).
+    @available(*, deprecated, message: "API removida na v0.12+ do FluidAudio; use VocabularyStore.applyReplacements")
     func disableVocabulary() async {
         // No-op
     }

@@ -83,6 +83,20 @@ struct OverlayView: View {
 
     private var state: AppState.RecordingState { model.state }
 
+    /// Descrição do estado atual para leitores de tela (VoiceOver).
+    private var stateAccessibilityLabel: String {
+        switch state {
+        case .idle:
+            return "Ocioso"
+        case .preparing:
+            return "Preparando microfone"
+        case .recording:
+            return "Gravando áudio"
+        case .processing:
+            return "Processando transcrição"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 8) {
             // Linha superior: app em foco + branding (estilo Spokenly)
@@ -92,21 +106,25 @@ struct OverlayView: View {
                         .resizable()
                         .frame(width: 20, height: 20)
                         .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .accessibilityHidden(true)
                 }
 
                 Text(model.focusedAppName)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.8))
+                    .font(.system(.body, design: .default).weight(.medium))
+                    .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(1)
+                    .accessibilityLabel("App em foco: \(model.focusedAppName)")
 
                 Spacer()
 
                 Image(systemName: "waveform")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .accessibilityHidden(true)
                 Text("zspeak")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .accessibilityHidden(true)
             }
 
             // Bloco central por estado
@@ -117,46 +135,59 @@ struct OverlayView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(.white.opacity(0.6))
+                        .tint(.white.opacity(0.7))
+                        .accessibilityHidden(true)
                     Text("Preparando microfone...")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.75))
                 }
                 .frame(height: 20)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Preparando microfone")
             } else if state == .recording {
                 WaveformView(model: model)
                     .frame(height: 20)
+                    .accessibilityLabel("Forma de onda do áudio capturado")
 
                 // Nome do mic ativo durante gravação — reativo via MicrophoneManager.
                 // Tipografia pequena e secundária para não competir com a waveform.
                 // Trunca no meio se o nome do device for muito longo.
+                // Dynamic Type limitado a xLarge: em tamanhos a11y, o nome do mic
+                // cresceria demais e quebraria o layout lateral do overlay.
                 let micName = model.effectiveMicrophoneName
                 if !micName.isEmpty {
                     HStack(spacing: 4) {
                         Image(systemName: "mic.fill")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.white.opacity(0.35))
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .accessibilityHidden(true)
                         Text(micName)
-                            .font(.system(size: 9))
-                            .foregroundStyle(.white.opacity(0.35))
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.7))
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
+                    .dynamicTypeSize(...DynamicTypeSize.xLarge)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Microfone ativo: \(micName)")
                 }
             } else if state == .processing {
                 ProgressView()
                     .controlSize(.small)
-                    .tint(.white.opacity(0.6))
+                    .tint(.white.opacity(0.7))
                     .frame(height: 20)
+                    .accessibilityLabel("Processando transcrição")
             } else if model.promptModeEnabled {
                 if !model.lastTranscription.isEmpty {
                     // Mostra a transcrição captada para o usuário revisar antes de aplicar LLM
                     ScrollView {
                         Text(model.lastTranscription)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.9))
+                            .font(.body)
+                            .foregroundStyle(.white.opacity(0.95))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
+                            .accessibilityLabel("Última transcrição")
+                            .accessibilityValue(model.lastTranscription)
                     }
                     .frame(maxHeight: 100)
                     .padding(8)
@@ -166,7 +197,7 @@ struct OverlayView: View {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
-                            .stroke(.white.opacity(0.1), lineWidth: 0.5)
+                            .stroke(.white.opacity(0.2), lineWidth: 0.5)
                     )
                 } else {
                     // TextField editável — usuário pode colar texto para o LLM (TASK-013)
@@ -177,14 +208,14 @@ struct OverlayView: View {
             // Seção inferior: seletor de prompt + botão aplicar (Modo Prompt)
             if model.promptModeEnabled {
                 Divider()
-                    .background(.white.opacity(0.1))
+                    .background(.white.opacity(0.25))
 
                 PromptSelectorBar(model: model)
 
                 // Resultado da última correção LLM (toggleável)
                 if model.lastLLMResult != nil {
                     Divider()
-                        .background(.white.opacity(0.1))
+                        .background(.white.opacity(0.25))
 
                     LLMResultView(model: model)
                 }
@@ -198,9 +229,15 @@ struct OverlayView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(.white.opacity(0.08), lineWidth: 1)
+                .stroke(.white.opacity(0.18), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
+        // VoiceOver: anuncia o estado corrente do overlay como valor do container.
+        // O label de cada bloco interno (preparing/recording/processing) também
+        // é exposto, mas esse valor global ajuda a orientar quem entra no overlay.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Overlay do zspeak")
+        .accessibilityValue(stateAccessibilityLabel)
     }
 }
 
@@ -213,14 +250,18 @@ struct PromptSelectorBar: View {
             if model.isApplyingPrompt {
                 ProgressView()
                     .controlSize(.small)
-                    .tint(.white.opacity(0.7))
+                    .tint(.white.opacity(0.8))
+                    .accessibilityHidden(true)
                 Text("Aplicando \(model.selectedPrompt?.name ?? "")...")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(1)
+                    .accessibilityLabel("Aplicando prompt \(model.selectedPrompt?.name ?? "selecionado")")
                 Spacer()
             } else {
-                // Dropdown de prompts — Menu com label custom (chevron no lugar certo)
+                // Dropdown de prompts — Menu com label custom (chevron no lugar certo).
+                // Dynamic Type limitado a xLarge para manter o dropdown dentro da
+                // largura do overlay em tamanhos de acessibilidade.
                 Menu {
                     ForEach(model.prompts) { prompt in
                         Button {
@@ -236,12 +277,13 @@ struct PromptSelectorBar: View {
                 } label: {
                     HStack(spacing: 6) {
                         Text(model.selectedPrompt?.name ?? "Selecionar prompt")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.9))
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.95))
                             .lineLimit(1)
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .accessibilityHidden(true)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
@@ -251,21 +293,24 @@ struct PromptSelectorBar: View {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
-                            .stroke(.white.opacity(0.15), lineWidth: 0.5)
+                            .stroke(.white.opacity(0.25), lineWidth: 0.5)
                     )
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .dynamicTypeSize(...DynamicTypeSize.xLarge)
+                .accessibilityLabel("Prompt selecionado: \(model.selectedPrompt?.name ?? "nenhum")")
+                .accessibilityHint("Abre a lista de prompts disponíveis")
 
                 // Botão "colar do clipboard" — usa texto do clipboard como input do LLM (TASK-012)
                 Button {
                     model.onPasteAndApply?()
                 } label: {
                     Image(systemName: "doc.on.clipboard")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.85))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 6)
                         .background(
@@ -274,12 +319,14 @@ struct PromptSelectorBar: View {
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
-                                .stroke(.white.opacity(0.15), lineWidth: 0.5)
+                                .stroke(.white.opacity(0.25), lineWidth: 0.5)
                         )
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Aplicar prompt no texto do clipboard")
+                .accessibilityLabel("Colar e aplicar prompt no clipboard")
+                .accessibilityHint("Usa o texto atual do clipboard como entrada do prompt")
 
                 Spacer()
 
@@ -290,17 +337,19 @@ struct PromptSelectorBar: View {
                     }
                 } label: {
                     Text("Aplicar")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 6)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(Color.accentColor.opacity(0.8))
+                                .fill(Color.accentColor.opacity(0.85))
                         )
                 }
                 .buttonStyle(.plain)
                 .disabled(model.selectedPrompt == nil)
+                .accessibilityLabel("Aplicar prompt")
+                .accessibilityHint(model.selectedPrompt.map { "Aplica o prompt \($0.name)" } ?? "Nenhum prompt selecionado")
             }
         }
         .frame(maxWidth: .infinity)
@@ -311,6 +360,10 @@ struct PromptSelectorBar: View {
 struct LLMResultView: View {
     let model: OverlayModel
 
+    /// Respeita "Reduce Motion" do sistema — quando ativo, o toggle expand/collapse
+    /// acontece sem animação (instantâneo) para evitar movimento desnecessário.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             // Header com toggle expand/collapse + nome do prompt + botão copiar
@@ -319,26 +372,29 @@ struct LLMResultView: View {
                     // Spinner enquanto LLM gera (TASK-011) — feedback visual de streaming ao vivo
                     ProgressView()
                         .controlSize(.mini)
-                        .tint(.white.opacity(0.5))
+                        .tint(.white.opacity(0.7))
                         .frame(width: 12)
+                        .accessibilityHidden(true)
                 } else {
                     Image(systemName: model.isResultExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.7))
                         .frame(width: 12)
+                        .accessibilityHidden(true)
                 }
 
                 Text("Resultado")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.85))
 
                 if let name = model.lastLLMPromptName {
                     Text("·")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.3))
-                    Text(name)
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundStyle(.white.opacity(0.5))
+                        .accessibilityHidden(true)
+                    Text(name)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.75))
                         .lineLimit(1)
                 }
 
@@ -352,28 +408,40 @@ struct LLMResultView: View {
                         }
                     } label: {
                         Image(systemName: "doc.on.doc")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.75))
                     }
                     .buttonStyle(.plain)
                     .help("Copiar resultado")
+                    .accessibilityLabel("Copiar resultado")
+                    .accessibilityHint("Copia o texto gerado pelo prompt para o clipboard")
                 }
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.15)) {
+                // Reduce Motion: troca sem animação. Caso contrário, easeInOut curto.
+                if reduceMotion {
                     model.isResultExpanded.toggle()
+                } else {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        model.isResultExpanded.toggle()
+                    }
                 }
             }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(model.isResultExpanded ? "Colapsar resultado" : "Expandir resultado")
+            .accessibilityHint(model.isResultExpanded ? "Esconde o texto gerado pelo prompt" : "Mostra o texto gerado pelo prompt")
 
             // Conteúdo expandido
             if model.isResultExpanded, let text = model.lastLLMResult {
                 ScrollView {
                     Text(text)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.95))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
+                        .accessibilityLabel("Texto gerado pelo prompt")
+                        .accessibilityValue(text)
                 }
                 .frame(maxHeight: 120)
                 .padding(8)
@@ -383,7 +451,7 @@ struct LLMResultView: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
-                        .stroke(.white.opacity(0.1), lineWidth: 0.5)
+                        .stroke(.white.opacity(0.2), lineWidth: 0.5)
                 )
             }
         }
@@ -401,22 +469,26 @@ struct TextInputBlock: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             // Placeholder manual — TextField padrão tem placeholder com cor de sistema
-            // que fica invisível em fundo escuro
+            // que fica invisível em fundo escuro. Subimos a opacidade p/ 0.6 pra
+            // ficar acima do limite WCAG AA em dark.
             if text.isEmpty {
                 Text("Cole um texto aqui para o LLM processar...")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.35))
+                    .font(.body)
+                    .foregroundStyle(.white.opacity(0.6))
                     .padding(.horizontal, 4)
                     .padding(.vertical, 2)
                     .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
 
             TextField("", text: $text, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
-                .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.9))
-                .tint(.white.opacity(0.7))
+                .font(.body)
+                .foregroundStyle(.white.opacity(0.95))
+                .tint(.white.opacity(0.85))
+                .accessibilityLabel("Campo de entrada do prompt")
+                .accessibilityHint("Cole ou digite um texto para o LLM processar")
                 .onChange(of: text) { oldValue, newValue in
                     // Heurística: aumento brusco (> 20 chars) é provável paste.
                     // Digitação humana raramente adiciona mais de ~5 chars por evento.
@@ -438,12 +510,28 @@ struct TextInputBlock: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(.white.opacity(0.1), lineWidth: 0.5)
+                .stroke(.white.opacity(0.2), lineWidth: 0.5)
         )
     }
 }
 
-/// Waveform estilo Spokenly — barras que rolam da direita pra esquerda como áudio gravando
+/// Waveform estilo Spokenly — barras que rolam da direita pra esquerda como áudio gravando.
+///
+/// Pipeline anterior (removido): `Timer.scheduledTimer(0.033)` por WaveformView +
+/// `Task { @MainActor }` em cada tick + `.animation(value: barHeight(for:))`
+/// reavaliando a função a cada frame, acoplado a um tap em 94 Hz que também
+/// enfileirava `Task { @MainActor }` por callback. Três caminhos concorrentes
+/// passando o mesmo `Float`.
+///
+/// Agora: `TimelineView(.periodic)` acoplada ao compositor (CoreAnimation), não
+/// ao MainActor. O SwiftUI agenda 30 ticks/s sem criar `Task` unstructured. O
+/// valor é puxado do closure `model.getAudioLevel` (read sync sob `os_unfair_lock`
+/// no `AudioLevelMonitor`) via `.task(id:)` do context date, e a altura é
+/// calculada a partir do `history` local.
+///
+/// A animação foi movida para dentro de `withAnimation` quando atualizamos o
+/// histórico — não fica mais em `.animation(value:)` reavaliando `barHeight(for:)`
+/// a cada render.
 struct WaveformView: View {
     let model: OverlayModel
 
@@ -452,41 +540,40 @@ struct WaveformView: View {
     private let barSpacing: CGFloat = 2.5
     private let minHeight: CGFloat = 3
     private let maxHeight: CGFloat = 24
+    /// Período de amostragem — 0.033 s ≈ 30 fps, mesma cadência do timer anterior.
+    private let samplePeriod: TimeInterval = 0.033
 
-    @State private var history: [Float] = []
+    @State private var history: [Float] = Array(repeating: 0, count: 30)
     @State private var smoothedLevel: Float = 0
-    @State private var timer: Timer?
 
     /// Fator de suavização EMA — 0.8 = 80% valor novo, 20% histórico
     private let smoothingFactor: Float = 0.8
 
     var body: some View {
-        HStack(spacing: barSpacing) {
-            ForEach(0..<barCount, id: \.self) { index in
-                RoundedRectangle(cornerRadius: barWidth / 2)
-                    .fill(.white.opacity(barOpacity(for: index)))
-                    .frame(width: barWidth, height: barHeight(for: index))
-                    .animation(.spring(duration: 0.08, bounce: 0.1), value: barHeight(for: index))
+        TimelineView(.periodic(from: .now, by: samplePeriod)) { context in
+            HStack(spacing: barSpacing) {
+                ForEach(0..<barCount, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: barWidth / 2)
+                        .fill(.white.opacity(barOpacity(for: index)))
+                        .frame(width: barWidth, height: barHeight(for: index))
+                }
             }
-        }
-        .onAppear {
-            history = Array(repeating: 0, count: barCount)
-            timer = Timer.scheduledTimer(withTimeInterval: 0.033, repeats: true) { [weak model] _ in
-                Task { @MainActor in
-                    guard let model else { return }
-                    let level = await model.getAudioLevel?() ?? 0
-                    let amplified = min(level * 2.5, 1.0)
-                    smoothedLevel = smoothingFactor * amplified + (1 - smoothingFactor) * smoothedLevel
-                    history.append(smoothedLevel)
+            // `.task(id: context.date)` re-executa a cada tick do TimelineView.
+            // Lê o nível via closure async (read sync no AudioLevelMonitor),
+            // atualiza histórico dentro de `withAnimation` para a transição de
+            // altura ser fluida sem `.animation(value:)` reavaliando per-frame.
+            .task(id: context.date) {
+                let level = await model.getAudioLevel?() ?? 0
+                let amplified = min(level * 2.5, 1.0)
+                let newSmoothed = smoothingFactor * amplified + (1 - smoothingFactor) * smoothedLevel
+                withAnimation(.spring(duration: 0.08, bounce: 0.1)) {
+                    smoothedLevel = newSmoothed
+                    history.append(newSmoothed)
                     if history.count > barCount {
                         history.removeFirst(history.count - barCount)
                     }
                 }
             }
-        }
-        .onDisappear {
-            timer?.invalidate()
-            timer = nil
         }
     }
 
