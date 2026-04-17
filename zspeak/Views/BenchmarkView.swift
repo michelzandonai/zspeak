@@ -17,6 +17,55 @@ struct BenchmarkView: View {
     /// Cache de arquivos de áudio existentes — computado uma vez por render, evita `fileExists` por linha.
     @State private var availableAudioFiles: Set<String> = []
 
+    // MARK: - Estado de execução em lote
+    @State private var runAllTask: Task<Void, Never>?
+    @State private var runAllProgress: Double = 0
+    @State private var runAllCurrent: Int = 0
+    @State private var runAllTotal: Int = 0
+
+    // MARK: - Erros por fixture
+    @State private var errorsById: [UUID: String] = [:]
+
+    // MARK: - Filtros
+    @State private var showOnlyHighError = false
+
+    /// Fixtures visíveis após aplicar filtro de alto erro (> 10% WER).
+    private var visibleFixtures: [(offset: Int, element: BenchmarkFixture)] {
+        let all = Array(store.fixtures.enumerated())
+        guard showOnlyHighError else { return all.map { ($0.offset, $0.element) } }
+        return all
+            .filter { _, fixture in
+                guard let result = fixture.lastResult else { return false }
+                let errorRate = result.wordErrorRate ?? (1 - result.accuracyScore)
+                return errorRate > 0.1
+            }
+            .map { ($0.offset, $0.element) }
+    }
+
+    /// Métricas agregadas sobre fixtures com `lastResult` não-nil.
+    private var aggregateMetrics: AggregateMetrics? {
+        let evaluated = store.fixtures.compactMap { $0.lastResult }
+        guard !evaluated.isEmpty else { return nil }
+
+        let avgAcc = evaluated.map(\.accuracyScore).reduce(0, +) / Double(evaluated.count)
+
+        let wers = evaluated.compactMap(\.wordErrorRate)
+        let avgWer = wers.isEmpty ? nil : wers.reduce(0, +) / Double(wers.count)
+
+        let cers = evaluated.compactMap(\.characterErrorRate)
+        let avgCer = cers.isEmpty ? nil : cers.reduce(0, +) / Double(cers.count)
+
+        let avgLatency = evaluated.map(\.latency).reduce(0, +) / Double(evaluated.count)
+
+        return AggregateMetrics(
+            count: evaluated.count,
+            averageAccuracy: avgAcc,
+            averageWER: avgWer,
+            averageCER: avgCer,
+            averageLatency: avgLatency
+        )
+    }
+
     var body: some View {
         Form {
             if isLoadingFixtures {
@@ -26,15 +75,63 @@ struct BenchmarkView: View {
                     ProgressView()
                 }
             } else if store.fixtures.isEmpty {
-                ContentUnavailableView(
-                    "Nenhuma fixture",
-                    systemImage: "gauge.with.needle",
-                    description: Text("Importe WAVs ou use transcrições do histórico para criar fixtures de benchmark.")
-                )
+                ContentUnavailableView {
+                    Label("Nenhuma fixture", systemImage: "gauge.with.needle")
+                } description: {
+                    Text("Importe WAVs ou use transcrições do histórico para criar fixtures de benchmark.")
+                } actions: {
+                    Menu {
+                        Button {
+                            importWAV()
+                        } label: {
+                            Label("Importar WAV…", systemImage: "square.and.arrow.down")
+                        }
+                        Button {
+                            store.importFromHistory(historyStore: historyStore)
+                        } label: {
+                            Label("Importar do Histórico", systemImage: "clock.arrow.circlepath")
+                        }
+                    } label: {
+                        Label("Adicionar fixture", systemImage: "plus.circle.fill")
+                    }
+                    .menuStyle(.borderedButton)
+                    .controlSize(.large)
+                }
             } else {
-                ForEach(Array(store.fixtures.enumerated()), id: \.element.id) { index, fixture in
+                // Card agregado no topo — só aparece se há resultados
+                if let metrics = aggregateMetrics {
                     Section {
-                        fixtureRow(fixture, index: index)
+                        aggregateCard(metrics)
+                    }
+                }
+
+                // Progresso global quando rodando "Transcrever Todos"
+                if isRunning && runAllTotal > 0 {
+                    Section {
+                        runAllProgressView
+                    }
+                }
+
+                // Filtro
+                if aggregateMetrics != nil {
+                    Section {
+                        Toggle("Mostrar só fixtures com erro > 10%", isOn: $showOnlyHighError)
+                    }
+                }
+
+                if visibleFixtures.isEmpty {
+                    Section {
+                        ContentUnavailableView(
+                            "Nenhuma fixture com erro alto",
+                            systemImage: "checkmark.seal.fill",
+                            description: Text("Todas as fixtures avaliadas têm WER ≤ 10%.")
+                        )
+                    }
+                } else {
+                    ForEach(visibleFixtures, id: \.element.id) { index, fixture in
+                        Section {
+                            fixtureRow(fixture, index: index)
+                        }
                     }
                 }
             }
@@ -49,29 +146,45 @@ struct BenchmarkView: View {
         .onChange(of: store.fixtures.count) {
             availableAudioFiles = store.availableAudioFileNames()
         }
-        .onDisappear { stopAudio() }
+        .onDisappear {
+            stopAudio()
+            runAllTask?.cancel()
+        }
         .toolbar {
             ToolbarItemGroup {
-                Button {
-                    importWAV()
+                // Ações secundárias agrupadas em Menu "+ Adicionar"
+                Menu {
+                    Button {
+                        importWAV()
+                    } label: {
+                        Label("Importar WAV…", systemImage: "square.and.arrow.down")
+                    }
+                    Button {
+                        store.importFromHistory(historyStore: historyStore)
+                    } label: {
+                        Label("Importar do Histórico", systemImage: "clock.arrow.circlepath")
+                    }
                 } label: {
-                    Label("Importar WAV", systemImage: "square.and.arrow.down")
+                    Label("Adicionar", systemImage: "plus")
                 }
                 .disabled(isRunning)
 
+                // Ação primária isolada: Transcrever Todos / Parar
                 Button {
-                    store.importFromHistory(historyStore: historyStore)
+                    if isRunning {
+                        runAllTask?.cancel()
+                    } else {
+                        runAll()
+                    }
                 } label: {
-                    Label("Importar do Histórico", systemImage: "clock.arrow.circlepath")
+                    if isRunning {
+                        Label("Parar", systemImage: "stop.fill")
+                    } else {
+                        Label("Transcrever Todos", systemImage: "play.fill")
+                    }
                 }
-                .disabled(isRunning)
-
-                Button {
-                    runAll()
-                } label: {
-                    Label("Transcrever Todos", systemImage: "play.fill")
-                }
-                .disabled(isRunning || store.fixtures.isEmpty)
+                .keyboardShortcut(isRunning ? .cancelAction : .defaultAction)
+                .disabled(!isRunning && store.fixtures.isEmpty)
             }
         }
         .alert("Apagar fixture?", isPresented: .init(
@@ -82,11 +195,104 @@ struct BenchmarkView: View {
             Button("Apagar", role: .destructive) {
                 if let fixture = fixtureToDelete {
                     store.deleteFixture(fixture)
+                    errorsById.removeValue(forKey: fixture.id)
                     fixtureToDelete = nil
                 }
             }
         } message: {
             Text("Esta ação não pode ser desfeita.")
+        }
+    }
+
+    // MARK: - Card agregado
+
+    private struct AggregateMetrics {
+        let count: Int
+        let averageAccuracy: Double
+        let averageWER: Double?
+        let averageCER: Double?
+        let averageLatency: TimeInterval
+    }
+
+    @ViewBuilder
+    private func aggregateCard(_ metrics: AggregateMetrics) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Resumo agregado", systemImage: "chart.bar.doc.horizontal")
+                    .font(.headline)
+                Spacer()
+                Text("\(metrics.count) \(metrics.count == 1 ? "fixture avaliada" : "fixtures avaliadas")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 16) {
+                metricCard(
+                    title: "Acurácia média",
+                    value: String(format: "%.0f%%", metrics.averageAccuracy * 100),
+                    icon: "checkmark.seal.fill",
+                    color: accuracyColor(metrics.averageAccuracy)
+                )
+
+                if let wer = metrics.averageWER {
+                    metricCard(
+                        title: "WER médio",
+                        value: String(format: "%.1f%%", wer * 100),
+                        icon: "textformat.abc",
+                        color: errorRateColor(wer)
+                    )
+                }
+
+                if let cer = metrics.averageCER {
+                    metricCard(
+                        title: "CER médio",
+                        value: String(format: "%.1f%%", cer * 100),
+                        icon: "character.cursor.ibeam",
+                        color: errorRateColor(cer)
+                    )
+                }
+
+                metricCard(
+                    title: "Latência média",
+                    value: String(format: "%.0fms", metrics.averageLatency * 1000),
+                    icon: "timer",
+                    color: .secondary
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func metricCard(title: String, value: String, icon: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: icon)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Progresso global
+
+    @ViewBuilder
+    private var runAllProgressView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(
+                    "Transcrevendo fixture \(runAllCurrent) de \(runAllTotal)",
+                    systemImage: "waveform.badge.magnifyingglass"
+                )
+                .font(.subheadline.weight(.medium))
+                Spacer()
+                Text(String(format: "%.0f%%", runAllProgress * 100))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            ProgressView(value: runAllProgress)
+                .progressViewStyle(.linear)
         }
     }
 
@@ -117,6 +323,23 @@ struct BenchmarkView: View {
         // Último resultado
         if let result = fixture.lastResult {
             resultSection(result)
+        }
+
+        // Mensagem de erro (se runBenchmark falhou)
+        if let errorMessage = errorsById[fixture.id] {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Erro ao transcrever")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.red)
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
         }
 
         // Ações
@@ -220,8 +443,13 @@ struct BenchmarkView: View {
         Task {
             isRunning = true
             runningFixtureId = fixture.id
-            try? await store.runBenchmark(fixture: fixture) { samples in
-                try await appState.transcribe(samples)
+            errorsById.removeValue(forKey: fixture.id)
+            do {
+                try await store.runBenchmark(fixture: fixture) { samples in
+                    try await appState.transcribe(samples)
+                }
+            } catch {
+                errorsById[fixture.id] = error.localizedDescription
             }
             runningFixtureId = nil
             isRunning = false
@@ -229,12 +457,43 @@ struct BenchmarkView: View {
     }
 
     private func runAll() {
-        Task {
+        let fixturesSnapshot = store.fixtures
+        guard !fixturesSnapshot.isEmpty else { return }
+
+        runAllCurrent = 0
+        runAllTotal = fixturesSnapshot.count
+        runAllProgress = 0
+
+        runAllTask = Task {
             isRunning = true
-            await store.runAll { samples in
-                try await appState.transcribe(samples)
+            defer {
+                isRunning = false
+                runningFixtureId = nil
+                runAllTask = nil
             }
-            isRunning = false
+
+            for (idx, fixture) in fixturesSnapshot.enumerated() {
+                if Task.isCancelled { break }
+
+                runAllCurrent = idx + 1
+                runAllProgress = Double(idx) / Double(fixturesSnapshot.count)
+                runningFixtureId = fixture.id
+                errorsById.removeValue(forKey: fixture.id)
+
+                do {
+                    try await store.runBenchmark(fixture: fixture) { samples in
+                        try await appState.transcribe(samples)
+                    }
+                } catch is CancellationError {
+                    break
+                } catch {
+                    errorsById[fixture.id] = error.localizedDescription
+                }
+            }
+
+            if !Task.isCancelled {
+                runAllProgress = 1
+            }
         }
     }
 
