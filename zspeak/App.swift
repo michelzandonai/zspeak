@@ -135,19 +135,46 @@ struct ZSpeakApp: App {
     nonisolated(unsafe) private static var overlayController: OverlayController?
 
     var body: some Scene {
-        // App vive exclusivamente no menu bar (sem janela principal)
+        // App vive exclusivamente no menu bar (sem janela principal).
+        // Dependências são injetadas via `.environment(_:)` — SwiftUI 5 aceita
+        // classes `@Observable` diretamente, sem precisar de `@EnvironmentObject`.
         MenuBarExtra {
-            MenuBarView(appState: appState, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore, correctionPromptStore: correctionPromptStore, promptModeManager: promptModeManager)
+            MenuBarView()
+                .environment(appState)
+                .environment(appState.microphoneManager)
+                .environment(activationKeyManager)
+                .environment(accessibilityManager)
+                .environment(store)
+                .environment(benchmarkStore)
+                .environment(vocabularyStore)
+                .environment(correctionPromptStore)
+                .environment(promptModeManager)
         } label: {
             Image(systemName: menuBarIcon)
                 .symbolRenderingMode(.palette)
         }
 
-        // Janela de configurações
+        // Janela de configurações — init sem parâmetros; consome `@Environment`.
         Settings {
-            let mgr = appState.microphoneManager
-            SettingsView(appState: appState, microphoneManager: mgr, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore, correctionPromptStore: correctionPromptStore)
+            SettingsView()
+                .environment(appState)
+                .environment(appState.microphoneManager)
+                .environment(activationKeyManager)
+                .environment(accessibilityManager)
+                .environment(store)
+                .environment(benchmarkStore)
+                .environment(vocabularyStore)
+                .environment(correctionPromptStore)
+                .environment(promptModeManager)
         }
+
+        // Janela dedicada para transcrever arquivo de áudio (Cmd+Shift+T).
+        Window("Transcrever arquivo", id: AudioFileWindowID.value) {
+            AudioFileWindowContent()
+                .environment(appState)
+                .environment(store)
+        }
+        .defaultSize(width: 720, height: 580)
     }
 
     /// Ícone do menu bar baseado no estado atual

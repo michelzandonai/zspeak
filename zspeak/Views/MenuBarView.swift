@@ -1,15 +1,22 @@
 import SwiftUI
 
-/// Menu do ícone no menu bar
+/// Menu do ícone no menu bar.
+///
+/// Dependências injetadas via `@Environment` (mesmas classes @Observable
+/// também consumidas por `SettingsView`). Para abrir a janela de Settings usa
+/// `openSettings` (macOS 14+); a aba inicial é comunicada via
+/// `@AppStorage("settings.initialPage")` — SettingsView observa esse storage e
+/// sincroniza `selectedPage`. Para a janela de arquivo usa `openWindow(id:)`.
 struct MenuBarView: View {
-    let appState: AppState
-    let activationKeyManager: ActivationKeyManager
-    let accessibilityManager: AccessibilityManager
-    let store: TranscriptionStore
-    let benchmarkStore: BenchmarkStore
-    let vocabularyStore: VocabularyStore
-    let correctionPromptStore: CorrectionPromptStore
-    let promptModeManager: PromptModeManager
+    @Environment(AppState.self) private var appState
+    @Environment(AccessibilityManager.self) private var accessibilityManager
+    @Environment(TranscriptionStore.self) private var store
+    @Environment(PromptModeManager.self) private var promptModeManager
+
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
+
+    @AppStorage("settings.initialPage") private var initialSettingsPage: String = SettingsPage.overview.rawValue
 
     var body: some View {
         // Indicador do Modo Prompt LLM
@@ -48,7 +55,7 @@ struct MenuBarView: View {
                     .foregroundStyle(.secondary)
             } else {
                 Button("Configurar Microfone...") {
-                    appState.microphoneManager.openSystemSettings()
+                    openSettingsOn(.permissions)
                 }
             }
         }
@@ -58,7 +65,7 @@ struct MenuBarView: View {
                 .foregroundStyle(.orange)
                 .font(.caption)
             Button("Configurar Acessibilidade...") {
-                accessibilityManager.openSystemSettings()
+                openSettingsOn(.permissions)
             }
         }
 
@@ -106,26 +113,16 @@ struct MenuBarView: View {
             Divider()
         }
 
-        // Transcrever arquivo de áudio
+        // Transcrever arquivo de áudio — abre janela flutuante dedicada
         Button("Transcrever arquivo...") {
-            SettingsWindowController.shared.show(
-                appState: appState,
-                microphoneManager: appState.microphoneManager,
-                activationKeyManager: activationKeyManager,
-                accessibilityManager: accessibilityManager,
-                store: store,
-                benchmarkStore: benchmarkStore,
-                vocabularyStore: vocabularyStore,
-                correctionPromptStore: correctionPromptStore,
-                initialPage: .audioFile
-            )
+            openWindow(id: AudioFileWindowID.value)
         }
         .keyboardShortcut("t", modifiers: [.command, .shift])
         .disabled(!appState.isModelReady)
 
         // Configurações e sair
         Button("Configurações...") {
-            SettingsWindowController.shared.show(appState: appState, microphoneManager: appState.microphoneManager, activationKeyManager: activationKeyManager, accessibilityManager: accessibilityManager, store: store, benchmarkStore: benchmarkStore, vocabularyStore: vocabularyStore, correctionPromptStore: correctionPromptStore)
+            openSettingsOn(.overview)
         }
         .keyboardShortcut(",", modifiers: [.command])
 
@@ -133,6 +130,14 @@ struct MenuBarView: View {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q", modifiers: [.command])
+    }
+
+    /// Seta a aba inicial desejada e abre Settings. Como `SettingsView` observa
+    /// o `@AppStorage`, a aba correta é selecionada mesmo se a janela já estava
+    /// aberta.
+    private func openSettingsOn(_ page: SettingsPage) {
+        initialSettingsPage = page.rawValue
+        openSettings()
     }
 
     private var statusColor: Color {
