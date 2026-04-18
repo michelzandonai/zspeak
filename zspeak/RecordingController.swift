@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import os.log
 
@@ -73,14 +74,12 @@ final class RecordingController {
     private var recordingTask: Task<Void, Never>?
     private var isRequestingMicrophonePermission = false
 
-    /// Duração padrão do hot window (engine aberto + pre-roll ativo) após um
-    /// sinal de uso. Após esse tempo sem nova atividade, `coolDown` desliga o
-    /// engine e o indicador do mic apaga. Reinicia a cada gravação.
-    private static let hotWindowDuration: TimeInterval = 300  // 5 min
-
-    /// Task em dormida que dispara o coolDown quando a hot window expira.
-    /// Cancelada e recriada a cada `warmUpAudioCapture()` bem-sucedido.
-    private var hotWindowExpireTask: Task<Void, Never>?
+    /// Sons de feedback emitidos no início e fim da captura. Compensam o cold
+    /// path: o usuário ouve o chime e sabe que pode falar — não precisa esperar
+    /// nem olhar a UI. Pré-carregados no init para não adicionar latência no
+    /// primeiro uso.
+    private let startChime: NSSound? = NSSound(named: "Tink")
+    private let stopChime: NSSound? = NSSound(named: "Pop")
 
     // MARK: - Init
 
@@ -115,37 +114,20 @@ final class RecordingController {
         }
     }
 
-    /// Abre o hot window do engine com o device prioritário: HAL ativo, pre-roll
-    /// alimentado continuamente. Silencia erros — se falhar, o próximo `start()`
-    /// cai no cold path normal.
+    /// Exposto para uso explícito (ex: pré-aquecimento opcional antes de um
+    /// fluxo sensível a latência). Não invocado automaticamente — o contrato
+    /// com o usuário é que o mic só acende durante gravação real.
     ///
-    /// Também agenda a expiração da janela. Após `hotWindowDuration` segundos
-    /// de inatividade, o engine é desligado e o indicador do mic apaga.
+    /// Se a janela quente for reintroduzida no futuro, o gatilho volta aqui
+    /// (em `stopRecording` / `cancelRecording`) e o timer de expiração vira
+    /// responsabilidade desta função.
     func warmUpAudioCapture() async {
         guard microphoneManager.isPermissionGranted else { return }
         let preferredUID = microphoneManager.connectedMicrophones().first?.id
         do {
             try await audioCapture.warmUp(deviceUID: preferredUID)
-            scheduleHotWindowExpiration()
         } catch {
             logger.info("warmUpAudioCapture: falhou (\(error.localizedDescription)) — start() usará cold path")
-        }
-    }
-
-    /// (Re)agenda a expiração do hot window. Cancela qualquer expiração
-    /// pendente e recria a dormida. Se o app estiver em gravação ativa no
-    /// momento do disparo, o coolDown é pulado — a próxima `warmUpAudioCapture`
-    /// pós-stop vai reagendar normalmente.
-    private func scheduleHotWindowExpiration() {
-        hotWindowExpireTask?.cancel()
-        hotWindowExpireTask = Task { [weak self] in
-            let nanos = UInt64(Self.hotWindowDuration * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: nanos)
-            guard !Task.isCancelled, let self else { return }
-            // Só desliga se o recorder está ocioso — não interrompe gravação.
-            guard self.state == .idle else { return }
-            await self.audioCapture.coolDown()
-            logger.info("hotWindow: expirou após \(Int(Self.hotWindowDuration))s de inatividade — coolDown")
         }
     }
 
@@ -192,7 +174,9 @@ final class RecordingController {
             await recordingTask?.value
             recordingTask = nil
             _ = await audioCapture.stop()
-            await warmUpAudioCapture()
+            // Garante que o HAL feche mesmo se uma hot window tiver sido
+            // aberta manualmente — contrato: mic apagado fora de gravação.
+            await audioCapture.coolDown()
         }
     }
 
@@ -219,12 +203,15 @@ final class RecordingController {
         logger.debug("startRecording: estado → preparing")
 
         // Callback @Sendable que faz hop para MainActor e promove preparing → recording.
+        // Também toca o chime "pronto pra falar" — feedback sonoro evita que o
+        // usuário dependa de olhar a UI para saber o momento certo de falar.
         let onFirstSample: @Sendable () -> Void = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
                 guard self.state == .preparing else { return }
                 self.state = .recording
-                logger.debug("startRecording: 1º sample chegou → estado → recording")
+                self.startChime?.play()
+                logger.debug("startRecording: 1º sample chegou → estado → recording (chime)")
             }
         }
 
@@ -291,6 +278,7 @@ final class RecordingController {
                 recordingTask = nil
 
                 let samples = await audioCapture.stop()
+                stopChime?.play()
 
                 guard samples.count > 8000 else { // < 0.5s
                     state = .idle
@@ -329,11 +317,9 @@ final class RecordingController {
                 }
 
                 state = .idle
-                await warmUpAudioCapture()
             } catch {
                 state = .idle
                 errorMessage = "Erro na transcricao: \(error.localizedDescription)"
-                await warmUpAudioCapture()
             }
         }
     }
