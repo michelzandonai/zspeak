@@ -98,12 +98,18 @@ final class RecordingController {
 
     // MARK: - Inicialização do modelo ASR
 
-    /// Carrega modelo ASR e pré-aquece o engine. Chamado no startup.
+    /// Carrega modelo ASR. Chamado no startup.
+    ///
+    /// Não abre hot window aqui — isso acenderia o indicador laranja do mic
+    /// assim que o app abre, mesmo sem o usuário ter intenção de gravar. A
+    /// janela quente só é aberta após a primeira gravação (em `stopRecording`
+    /// e `cancelRecording`), ficando ativa pelos próximos minutos e apagando
+    /// sozinha em idle longo. Primeira gravação após abrir o app cai em cold
+    /// path — aceito pelo plano.
     func initialize() async {
         do {
             try await transcriber.initialize()
             isModelReady = true
-            await warmUpAudioCapture()
         } catch {
             errorMessage = "Erro ao carregar modelos: \(error.localizedDescription)"
         }
