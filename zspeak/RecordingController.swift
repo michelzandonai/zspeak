@@ -73,6 +73,15 @@ final class RecordingController {
     private var recordingTask: Task<Void, Never>?
     private var isRequestingMicrophonePermission = false
 
+    /// Duração padrão do hot window (engine aberto + pre-roll ativo) após um
+    /// sinal de uso. Após esse tempo sem nova atividade, `coolDown` desliga o
+    /// engine e o indicador do mic apaga. Reinicia a cada gravação.
+    private static let hotWindowDuration: TimeInterval = 300  // 5 min
+
+    /// Task em dormida que dispara o coolDown quando a hot window expira.
+    /// Cancelada e recriada a cada `warmUpAudioCapture()` bem-sucedido.
+    private var hotWindowExpireTask: Task<Void, Never>?
+
     // MARK: - Init
 
     init(
@@ -100,15 +109,37 @@ final class RecordingController {
         }
     }
 
-    /// Pré-aquece o engine com o device prioritário. Silencia erros — se falhar,
-    /// o próximo `start()` cai no cold path normal.
+    /// Abre o hot window do engine com o device prioritário: HAL ativo, pre-roll
+    /// alimentado continuamente. Silencia erros — se falhar, o próximo `start()`
+    /// cai no cold path normal.
+    ///
+    /// Também agenda a expiração da janela. Após `hotWindowDuration` segundos
+    /// de inatividade, o engine é desligado e o indicador do mic apaga.
     func warmUpAudioCapture() async {
         guard microphoneManager.isPermissionGranted else { return }
         let preferredUID = microphoneManager.connectedMicrophones().first?.id
         do {
             try await audioCapture.warmUp(deviceUID: preferredUID)
+            scheduleHotWindowExpiration()
         } catch {
             logger.info("warmUpAudioCapture: falhou (\(error.localizedDescription)) — start() usará cold path")
+        }
+    }
+
+    /// (Re)agenda a expiração do hot window. Cancela qualquer expiração
+    /// pendente e recria a dormida. Se o app estiver em gravação ativa no
+    /// momento do disparo, o coolDown é pulado — a próxima `warmUpAudioCapture`
+    /// pós-stop vai reagendar normalmente.
+    private func scheduleHotWindowExpiration() {
+        hotWindowExpireTask?.cancel()
+        hotWindowExpireTask = Task { [weak self] in
+            let nanos = UInt64(Self.hotWindowDuration * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanos)
+            guard !Task.isCancelled, let self else { return }
+            // Só desliga se o recorder está ocioso — não interrompe gravação.
+            guard self.state == .idle else { return }
+            await self.audioCapture.coolDown()
+            logger.info("hotWindow: expirou após \(Int(Self.hotWindowDuration))s de inatividade — coolDown")
         }
     }
 

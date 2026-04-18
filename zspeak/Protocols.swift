@@ -18,16 +18,23 @@ protocol AudioCapturing: Actor {
     nonisolated func currentAudioLevel() -> Float
 
     /// Inicia a captura no device indicado (ou no default do sistema se nil).
-    /// `onFirstSample` é invocado uma única vez quando o primeiro buffer chega
-    /// — usado para transicionar `.preparing → .recording`.
+    /// `onFirstSample` é invocado uma única vez quando a gravação começa a
+    /// persistir samples — usado para transicionar `.preparing → .recording`.
+    /// Em modo quente, é disparado síncrono (pre-roll já presente).
     func start(deviceUID: String?, onFirstSample: (@Sendable () -> Void)?) async throws
 
-    /// Para a captura e devolve os samples acumulados (16 kHz mono float32).
+    /// Para a captura, drena buffers em voo e devolve os samples acumulados
+    /// (16 kHz mono float32). Preserva o hot window quando ativo.
     func stop() async -> [Float]
 
-    /// Pré-prepara o engine sem abrir o HAL (sem acender o indicador do mic).
-    /// No-op se já está aquecido para o mesmo device.
+    /// Abre o engine em "hot window": HAL ativo, pre-roll circular sendo
+    /// alimentado. `start()` subsequente no mesmo device tem latência zero.
+    /// Custo: indicador de microfone do macOS aceso até `coolDown()`.
     func warmUp(deviceUID: String?) async throws
+
+    /// Fecha o hot window: desliga o engine, apaga o indicador do mic e
+    /// limpa o pre-roll. No-op se não estava hot ou se há gravação ativa.
+    func coolDown() async
 }
 
 /// Transcrição de áudio para texto via Parakeet TDT.
