@@ -21,14 +21,14 @@ struct VocabularyStoreTests {
 
     // MARK: - Testes
 
-    @Test("Entradas padrão pré-populadas: Claude Code e git pull")
+    @Test("Entradas padrão pré-populadas incluem termos técnicos base")
     func testDefaultEntriesPrePopulated() throws {
         let tmpDir = try makeTmpDir()
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
         let store = makeStore(in: tmpDir)
 
-        #expect(store.entries.count == 2)
+        #expect(store.entries.count == 4)
 
         let claude = try #require(store.entries.first { $0.term == "Claude Code" })
         #expect(claude.aliases == ["cloud code"])
@@ -38,6 +38,16 @@ struct VocabularyStoreTests {
         let gitPull = try #require(store.entries.first { $0.term == "git pull" })
         #expect(gitPull.aliases == ["git pool"])
         #expect(gitPull.isEnabled == true)
+
+        let branch = try #require(store.entries.first { $0.term == "branch" })
+        #expect(branch.aliases.isEmpty)
+        #expect(branch.isEnabled == true)
+        #expect(branch.weight == 15.0)
+
+        let branches = try #require(store.entries.first { $0.term == "branches" })
+        #expect(branches.aliases.isEmpty)
+        #expect(branches.isEnabled == true)
+        #expect(branches.weight == 15.0)
     }
 
     @Test("addEntry adiciona ao final")
@@ -48,8 +58,8 @@ struct VocabularyStoreTests {
         let store = makeStore(in: tmpDir)
         store.addEntry(term: "Kubernetes", aliases: ["cubernetes"], weight: 8.0)
 
-        // 2 padrão + 1 adicionada
-        #expect(store.entries.count == 3)
+        // 4 padrão + 1 adicionada
+        #expect(store.entries.count == 5)
         #expect(store.entries.last?.term == "Kubernetes")
         #expect(store.entries.last?.aliases == ["cubernetes"])
         #expect(store.entries.last?.weight == 8.0)
@@ -65,7 +75,7 @@ struct VocabularyStoreTests {
 
         // Novo store lendo do mesmo diretório
         let store2 = makeStore(in: tmpDir)
-        #expect(store2.entries.count == 3)
+        #expect(store2.entries.count == 5)
 
         let added = store2.entries.first { $0.term == "SwiftUI" }
         #expect(added != nil)
@@ -79,15 +89,17 @@ struct VocabularyStoreTests {
         let store = makeStore(in: tmpDir)
         store.addEntry(term: "Temporário")
 
-        #expect(store.entries.count == 3)
+        #expect(store.entries.count == 5)
 
         let toDelete = try #require(store.entries.first { $0.term == "Temporário" })
         store.deleteEntry(toDelete)
 
-        // Restam as duas entradas padrão
-        #expect(store.entries.count == 2)
+        // Restam as entradas padrão
+        #expect(store.entries.count == 4)
         #expect(store.entries.contains { $0.term == "Claude Code" })
         #expect(store.entries.contains { $0.term == "git pull" })
+        #expect(store.entries.contains { $0.term == "branch" })
+        #expect(store.entries.contains { $0.term == "branches" })
     }
 
     @Test("deleteEntry persiste no disco")
@@ -104,7 +116,7 @@ struct VocabularyStoreTests {
 
         // Novo store confirma que foi removida — restam apenas os defaults
         let store2 = makeStore(in: tmpDir)
-        #expect(store2.entries.count == 2)
+        #expect(store2.entries.count == 4)
         #expect(store2.entries.contains { $0.term == "ParaDeletar" } == false)
     }
 
@@ -119,8 +131,8 @@ struct VocabularyStoreTests {
 
         // Recarrega do disco
         let store2 = makeStore(in: tmpDir)
-        // 2 padrão + 2 adicionadas
-        #expect(store2.entries.count == 4)
+        // 4 padrão + 2 adicionadas
+        #expect(store2.entries.count == 6)
 
         let react = try #require(store2.entries.first { $0.term == "React Native" })
         #expect(react.aliases == ["react nativo"])
@@ -152,6 +164,8 @@ struct VocabularyStoreTests {
         // Deve ter defaults + "Habilitada", mas não "Desabilitada"
         #expect(terms.contains { $0.text == "Claude Code" })
         #expect(terms.contains { $0.text == "git pull" })
+        #expect(terms.contains { $0.text == "branch" })
+        #expect(terms.contains { $0.text == "branches" })
         #expect(terms.contains { $0.text == "Habilitada" })
         #expect(terms.contains { $0.text == "Desabilitada" } == false)
     }
@@ -227,7 +241,7 @@ struct VocabularyStoreTests {
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
         let store = makeStore(in: tmpDir)
-        #expect(store.entries.count == 2)
+        #expect(store.entries.count == 4)
 
         // Deleta todas as entradas padrão
         while let first = store.entries.first {
@@ -256,6 +270,31 @@ struct VocabularyStoreTests {
         let store2 = makeStore(in: tmpDir)
         #expect(store2.entries.contains { $0.term == "git pull" } == false)
         #expect(store2.entries.contains { $0.term == "Claude Code" })
+        #expect(store2.entries.contains { $0.term == "branch" })
+        #expect(store2.entries.contains { $0.term == "branches" })
+    }
+
+    @Test("Upgrade legado adiciona defaults novos sem ressuscitar batch antigo")
+    func testLegacyUpgradeSeedsOnlyNewDefaults() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let legacyEntries = [
+            VocabularyEntry(term: "Claude Code", aliases: ["cloud code"]),
+            VocabularyEntry(term: "git pull", aliases: ["git pool"])
+        ]
+        let data = try JSONEncoder().encode(legacyEntries)
+        try data.write(to: tmpDir.appendingPathComponent("vocabulary.json"))
+        try Data().write(to: tmpDir.appendingPathComponent(".vocab_defaults_seeded"))
+
+        let store = makeStore(in: tmpDir)
+
+        #expect(store.entries.count == 4)
+        #expect(store.entries.contains { $0.term == "Claude Code" })
+        #expect(store.entries.contains { $0.term == "git pull" })
+        #expect(store.entries.contains { $0.term == "branch" })
+        #expect(store.entries.contains { $0.term == "branches" })
+        #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".vocab_defaults_seeded_v2").path))
     }
 
     // MARK: - applyReplacements

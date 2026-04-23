@@ -6,6 +6,8 @@ import FluidAudio
 actor Transcriber {
 
     private var asrManager: AsrManager?
+    private var ctcModels: CtcModels?
+    private var configuredVocabularySignature: String?
     private(set) var isReady = false
 
     /// Diretório exclusivo do zspeak para modelos — evita conflito com outros apps (Spokenly)
@@ -15,6 +17,11 @@ actor Transcriber {
             .appendingPathComponent("Models", isDirectory: true)
     }()
 
+    /// Diretório exclusivo do modelo CTC usado no rescoring do vocabulário.
+    private static let ctcModelsDirectory: URL = {
+        modelsDirectory.appendingPathComponent("parakeet-ctc-110m-coreml", isDirectory: true)
+    }()
+
     /// Carrega o modelo Parakeet TDT v3.
     /// Primeiro uso: download automático do HuggingFace (~496 MB).
     func initialize() async throws {
@@ -22,14 +29,41 @@ actor Transcriber {
         let manager = AsrManager(config: .default)
         try await manager.initialize(models: models)
         self.asrManager = manager
+        self.configuredVocabularySignature = nil
         self.isReady = true
     }
 
+    /// Configura o context biasing nativo do FluidAudio para batch ASR.
+    ///
+    /// O `VocabularyStore.applyReplacements(to:)` continua existindo como fallback
+    /// leve no texto final, mas a principal correção de termos técnicos deve
+    /// acontecer aqui, ainda durante o rescoring do decoder.
+    func configureVocabulary(_ vocabulary: CustomVocabularyContext?) async throws {
+        guard let manager = asrManager else {
+            throw TranscriberError.notInitialized
+        }
+
+        let signature = vocabularySignature(for: vocabulary)
+        guard signature != configuredVocabularySignature else { return }
+
+        guard let vocabulary, !vocabulary.terms.isEmpty else {
+            await manager.disableVocabularyBoosting()
+            configuredVocabularySignature = nil
+            return
+        }
+
+        let ctc = try await loadCtcModelsIfNeeded()
+        try await manager.configureVocabularyBoosting(
+            vocabulary: vocabulary,
+            ctcModels: ctc
+        )
+        configuredVocabularySignature = signature
+    }
+
     /// Transcreve amostras de áudio (16kHz mono float32).
-    /// Retorna o texto transcrito. O vocabulário customizado é aplicado em
-    /// pós-processamento via `VocabularyStore.applyReplacements(to:)` no
-    /// pipeline (`RecordingController` / `FileTranscriptionCoordinator`) —
-    /// a API nativa de context biasing foi removida do FluidAudio na v0.12+.
+    /// Retorna o texto transcrito. Quando configurado, o vocabulário customizado
+    /// é aplicado nativamente no rescoring do decoder; o pipeline ainda mantém
+    /// um fallback em Swift no texto final para aliases exatos.
     func transcribe(_ samples: [Float]) async throws -> String {
         guard let manager = asrManager else {
             throw TranscriberError.notInitialized
@@ -48,5 +82,29 @@ actor Transcriber {
                 return "Modelo de transcrição não foi inicializado"
             }
         }
+    }
+
+    private func loadCtcModelsIfNeeded() async throws -> CtcModels {
+        if let ctcModels {
+            return ctcModels
+        }
+
+        let models = try await CtcModels.downloadAndLoad(
+            to: Self.ctcModelsDirectory,
+            variant: .ctc110m
+        )
+        self.ctcModels = models
+        return models
+    }
+
+    private func vocabularySignature(for vocabulary: CustomVocabularyContext?) -> String? {
+        guard let vocabulary, !vocabulary.terms.isEmpty else { return nil }
+
+        let terms = vocabulary.terms.map { term in
+            let aliases = term.aliases?.joined(separator: ",") ?? ""
+            let weight = term.weight.map { String($0) } ?? ""
+            return "\(term.text)|\(weight)|\(aliases)"
+        }
+        return terms.joined(separator: ";")
     }
 }

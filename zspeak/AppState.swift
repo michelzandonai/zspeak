@@ -247,6 +247,16 @@ final class AppState {
     /// Carrega modelo ASR — chamado no startup do app.
     func initialize() async {
         await recordingController.initialize()
+        guard isModelReady else { return }
+
+        // Reaplica o vocabulário persistido em background logo após o modelo
+        // principal ficar pronto. Se o rescoring nativo falhar, o fallback em
+        // Swift continua ativo no pipeline.
+        do {
+            try await applyVocabulary()
+        } catch {
+            // Não bloqueia o app na inicialização por falha do vocabulário.
+        }
     }
 
     /// Pré-aquece o `AudioCapture` com o device prioritário atual.
@@ -314,16 +324,14 @@ final class AppState {
 
     // MARK: - Vocabulário
 
-    /// Placeholder retrocompatível. A API nativa de context biasing do FluidAudio
-    /// (`configureVocabularyBoosting`) foi removida na v0.12+; as substituições
-    /// agora são feitas em Swift via `VocabularyStore.applyReplacements(to:)` no
-    /// pós-processamento das transcrições (ver `RecordingController` e
-    /// `FileTranscriptionCoordinator`).
-    ///
-    /// Ainda exposto porque `VocabularyView` chama este método no botão "Aplicar"
-    /// — agora apenas confirma que o store está conectado e retorna sucesso.
+    /// Aplica o vocabulário persistido tanto no rescoring nativo do decoder
+    /// quanto no fallback em Swift usado pelo pipeline pós-transcrição.
     func applyVocabulary() async throws {
-        // Re-wire caso o store tenha sido setado depois da criação do façade.
         wireVocabularyHook()
+
+        guard isModelReady else { return }
+
+        let context = vocabularyStore?.buildVocabularyContext()
+        try await transcriber.configureVocabulary(context)
     }
 }
