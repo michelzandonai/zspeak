@@ -61,8 +61,8 @@ final class VocabularyStore {
 
     /// Aplica substituições aliases → term no texto transcrito.
     ///
-    /// Fallback em Swift enquanto o context biasing nativo do FluidAudio (`configureVocabularyBoosting`)
-    /// estiver indisponível (ver TASK-001 em Transcriber.swift).
+    /// Fallback em Swift para complementar o context biasing nativo do FluidAudio.
+    /// Serve como rede de segurança para aliases exatos no texto final.
     ///
     /// - Busca com word boundaries (`\b`) — não substitui dentro de palavras
     /// - Case-insensitive — "Git Pool", "git pool", "GIT POOL" todos viram o term
@@ -178,31 +178,52 @@ final class VocabularyStore {
 
     // MARK: - Defaults
 
-    /// Entradas padrão do vocabulário — aplicadas uma única vez por diretório
-    /// via flag em disco (`.vocab_defaults_seeded`). Se o usuário deletar uma delas
-    /// depois, ela não volta.
-    private static let defaultEntries: [(term: String, aliases: [String])] = [
-        ("Claude Code", ["cloud code"]),
-        ("git pull", ["git pool"])
+    /// Entradas padrão da v1 — já existentes em instalações antigas.
+    /// Controladas por uma flag própria para não ressuscitar termos deletados.
+    private static let defaultEntriesV1: [(term: String, aliases: [String], weight: Float)] = [
+        ("Claude Code", ["cloud code"], 10.0),
+        ("git pull", ["git pool"], 10.0)
+    ]
+
+    /// Entradas padrão adicionadas em upgrades posteriores.
+    /// Mantidas em batch separado para que instalações antigas recebam só os
+    /// novos termos, sem reintroduzir defaults v1 removidos manualmente.
+    private static let defaultEntriesV2: [(term: String, aliases: [String], weight: Float)] = [
+        ("branch", [], 15.0),
+        ("branches", [], 15.0)
     ]
 
     /// Semeia entradas padrão na primeira inicialização (nova instalação ou upgrade).
-    /// Idempotente: usa um arquivo flag no mesmo diretório do vocabulary.json para
-    /// detectar execuções subsequentes. Não sobrescreve entradas existentes —
-    /// apenas adiciona defaults ausentes.
+    /// Cada batch usa sua própria flag para permitir upgrades incrementais sem
+    /// ressuscitar defaults antigos removidos pelo usuário.
     private func seedDefaultsIfNeeded(in directory: URL) {
-        let flagURL = directory.appendingPathComponent(".vocab_defaults_seeded")
-        if FileManager.default.fileExists(atPath: flagURL.path) {
-            return
-        }
+        seedDefaults(
+            Self.defaultEntriesV1,
+            flagName: ".vocab_defaults_seeded",
+            in: directory
+        )
+        seedDefaults(
+            Self.defaultEntriesV2,
+            flagName: ".vocab_defaults_seeded_v2",
+            in: directory
+        )
+    }
+
+    private func seedDefaults(
+        _ defaults: [(term: String, aliases: [String], weight: Float)],
+        flagName: String,
+        in directory: URL
+    ) {
+        let flagURL = directory.appendingPathComponent(flagName)
+        guard !FileManager.default.fileExists(atPath: flagURL.path) else { return }
 
         var mutated = false
-        for def in Self.defaultEntries {
+        for def in defaults {
             let alreadyExists = entries.contains {
                 $0.term.caseInsensitiveCompare(def.term) == .orderedSame
             }
             if !alreadyExists {
-                entries.append(VocabularyEntry(term: def.term, aliases: def.aliases))
+                entries.append(VocabularyEntry(term: def.term, aliases: def.aliases, weight: def.weight))
                 mutated = true
             }
         }

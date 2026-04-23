@@ -167,6 +167,7 @@ struct BenchmarkView: View {
                 } label: {
                     Label("Adicionar", systemImage: "plus")
                 }
+                .help("Adicionar fixture (importar WAV ou do histórico)")
                 .disabled(isRunning)
 
                 // Ação primária isolada: Transcrever Todos / Parar
@@ -180,9 +181,10 @@ struct BenchmarkView: View {
                     if isRunning {
                         Label("Parar", systemImage: "stop.fill")
                     } else {
-                        Label("Transcrever Todos", systemImage: "play.fill")
+                        Label("Transcrever todas", systemImage: "play.fill")
                     }
                 }
+                .help(isRunning ? "Parar transcrição em lote" : "Transcrever todas as fixtures")
                 .keyboardShortcut(isRunning ? .cancelAction : .defaultAction)
                 .disabled(!isRunning && store.fixtures.isEmpty)
             }
@@ -300,9 +302,17 @@ struct BenchmarkView: View {
 
     @ViewBuilder
     private func fixtureRow(_ fixture: BenchmarkFixture, index: Int) -> some View {
-        // Nome
-        Text(fixture.name)
-            .font(.headline)
+        // Nome — só mostramos quando é realmente um rótulo distinto do texto
+        // esperado (ex: nome de arquivo customizado). Quando `name` foi gerado
+        // do próprio texto (import do histórico), o header vira redundância
+        // truncada.
+        if !isNameRedundant(fixture) {
+            Text(fixture.name)
+                .font(.headline)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
 
         // Texto esperado editável — binding direto por índice evita firstIndex O(n) por linha.
         if index < store.fixtures.count {
@@ -407,6 +417,16 @@ struct BenchmarkView: View {
             }
             .font(.caption)
         }
+    }
+
+    /// Heurística: nome é redundante quando é um prefixo do texto esperado
+    /// (ou o texto esperado é prefixo do nome). É o caso típico das fixtures
+    /// importadas do histórico, onde o nome foi gerado cortando a frase.
+    private func isNameRedundant(_ fixture: BenchmarkFixture) -> Bool {
+        let name = fixture.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expected = fixture.expectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !expected.isEmpty else { return false }
+        return expected.hasPrefix(name) || name.hasPrefix(expected)
     }
 
     private func accuracyColor(_ value: Double) -> Color {
