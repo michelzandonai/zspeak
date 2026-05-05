@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Menu do ícone no menu bar.
@@ -135,8 +136,13 @@ struct MenuBarView: View {
     /// Seta a aba inicial desejada e abre Settings. Como `SettingsView` observa
     /// o `@AppStorage`, a aba correta é selecionada mesmo se a janela já estava
     /// aberta.
+    ///
+    /// `NSApp.activate(...)` é obrigatório: o app é `LSUIElement` (agente de
+    /// menu bar, sem Dock) e `openSettings()` sozinho não traz a janela pro
+    /// foreground — ela é criada atrás das outras. Testado no macOS 14+.
     private func openSettingsOn(_ page: SettingsPage) {
         initialSettingsPage = page.rawValue
+        NSApp.activate(ignoringOtherApps: true)
         openSettings()
     }
 

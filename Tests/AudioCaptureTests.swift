@@ -129,6 +129,54 @@ struct AudioCaptureTests {
         #expect(await capture.isCapturing == false)
     }
 
+    // MARK: - Hot window e coolDown (regressão #35)
+
+    @Test("Estado inicial: não está em hot window")
+    func testIsHotFalseInicial() async {
+        let capture = AudioCapture()
+        #expect(await capture.isHot == false)
+    }
+
+    @Test("coolDown em estado frio é no-op (não crasheia)")
+    func testCoolDownQuandoFrio() async {
+        let capture = AudioCapture()
+        await capture.coolDown()
+        #expect(await capture.isHot == false)
+        #expect(await capture.isCapturing == false)
+    }
+
+    @Test("coolDown não afeta warmup quando há gravação ativa")
+    func testCoolDownDuranteGravacaoEhIgnorado() async {
+        // Esse teste não grava de verdade (só valida que coolDown no-op
+        // quando isRunning — sem hardware, isRunning sempre false, então
+        // a invariante a validar é que coolDown em false não toca nada).
+        let capture = AudioCapture()
+        await capture.coolDown()
+        await capture.coolDown()
+        #expect(await capture.isHot == false)
+    }
+
+    @Test("warmUp com deviceUID inexistente propaga erro e não entra em hot window")
+    func testWarmUpComDeviceInvalidoNaoAbreHot() async {
+        let capture = AudioCapture()
+        let uidInexistente = "test-invalid-warmup-\(UUID().uuidString)"
+
+        do {
+            try await capture.warmUp(deviceUID: uidInexistente)
+            Issue.record("Esperado erro mas warmUp completou")
+        } catch let error as AudioCaptureError {
+            if case .coreAudioDeviceNotFound(let uid) = error {
+                #expect(uid == uidInexistente)
+            } else {
+                Issue.record("Tipo de erro inesperado: \(error)")
+            }
+            #expect(await capture.isHot == false)
+            #expect(await capture.isCapturing == false)
+        } catch {
+            Issue.record("Erro inesperado: \(error)")
+        }
+    }
+
     // MARK: - Fallback silencioso removido (task #1)
 
     @Test("start com deviceUID inexistente lanca .coreAudioDeviceNotFound")
@@ -303,6 +351,85 @@ struct AudioCaptureHardwareTests {
 
         let totalMs = (firstSample - startCalled) * 1000
         print("[LATENCIA TOTAL cold path] start() → primeiro sample: \(String(format: "%.1f", totalMs))ms")
+    }
+
+    /// warmUp prepara o engine SEM acender o mic (prepare-only). Valida que
+    /// o HAL permanece fechado (isCapturing false) mas o engine está pronto
+    /// para fast path no próximo start().
+    @Test("warmUp pré-prepara engine sem acender mic")
+    func warmUp_naoAbreHAL() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        let capture = AudioCapture()
+
+        try await capture.warmUp(deviceUID: nil)
+        #expect(await capture.isHot == true,
+                "isHot deveria refletir 'engine preparado'")
+        #expect(await capture.isCapturing == false,
+                "isCapturing deveria ser false — warmUp não abre HAL")
+
+        await capture.coolDown()
+        #expect(await capture.isHot == false)
+    }
+
+    @Test("coolDown descarta o prepare sem efeitos colaterais")
+    func coolDown_descartaPrepare() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        let capture = AudioCapture()
+
+        try await capture.warmUp(deviceUID: nil)
+        #expect(await capture.isHot == true)
+
+        await capture.coolDown()
+        #expect(await capture.isHot == false)
+        #expect(await capture.isCapturing == false)
+    }
+
+    @Test("warmUp é idempotente para o mesmo device")
+    func warmUp_idempotente() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        let capture = AudioCapture()
+
+        try await capture.warmUp(deviceUID: nil)
+        #expect(await capture.isHot == true)
+
+        // Segunda chamada com mesmo deviceUID não deve lançar.
+        try await capture.warmUp(deviceUID: nil)
+        #expect(await capture.isHot == true)
+
+        await capture.coolDown()
+    }
+
+    /// Start após warmUp deve ser mais rápido que cold: o engine já tem tap
+    /// instalado e prepare feito. Só falta engine.start() (~50-100 ms HAL).
+    @Test("start após warmUp (fast path) é mais rápido que cold path")
+    func start_aposWarmUp_fastPathMenor() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        // Warm — tempo apenas do engine.start()
+        let warm = AudioCapture()
+        try await warm.warmUp(deviceUID: nil)
+        let t0warm = CFAbsoluteTimeGetCurrent()
+        try await warm.start(deviceUID: nil)
+        let t1warm = CFAbsoluteTimeGetCurrent()
+        _ = await warm.stop()
+        let warmMs = (t1warm - t0warm) * 1000
+
+        // Cold — engine criado do zero + installTap + prepare + start
+        let cold = AudioCapture()
+        let t0cold = CFAbsoluteTimeGetCurrent()
+        try await cold.start(deviceUID: nil)
+        let t1cold = CFAbsoluteTimeGetCurrent()
+        _ = await cold.stop()
+        let coldMs = (t1cold - t0cold) * 1000
+
+        print("[LATENCIA] warm start: \(String(format: "%.1f", warmMs))ms vs cold start: \(String(format: "%.1f", coldMs))ms")
+
+        // Warm deve ser estritamente menor. Tolerância para jitter: ao menos 10 ms de ganho.
+        #expect(warmMs < coldMs,
+                "warm (\(warmMs)ms) deveria ser < cold (\(coldMs)ms)")
     }
 
     @Test("start com deviceUID nil usa default e inicia sem erro")

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import os.log
 
@@ -73,6 +74,17 @@ final class RecordingController {
     private var recordingTask: Task<Void, Never>?
     private var isRequestingMicrophonePermission = false
 
+    private enum SettingsKey {
+        static let playRecordingSounds = "playRecordingSounds"
+    }
+
+    /// Sons de feedback emitidos no início e fim da captura. Compensam o cold
+    /// path: o usuário ouve o chime e sabe que pode falar — não precisa esperar
+    /// nem olhar a UI. Pré-carregados no init para não adicionar latência no
+    /// primeiro uso.
+    private let startChime: NSSound? = NSSound(named: "Tink")
+    private let stopChime: NSSound? = NSSound(named: "Pop")
+
     // MARK: - Init
 
     init(
@@ -89,7 +101,7 @@ final class RecordingController {
 
     // MARK: - Inicialização do modelo ASR
 
-    /// Carrega modelo ASR e pré-aquece o engine. Chamado no startup.
+    /// Carrega modelo ASR e pré-prepara o engine de áudio sem abrir o microfone.
     func initialize() async {
         do {
             try await transcriber.initialize()
@@ -100,8 +112,7 @@ final class RecordingController {
         }
     }
 
-    /// Pré-aquece o engine com o device prioritário. Silencia erros — se falhar,
-    /// o próximo `start()` cai no cold path normal.
+    /// Reprepara o engine após inicialização/stop sem abrir o microfone.
     func warmUpAudioCapture() async {
         guard microphoneManager.isPermissionGranted else { return }
         let preferredUID = microphoneManager.connectedMicrophones().first?.id
@@ -110,6 +121,10 @@ final class RecordingController {
         } catch {
             logger.info("warmUpAudioCapture: falhou (\(error.localizedDescription)) — start() usará cold path")
         }
+    }
+
+    func coolDownAudioCapture() async {
+        await audioCapture.coolDown()
     }
 
     /// Leitura direta do nível de áudio (WaveformView).
@@ -155,6 +170,7 @@ final class RecordingController {
             await recordingTask?.value
             recordingTask = nil
             _ = await audioCapture.stop()
+            // Repreparar engine para economizar cold start na próxima gravação.
             await warmUpAudioCapture()
         }
     }
@@ -179,68 +195,62 @@ final class RecordingController {
         state = .preparing
         errorMessage = nil
         TextInserter.saveFocusedApp()
-        logger.debug("startRecording: estado → preparing")
+        let tStartRec = CFAbsoluteTimeGetCurrent()
+        PerfSignposter.mark(.hotkey, metadata: ["state": "idle_to_preparing"])
+        logger.info("t=0ms startRecording: estado → preparing")
 
         // Callback @Sendable que faz hop para MainActor e promove preparing → recording.
+        // Também toca o chime "pronto pra falar" quando habilitado.
         let onFirstSample: @Sendable () -> Void = { [weak self] in
+            // Marca pontual: callback chegou ao controller (t3). Mede o gap
+            // entre o tap callback (`first_tap_callback`) e a primeira reação
+            // observável pelo usuário (chime + estado .recording).
+            PerfSignposter.mark(.firstSampleCallback)
             Task { @MainActor in
                 guard let self else { return }
                 guard self.state == .preparing else { return }
                 self.state = .recording
-                logger.debug("startRecording: 1º sample chegou → estado → recording")
+                if self.playRecordingSounds {
+                    self.startChime?.play()
+                }
+                let elapsed = (CFAbsoluteTimeGetCurrent() - tStartRec) * 1000
+                logger.info("t=\(String(format: "%.0f", elapsed), privacy: .public)ms 1º sample → .recording + chime")
             }
         }
 
+        // Fluxo otimizado: preferido + default. Se o preferido falhar, não
+        // iteramos todos os candidatos (cada retry custa 100–300 ms de
+        // engine.start()). Caímos direto para o default do sistema.
         recordingTask = Task {
             let candidatos = microphoneManager.connectedMicrophones()
+            let preferredUID = candidatos.first?.id
 
-            if candidatos.isEmpty {
-                logger.debug("startRecording: candidatos vazios, usando system default")
-                microphoneManager.activeMicrophoneID = nil
+            // Tentativa 1: mic preferido (ou default se lista vazia)
+            if let uid = preferredUID {
+                microphoneManager.activeMicrophoneID = uid
                 do {
-                    try await audioCapture.start(deviceUID: nil, onFirstSample: onFirstSample)
-                    logger.debug("startRecording: mic ativo = system default")
+                    try await audioCapture.start(deviceUID: uid, onFirstSample: onFirstSample)
+                    let elapsed = (CFAbsoluteTimeGetCurrent() - tStartRec) * 1000
+                    logger.info("t=\(String(format: "%.0f", elapsed), privacy: .public)ms audioCapture.start OK (preferred=\(uid, privacy: .public))")
+                    return
                 } catch {
-                    logger.error("startRecording: system default falhou → \(String(describing: error), privacy: .public)")
-                    microphoneManager.activeMicrophoneID = nil
-                    state = .idle
-                    errorMessage = "Não foi possível iniciar gravação em nenhum microfone disponível"
-                }
-                return
-            }
-
-            let nomes = candidatos.map(\.name).joined(separator: ", ")
-            logger.debug("startRecording: candidatos = [\(nomes, privacy: .public)]")
-
-            var sucesso = false
-            for (idx, mic) in candidatos.enumerated() {
-                if Task.isCancelled { return }
-                logger.debug("startRecording: tentando mic \(mic.name, privacy: .public) (pos \(idx + 1)/\(candidatos.count))")
-                microphoneManager.activeMicrophoneID = mic.id
-                do {
-                    try await audioCapture.start(deviceUID: mic.id, onFirstSample: onFirstSample)
-                    logger.debug("startRecording: mic \(mic.name, privacy: .public) OK; mic ativo = \(mic.id, privacy: .public)")
-                    sucesso = true
-                    break
-                } catch {
-                    logger.error("startRecording: mic \(mic.name, privacy: .public) (\(mic.id, privacy: .public)) falhou (\(String(describing: error), privacy: .public)), tentando próximo")
+                    logger.error("startRecording: preferido \(uid, privacy: .public) falhou (\(String(describing: error), privacy: .public)) — caindo para default")
                     _ = await audioCapture.stop()
                 }
+                if Task.isCancelled { return }
             }
 
-            if !sucesso {
-                if Task.isCancelled { return }
-                logger.debug("startRecording: caindo para system default")
+            // Tentativa 2 (última): default do sistema
+            microphoneManager.activeMicrophoneID = nil
+            do {
+                try await audioCapture.start(deviceUID: nil, onFirstSample: onFirstSample)
+                let elapsed = (CFAbsoluteTimeGetCurrent() - tStartRec) * 1000
+                logger.info("t=\(String(format: "%.0f", elapsed), privacy: .public)ms audioCapture.start OK (system default)")
+            } catch {
+                logger.error("startRecording: default falhou → \(String(describing: error), privacy: .public)")
                 microphoneManager.activeMicrophoneID = nil
-                do {
-                    try await audioCapture.start(deviceUID: nil, onFirstSample: onFirstSample)
-                    logger.debug("startRecording: mic ativo = system default")
-                } catch {
-                    logger.error("startRecording: system default falhou → \(String(describing: error), privacy: .public)")
-                    microphoneManager.activeMicrophoneID = nil
-                    state = .idle
-                    errorMessage = "Não foi possível iniciar gravação em nenhum microfone disponível"
-                }
+                state = .idle
+                errorMessage = "Não foi possível iniciar gravação em nenhum microfone disponível"
             }
         }
     }
@@ -254,9 +264,13 @@ final class RecordingController {
                 recordingTask = nil
 
                 let samples = await audioCapture.stop()
+                if playRecordingSounds {
+                    stopChime?.play()
+                }
 
                 guard samples.count > 8000 else { // < 0.5s
                     state = .idle
+                    await warmUpAudioCapture()
                     return
                 }
 
@@ -267,6 +281,7 @@ final class RecordingController {
 
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     state = .idle
+                    await warmUpAudioCapture()
                     return
                 }
 
@@ -340,5 +355,9 @@ final class RecordingController {
         case .authorized:
             errorMessage = nil
         }
+    }
+
+    private var playRecordingSounds: Bool {
+        UserDefaults.standard.bool(forKey: SettingsKey.playRecordingSounds)
     }
 }

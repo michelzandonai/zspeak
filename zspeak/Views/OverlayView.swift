@@ -594,6 +594,9 @@ struct TextInputBlock: View {
             }
 
             Button {
+                // LSUIElement: precisa ativar o app antes, senão Settings
+                // abre atrás de outras janelas.
+                NSApp.activate(ignoringOtherApps: true)
                 openSettings()
             } label: {
                 HStack(spacing: 4) {
