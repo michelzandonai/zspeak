@@ -233,6 +233,10 @@ actor AudioCapture {
     /// Duração do pre-roll em segundos. 500 ms a 16 kHz = 8 000 samples (~32 KB).
     /// Cobre toda a latência observada entre atalho e primeiro sample real.
     private static let preRollSeconds: Double = 0.5
+    /// Tempo para drenar buffers em voo após o stop. Com tap de 512 frames
+    /// (~11 ms em 48 kHz), 50 ms cobre callbacks pendentes sem adicionar atraso
+    /// perceptível ao fim da gravação.
+    private static let stopDrainNanoseconds: UInt64 = 50_000_000
     /// Capacidade do ring buffer de pre-roll em samples (16 kHz × 500 ms).
     /// Computado em escopo de tipo para poder ser usado em stored property
     /// initializer — `Self.xxx` é proibido ali em Swift 6.
@@ -278,14 +282,23 @@ actor AudioCapture {
     /// Timestamp do primeiro sample recebido no tap após `engine.start()`.
     /// Permanece nil até o primeiro callback.
     private(set) var firstSampleTimestamp: CFAbsoluteTime?
-    /// Indica se o engine está aberto em modo "hot window": HAL rodando, tap
-    /// instalado, pre-roll alimentado continuamente. A partir deste estado,
-    /// `start()` é instantâneo (apenas liga a flag de gravação e prefixa o
-    /// pre-roll). Controlado externamente por `warmUp()` / `coolDown()`.
+    /// Indica se há engine pré-preparado para reuso. O HAL permanece fechado.
     private var isHotWindowActive = false
     /// uniqueID do device ativo no hot window — se divergir do que `start()`
     /// recebe, descartamos o hot e reconfiguramos.
     private var hotWindowDeviceUID: String?
+    /// Timestamp do último `warmUp` concluído com sucesso. Usado pelo
+    /// `PerfSignposter` para reportar a idade do prepare (`warmup_age_ms`)
+    /// no momento do start — útil para correlacionar fast-path frio vs morno.
+    private var lastWarmUpTimestamp: CFAbsoluteTime?
+    /// Latch atômico do tap para medir o tempo do PRIMEIRO `resampleBuffer`.
+    /// Garante uma única `mark(.firstResample)` por sessão.
+    private let firstResampleLogged = AtomicInt()
+    /// Interval macro `start_called → first_sample`: aberto em `start()` e
+    /// fechado quando o primeiro sample real chega no tap. Reportado pelo
+    /// `PerfSignposter` como evento `.startToFirstSample` no log estruturado
+    /// (e como signpost no Instruments para visualização gráfica).
+    private var startToFirstSampleInterval: PerfSignposter.Interval?
     /// Callback invocado uma única vez quando o primeiro sample da sessão atual
     /// chega no tap. Usado pelo AppState para transicionar do estado `.preparing`
     /// (overlay com spinner) para `.recording` (overlay com waveform) apenas
@@ -293,7 +306,7 @@ actor AudioCapture {
     private var onFirstSampleCallback: (@Sendable () -> Void)?
 
     var isCapturing: Bool { isRunning }
-    /// Exposto para testes/diagnóstico — indica se o HAL está aberto em hot window.
+    /// Exposto para testes/diagnóstico — indica se há engine pré-preparado.
     var isHot: Bool { isHotWindowActive }
 
     /// Leitura não-isolated do nível de áudio. Evita hop para o actor no hotpath
@@ -330,7 +343,22 @@ actor AudioCapture {
         }
 
         let canReusePrewarm = isHotWindowActive && hotWindowDeviceUID == deviceUID
-        if isHotWindowActive && !canReusePrewarm {
+        let pathLabel = canReusePrewarm ? "fast" : "cold"
+        let deviceChanged = isHotWindowActive && !canReusePrewarm
+        let warmupAgeMs = lastWarmUpTimestamp.map { (callTime - $0) * 1000 } ?? -1
+
+        // Metadados base para todos os signposts desta sessão de start().
+        let baseMeta: [String: String] = [
+            "path": pathLabel,
+            "device_changed": String(deviceChanged),
+            "warmup_age_ms": warmupAgeMs >= 0 ? String(format: "%.1f", warmupAgeMs) : "n/a"
+        ]
+        PerfSignposter.mark(.startCalled, metadata: baseMeta)
+        // Interval macro: cobre todo o caminho start_called → primeiro sample.
+        // Fechado em `markFirstSampleIfNeeded` (acionado pelo tap callback).
+        startToFirstSampleInterval = PerfSignposter.begin(.startToFirstSample, metadata: baseMeta)
+
+        if deviceChanged {
             // Device mudou — descarta o prepare em cache.
             tearDownHotWindow()
         }
@@ -339,6 +367,7 @@ actor AudioCapture {
         samplesBuffer.reserveCapacity(Self.expectedMaxCaptureDurationSeconds * Self.targetSampleRate)
         resampleErrors.reset()
         firstSampleScheduled.reset()
+        firstResampleLogged.reset()
         preRollBuffer.clear()
         currentDeviceUID = deviceUID
         audioLevelMonitor.reset()
@@ -347,23 +376,27 @@ actor AudioCapture {
         firstSampleTimestamp = nil
         onFirstSampleCallback = onFirstSample
         isRecordingToMain.set(true)
+        isRunning = true
 
         do {
             if canReusePrewarm {
                 // Fast path: engine já preparado (prepare/installTap/format feitos
                 // em warmUp). Só liga o HAL agora. Salva ~30–50 ms do cold start.
+                let i = PerfSignposter.begin(.engineStart, metadata: baseMeta)
                 try engine.start()
+                PerfSignposter.end(i, metadata: baseMeta)
                 let tEngineStart = CFAbsoluteTimeGetCurrent()
                 engineStartTimestamp = tEngineStart
                 logger.info("start: fast path (prewarm) \(String(format: "%.1f", (tEngineStart - callTime) * 1000), privacy: .public)ms")
             } else {
                 engine = AVAudioEngine()
-                try startEngine(deviceUID: deviceUID)
+                try startEngine(deviceUID: deviceUID, baseMeta: baseMeta)
                 let tEngineStart = engineStartTimestamp ?? CFAbsoluteTimeGetCurrent()
                 logger.info("start: cold path \(String(format: "%.1f", (tEngineStart - callTime) * 1000), privacy: .public)ms")
             }
         } catch {
             isRecordingToMain.set(false)
+            isRunning = false
             restoreSystemDefaultInput()
             throw error
         }
@@ -383,9 +416,8 @@ actor AudioCapture {
         isRunning = true
     }
 
-    /// Pré-prepara o engine SEM abrir o HAL — `engine.prepare()` aloca buffers,
-    /// valida a topologia e instala o tap, mas NÃO inicia I/O de áudio; o
-    /// indicador laranja do mic NÃO acende.
+    /// Pré-prepara o engine SEM abrir o HAL: `engine.prepare()` aloca buffers,
+    /// valida a topologia e instala o tap, mas não inicia I/O.
     ///
     /// Ganho: o próximo `start()` no mesmo device pula ~30–50 ms de setup
     /// (alocação do AVAudioEngine, `installTap`, `prepare`) e chama apenas
@@ -405,9 +437,11 @@ actor AudioCapture {
             tearDownHotWindow()
         }
 
+        let warmMeta: [String: String] = ["scope": "warmup"]
+
         if let uid = deviceUID {
             logger.debug("warmUp: trocando default input do HAL para \(uid, privacy: .public)")
-            try overrideSystemDefaultInput(uniqueID: uid)
+            try overrideSystemDefaultInput(uniqueID: uid, scope: "warmup")
         }
 
         engine = AVAudioEngine()
@@ -423,16 +457,21 @@ actor AudioCapture {
         preRollBuffer.clear()
         isRecordingToMain.set(false)
         firstSampleScheduled.reset()
+        firstResampleLogged.reset()
+        let iTap = PerfSignposter.begin(.installTap, metadata: warmMeta)
         installTap(on: inputNode)
+        PerfSignposter.end(iTap, metadata: warmMeta)
+        let iPrep = PerfSignposter.begin(.enginePrepare, metadata: warmMeta)
         engine.prepare()
-        // NB: NÃO chamamos engine.start() aqui — manter o HAL fechado é o que
-        // garante que o indicador do mic fique apagado até a gravação real.
+        PerfSignposter.end(iPrep, metadata: warmMeta)
+        // HAL fechado: indicador do mic apagado até a gravação real.
 
         observeConfigurationChanges()
 
         isHotWindowActive = true
         hotWindowDeviceUID = deviceUID
-        logger.info("warmUp: engine pré-preparado (HAL fechado) para deviceUID=\(deviceUID ?? "system-default", privacy: .public)")
+        lastWarmUpTimestamp = CFAbsoluteTimeGetCurrent()
+        logger.info("warmUp: engine pré-preparado para deviceUID=\(deviceUID ?? "system-default", privacy: .public)")
     }
 
     /// Descarta o engine pré-preparado e restaura o default do sistema.
@@ -464,15 +503,15 @@ actor AudioCapture {
     /// Configura e inicia o engine (usado no start e na reconexão)
     /// Sem fallback silencioso: qualquer erro propaga para o chamador decidir.
     /// A camada de orquestração (AppState) é responsável por tentar system default.
-    private func startEngine(deviceUID: String?) throws {
-        try configureAndStartEngine(deviceUID: deviceUID)
+    private func startEngine(deviceUID: String?, baseMeta: [String: String] = [:]) throws {
+        try configureAndStartEngine(deviceUID: deviceUID, baseMeta: baseMeta)
     }
 
     /// Configura device, instala tap e inicia engine — pode lançar erro
-    private func configureAndStartEngine(deviceUID: String?) throws {
+    private func configureAndStartEngine(deviceUID: String?, baseMeta: [String: String] = [:]) throws {
         if let uid = deviceUID {
             logger.debug("configureAndStartEngine: trocando default input do HAL para \(uid, privacy: .public)")
-            try overrideSystemDefaultInput(uniqueID: uid)
+            try overrideSystemDefaultInput(uniqueID: uid, scope: "start")
         } else {
             logger.debug("configureAndStartEngine: usando system default (deviceUID=nil)")
         }
@@ -490,10 +529,17 @@ actor AudioCapture {
             throw AudioCaptureError.invalidFormat
         }
 
+        let iTap = PerfSignposter.begin(.installTap, metadata: baseMeta)
         installTap(on: inputNode)
+        PerfSignposter.end(iTap, metadata: baseMeta)
 
+        let iPrep = PerfSignposter.begin(.enginePrepare, metadata: baseMeta)
         engine.prepare()
+        PerfSignposter.end(iPrep, metadata: baseMeta)
+
+        let iStart = PerfSignposter.begin(.engineStart, metadata: baseMeta)
         try engine.start()
+        PerfSignposter.end(iStart, metadata: baseMeta)
         engineStartTimestamp = CFAbsoluteTimeGetCurrent()
     }
 
@@ -514,10 +560,19 @@ actor AudioCapture {
         let converter = self.converter
         let errors = resampleErrors
         let firstSampleLatch = firstSampleScheduled
+        let firstResampleLatch = firstResampleLogged
 
         inputNode.installTap(onBus: 0, bufferSize: 512, format: nil) { [weak self] avBuffer, _ in
             let tapTime = CFAbsoluteTimeGetCurrent()
             let recording = recordingFlag.current
+
+            // Marca primeiro tap callback durante gravação ativa. Único hop
+            // permitido aqui: PerfSignposter aloca String para log; aceitável
+            // 1× por sessão (latch setIfZero garante).
+            let isFirstSampleOfSession = recording && firstSampleLatch.setIfZero()
+            if isFirstSampleOfSession {
+                PerfSignposter.mark(.firstTapCallback)
+            }
 
             // Nível de áudio só é publicado durante gravação ativa — evita
             // que a UI (ou qualquer consumidor) veja atividade enquanto o
@@ -533,8 +588,17 @@ actor AudioCapture {
                 }
             }
 
+            // Mede custo do PRIMEIRO resampleBuffer (1× por sessão).
+            let measureFirstResample = isFirstSampleOfSession && firstResampleLatch.setIfZero()
             do {
-                let resampled = try converter.resampleBuffer(avBuffer)
+                let resampled: [Float]
+                if measureFirstResample {
+                    let i = PerfSignposter.begin(.firstResample)
+                    resampled = try converter.resampleBuffer(avBuffer)
+                    PerfSignposter.end(i)
+                } else {
+                    resampled = try converter.resampleBuffer(avBuffer)
+                }
                 // Ring de pre-roll é alimentado SEMPRE que o tap roda — serve
                 // tanto para cobrir o gap de abertura quanto para o gap entre
                 // gravações consecutivas dentro da mesma hot window.
@@ -549,7 +613,7 @@ actor AudioCapture {
             // Hop para o actor apenas UMA vez por sessão de gravação. No fast
             // path (hot window), o latch já foi setado em `start()`, então isso
             // vira no-op. No cold path, marca o primeiro sample real.
-            if recording, firstSampleLatch.setIfZero(), let self {
+            if isFirstSampleOfSession, let self {
                 Task { [weak self] in
                     await self?.markFirstSampleIfNeeded(at: tapTime)
                 }
@@ -567,15 +631,16 @@ actor AudioCapture {
             let delayMs = (timestamp - start) * 1000
             logger.info("markFirstSampleIfNeeded: primeiro sample após \(String(format: "%.1f", delayMs), privacy: .public)ms do engine.start()")
         }
+        if let interval = startToFirstSampleInterval {
+            PerfSignposter.end(interval)
+            startToFirstSampleInterval = nil
+        }
         let callback = onFirstSampleCallback
         onFirstSampleCallback = nil
         callback?()
     }
 
-    /// Para a gravação, drena buffers em voo (~150 ms) e retorna os samples.
-    /// Sempre desliga o HAL ao final — o indicador do mic apaga logo após o
-    /// stop. Se quiser pre-prepare para a próxima gravação, o orchestrator
-    /// chama `warmUp()` novamente (prepare-only, sem acender mic).
+    /// Para a gravação, drena buffers em voo, desliga o HAL e retorna os samples.
     func stop() async -> [Float] {
         guard isRunning else {
             restoreSystemDefaultInput()
@@ -583,7 +648,7 @@ actor AudioCapture {
         }
 
         isRecordingToMain.set(false)
-        try? await Task.sleep(nanoseconds: 150_000_000)
+        try? await Task.sleep(nanoseconds: Self.stopDrainNanoseconds)
 
         isRunning = false
         audioLevelMonitor.reset()
@@ -597,6 +662,8 @@ actor AudioCapture {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         restoreSystemDefaultInput()
+        isHotWindowActive = false
+        hotWindowDeviceUID = nil
         return result
     }
 
@@ -684,7 +751,13 @@ actor AudioCapture {
     /// anterior) e o HAL recém-trocado, mesmo com `AudioUnitUninitialize`/`Initialize`.
     /// Trocar o default do sistema e deixar o `AVAudioEngine` nascer já com o device
     /// correto evita o mismatch.
-    private func overrideSystemDefaultInput(uniqueID: String) throws {
+    private func overrideSystemDefaultInput(uniqueID: String, scope: String) throws {
+        let meta: [String: String] = ["scope": scope]
+        let interval = PerfSignposter.begin(.overrideDefaultInput, metadata: meta)
+        defer {
+            PerfSignposter.end(interval, metadata: meta)
+        }
+
         let deviceID = try findAudioDeviceID(for: uniqueID)
         let current = currentDefaultInputDeviceID()
         logger.debug("overrideSystemDefaultInput: default atual=\(String(describing: current)) alvo=\(deviceID) uid=\(uniqueID, privacy: .public)")

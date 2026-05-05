@@ -27,9 +27,7 @@ protocol AudioCapturing: Actor {
     /// (16 kHz mono float32). Preserva o hot window quando ativo.
     func stop() async -> [Float]
 
-    /// Abre o engine em "hot window": HAL ativo, pre-roll circular sendo
-    /// alimentado. `start()` subsequente no mesmo device tem latência zero.
-    /// Custo: indicador de microfone do macOS aceso até `coolDown()`.
+    /// Prepara o engine para o próximo start sem abrir o HAL/microfone.
     func warmUp(deviceUID: String?) async throws
 
     /// Fecha o hot window: desliga o engine, apaga o indicador do mic e

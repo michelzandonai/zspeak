@@ -74,6 +74,10 @@ final class RecordingController {
     private var recordingTask: Task<Void, Never>?
     private var isRequestingMicrophonePermission = false
 
+    private enum SettingsKey {
+        static let playRecordingSounds = "playRecordingSounds"
+    }
+
     /// Sons de feedback emitidos no início e fim da captura. Compensam o cold
     /// path: o usuário ouve o chime e sabe que pode falar — não precisa esperar
     /// nem olhar a UI. Pré-carregados no init para não adicionar latência no
@@ -97,11 +101,7 @@ final class RecordingController {
 
     // MARK: - Inicialização do modelo ASR
 
-    /// Carrega modelo ASR e pré-prepara o engine de áudio (sem acender o mic).
-    /// O `warmUp` abaixo não abre o HAL — apenas aloca buffers, instala o tap
-    /// e chama `engine.prepare()`. O indicador laranja do mic permanece apagado
-    /// até a gravação real, mas o `start()` subsequente economiza ~30-50 ms de
-    /// alocação.
+    /// Carrega modelo ASR e pré-prepara o engine de áudio sem abrir o microfone.
     func initialize() async {
         do {
             try await transcriber.initialize()
@@ -112,13 +112,7 @@ final class RecordingController {
         }
     }
 
-    /// Exposto para uso explícito (ex: pré-aquecimento opcional antes de um
-    /// fluxo sensível a latência). Não invocado automaticamente — o contrato
-    /// com o usuário é que o mic só acende durante gravação real.
-    ///
-    /// Se a janela quente for reintroduzida no futuro, o gatilho volta aqui
-    /// (em `stopRecording` / `cancelRecording`) e o timer de expiração vira
-    /// responsabilidade desta função.
+    /// Reprepara o engine após inicialização/stop sem abrir o microfone.
     func warmUpAudioCapture() async {
         guard microphoneManager.isPermissionGranted else { return }
         let preferredUID = microphoneManager.connectedMicrophones().first?.id
@@ -127,6 +121,10 @@ final class RecordingController {
         } catch {
             logger.info("warmUpAudioCapture: falhou (\(error.localizedDescription)) — start() usará cold path")
         }
+    }
+
+    func coolDownAudioCapture() async {
+        await audioCapture.coolDown()
     }
 
     /// Leitura direta do nível de áudio (WaveformView).
@@ -172,8 +170,7 @@ final class RecordingController {
             await recordingTask?.value
             recordingTask = nil
             _ = await audioCapture.stop()
-            // Repreparar engine para economizar cold start na próxima gravação
-            // (prepare-only, sem acender mic).
+            // Repreparar engine para economizar cold start na próxima gravação.
             await warmUpAudioCapture()
         }
     }
@@ -199,17 +196,23 @@ final class RecordingController {
         errorMessage = nil
         TextInserter.saveFocusedApp()
         let tStartRec = CFAbsoluteTimeGetCurrent()
+        PerfSignposter.mark(.hotkey, metadata: ["state": "idle_to_preparing"])
         logger.info("t=0ms startRecording: estado → preparing")
 
         // Callback @Sendable que faz hop para MainActor e promove preparing → recording.
-        // Também toca o chime "pronto pra falar" — feedback sonoro evita que o
-        // usuário dependa de olhar a UI para saber o momento certo de falar.
+        // Também toca o chime "pronto pra falar" quando habilitado.
         let onFirstSample: @Sendable () -> Void = { [weak self] in
+            // Marca pontual: callback chegou ao controller (t3). Mede o gap
+            // entre o tap callback (`first_tap_callback`) e a primeira reação
+            // observável pelo usuário (chime + estado .recording).
+            PerfSignposter.mark(.firstSampleCallback)
             Task { @MainActor in
                 guard let self else { return }
                 guard self.state == .preparing else { return }
                 self.state = .recording
-                self.startChime?.play()
+                if self.playRecordingSounds {
+                    self.startChime?.play()
+                }
                 let elapsed = (CFAbsoluteTimeGetCurrent() - tStartRec) * 1000
                 logger.info("t=\(String(format: "%.0f", elapsed), privacy: .public)ms 1º sample → .recording + chime")
             }
@@ -261,10 +264,13 @@ final class RecordingController {
                 recordingTask = nil
 
                 let samples = await audioCapture.stop()
-                stopChime?.play()
+                if playRecordingSounds {
+                    stopChime?.play()
+                }
 
                 guard samples.count > 8000 else { // < 0.5s
                     state = .idle
+                    await warmUpAudioCapture()
                     return
                 }
 
@@ -275,6 +281,7 @@ final class RecordingController {
 
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     state = .idle
+                    await warmUpAudioCapture()
                     return
                 }
 
@@ -348,5 +355,9 @@ final class RecordingController {
         case .authorized:
             errorMessage = nil
         }
+    }
+
+    private var playRecordingSounds: Bool {
+        UserDefaults.standard.bool(forKey: SettingsKey.playRecordingSounds)
     }
 }

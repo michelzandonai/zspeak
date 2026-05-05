@@ -264,6 +264,10 @@ final class AppState {
         await recordingController.warmUpAudioCapture()
     }
 
+    func coolDownAudioCapture() async {
+        await recordingController.coolDownAudioCapture()
+    }
+
     // MARK: - Audio level (UI)
 
     nonisolated func currentAudioLevel() async -> Float {
