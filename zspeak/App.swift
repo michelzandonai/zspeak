@@ -8,6 +8,7 @@ final class OverlayController {
     private let promptModeManager: PromptModeManager
     private let model = OverlayModel()
     private var isShowing = false
+    private var lastAutoAppliedPromptKey: String?
 
     init(appState: AppState, promptModeManager: PromptModeManager) {
         self.appState = appState
@@ -21,6 +22,10 @@ final class OverlayController {
         // Aplica prompt selecionado na última transcrição
         model.onApplyPrompt = { [weak appState] prompt in
             appState?.applyPromptToLast(prompt)
+        }
+
+        model.onPromptSelected = { [weak self] prompt in
+            self?.applyPromptFromSelection(prompt)
         }
 
         // Usa texto do clipboard como input e aplica o prompt ativo (TASK-012)
@@ -45,6 +50,7 @@ final class OverlayController {
             _ = appState.lastLLMResult
             _ = appState.lastLLMPromptName
             _ = appState.lastTranscription
+            _ = appState.lastTranscriptionRecordID
             _ = promptModeManager.isEnabled
             _ = appState.correctionPromptStore?.prompts
         } onChange: { [weak self] in
@@ -84,6 +90,12 @@ final class OverlayController {
 
         if let store = appState.correctionPromptStore {
             model.prompts = store.prompts
+            let selectedStillExists = model.selectedPromptID.map { selectedID in
+                store.prompts.contains(where: { $0.id == selectedID })
+            } ?? false
+            if !selectedStillExists {
+                model.selectedPromptID = store.activePrompt?.id ?? store.prompts.first?.id
+            }
         }
 
         if let app = TextInserter.previousApp {
@@ -112,8 +124,38 @@ final class OverlayController {
             isShowing = false
         }
 
+        autoApplyPromptIfNeeded()
+
         // Re-registrar observação (withObservationTracking é one-shot)
         startObserving()
+    }
+
+    private func autoApplyPromptIfNeeded() {
+        guard promptModeManager.isEnabled else { return }
+        guard appState.state == .idle else { return }
+        guard !appState.isApplyingPrompt else { return }
+        guard !appState.lastTranscription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let prompt = model.selectedPrompt else { return }
+
+        let key = autoApplyKey(prompt: prompt)
+        guard key != lastAutoAppliedPromptKey else { return }
+        lastAutoAppliedPromptKey = key
+        appState.applyPromptToLast(prompt)
+    }
+
+    private func applyPromptFromSelection(_ prompt: CorrectionPrompt) {
+        guard promptModeManager.isEnabled else { return }
+        guard appState.state == .idle else { return }
+        guard !appState.isApplyingPrompt else { return }
+        guard !appState.lastTranscription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        lastAutoAppliedPromptKey = autoApplyKey(prompt: prompt)
+        appState.applyPromptToLast(prompt)
+    }
+
+    private func autoApplyKey(prompt: CorrectionPrompt) -> String {
+        let source = appState.lastTranscriptionRecordID?.uuidString ?? appState.lastTranscription
+        return "\(prompt.id.uuidString)|\(source)"
     }
 }
 

@@ -33,6 +33,8 @@ final class OverlayModel {
     var prompts: [CorrectionPrompt] = []
     var isApplyingPrompt: Bool = false
     var onApplyPrompt: ((CorrectionPrompt) -> Void)?
+    /// Chamado ao selecionar outro prompt; no Modo Prompt a aplicação é automática.
+    var onPromptSelected: ((CorrectionPrompt) -> Void)?
     /// Closure para aplicar o prompt ativo no texto atual do clipboard (TASK-012)
     var onPasteAndApply: (() -> Void)?
     /// Closure chamada quando o TextField detecta paste — passa o texto colado (TASK-013)
@@ -177,35 +179,18 @@ struct OverlayView: View {
                     .tint(.white.opacity(0.7))
                     .frame(height: 20)
                     .accessibilityLabel("Processando transcrição")
-            } else if model.promptModeEnabled {
-                if !model.lastTranscription.isEmpty {
-                    // Mostra a transcrição captada para o usuário revisar antes de aplicar LLM
-                    ScrollView {
-                        Text(model.lastTranscription)
-                            .font(.body)
-                            .foregroundStyle(.white.opacity(0.95))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                            .accessibilityLabel("Última transcrição")
-                            .accessibilityValue(model.lastTranscription)
-                    }
-                    .frame(maxHeight: 100)
-                    .padding(8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(.white.opacity(0.05))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(.white.opacity(0.2), lineWidth: 0.5)
-                    )
-                } else {
+            }
+
+            if model.promptModeEnabled {
+                if !model.lastTranscription.isEmpty || state != .idle {
+                    TranscriptionPreviewBlock(text: model.lastTranscription, state: state)
+                } else if state == .idle {
                     // TextField editável — usuário pode colar texto para o LLM (TASK-013)
                     TextInputBlock(model: model)
                 }
             }
 
-            // Seção inferior: seletor de prompt + botão aplicar (Modo Prompt)
+            // Seção inferior: seletor de prompt + ações rápidas (Modo Prompt)
             if model.promptModeEnabled {
                 Divider()
                     .background(.white.opacity(0.25))
@@ -223,7 +208,7 @@ struct OverlayView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .frame(width: model.promptModeEnabled ? 440 : 320)
+        .frame(width: model.promptModeEnabled ? 520 : 320)
         .fixedSize(horizontal: false, vertical: true)
         .background(.black.opacity(0.85))
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -241,7 +226,61 @@ struct OverlayView: View {
     }
 }
 
-/// Barra inferior do overlay no Modo Prompt: Menu dropdown com todos os prompts + botão Aplicar
+/// Transcrição capturada pelo ASR, mantida visível no Modo Prompt mesmo enquanto
+/// uma nova gravação/processamento acontece. O texto continua selecionável para
+/// permitir inspeção rápida antes/depois da LLM.
+private struct TranscriptionPreviewBlock: View {
+    let text: String
+    let state: AppState.RecordingState
+
+    private var isWaitingForText: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var waitingMessage: String {
+        switch state {
+        case .preparing:
+            return "Preparando microfone..."
+        case .recording:
+            return "Gravando... a transcrição aparecerá aqui ao finalizar."
+        case .processing:
+            return "Processando transcrição..."
+        case .idle:
+            return "Nenhuma transcrição capturada ainda."
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Transcrição capturada", systemImage: "quote.bubble")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.82))
+
+            ScrollView {
+                Text(isWaitingForText ? waitingMessage : text)
+                    .font(.body)
+                    .foregroundStyle(isWaitingForText ? .white.opacity(0.62) : .white.opacity(0.95))
+                    .italic(isWaitingForText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .accessibilityLabel("Transcrição capturada")
+                    .accessibilityValue(isWaitingForText ? waitingMessage : text)
+            }
+            .frame(maxHeight: 96)
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.white.opacity(0.2), lineWidth: 0.5)
+        )
+    }
+}
+
+/// Barra inferior do overlay no Modo Prompt: menu de prompts + ações rápidas.
 struct PromptSelectorBar: View {
     let model: OverlayModel
 
@@ -266,6 +305,7 @@ struct PromptSelectorBar: View {
                     ForEach(model.prompts) { prompt in
                         Button {
                             model.selectedPromptID = prompt.id
+                            model.onPromptSelected?(prompt)
                         } label: {
                             if prompt.id == model.selectedPromptID {
                                 Label(prompt.name, systemImage: "checkmark")
@@ -329,27 +369,6 @@ struct PromptSelectorBar: View {
                 .accessibilityHint("Usa o texto atual do clipboard como entrada do prompt")
 
                 Spacer()
-
-                // Botão Aplicar
-                Button {
-                    if let prompt = model.selectedPrompt {
-                        model.onApplyPrompt?(prompt)
-                    }
-                } label: {
-                    Text("Aplicar")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(Color.accentColor.opacity(0.85))
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(model.selectedPrompt == nil)
-                .accessibilityLabel("Aplicar prompt")
-                .accessibilityHint(model.selectedPrompt.map { "Aplica o prompt \($0.name)" } ?? "Nenhum prompt selecionado")
             }
         }
         .frame(maxWidth: .infinity)
@@ -434,27 +453,579 @@ struct LLMResultView: View {
 
             // Conteúdo expandido
             if model.isResultExpanded, let text = model.lastLLMResult {
-                ScrollView {
-                    Text(text)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.95))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                        .accessibilityLabel("Texto gerado pelo prompt")
-                        .accessibilityValue(text)
+                if !model.lastTranscription.isEmpty {
+                    LLMSplitDiffBlock(
+                        original: model.lastTranscription,
+                        revised: text,
+                        isApplying: model.isApplyingPrompt
+                    )
+                } else {
+                    LLMTextBlock(text: text, isApplying: model.isApplyingPrompt)
                 }
-                .frame(maxHeight: 120)
-                .padding(8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(.white.opacity(0.05))
+            }
+        }
+    }
+}
+
+/// Texto final produzido pela LLM. Durante streaming, mostra o parcial; quando
+/// ainda não chegou nada, mantém um placeholder para o usuário saber que o app
+/// está esperando o modelo.
+private struct LLMTextBlock: View {
+    let text: String
+    let isApplying: Bool
+
+    private var displayText: String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty && isApplying {
+            return "Aguardando resposta da LLM..."
+        }
+        return text
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Tratado pela LLM", systemImage: "sparkles")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.82))
+
+            ScrollView {
+                Text(displayText)
+                    .font(.caption)
+                    .foregroundStyle(displayText == "Aguardando resposta da LLM..." ? .white.opacity(0.62) : .white.opacity(0.95))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .accessibilityLabel("Texto tratado pela LLM")
+                    .accessibilityValue(displayText)
+            }
+            .frame(maxHeight: 108)
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.white.opacity(0.2), lineWidth: 0.5)
+        )
+    }
+}
+
+/// Comparação lado a lado em estilo diff split do VS Code/Git:
+/// esquerda = transcrição capturada, direita = texto tratado pela LLM.
+/// Remoções ficam destacadas em vermelho no lado esquerdo; adições em verde
+/// no lado direito.
+private struct LLMSplitDiffBlock: View {
+    let original: String
+    let revised: String
+    let isApplying: Bool
+
+    private var isWaitingForLLM: Bool {
+        revised.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isApplying
+    }
+
+    private var diff: PromptSideBySideDiff {
+        if isWaitingForLLM {
+            return PromptSideBySideDiff(
+                left: [PromptDiffSegment(kind: .equal, text: original)],
+                right: []
+            )
+        }
+        return PromptWordDiff.sideBySide(original: original, revised: revised)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Comparação", systemImage: "rectangle.split.2x1")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.82))
+
+            HStack(alignment: .top, spacing: 8) {
+                PromptDiffColumn(
+                    title: "Transcrito",
+                    systemImage: "quote.bubble",
+                    segments: diff.left,
+                    placeholder: "Sem transcrição"
                 )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(.white.opacity(0.2), lineWidth: 0.5)
+
+                PromptDiffColumn(
+                    title: "Tratado pela LLM",
+                    systemImage: "sparkles",
+                    segments: diff.right,
+                    placeholder: isWaitingForLLM ? "Aguardando resposta da LLM..." : "Sem texto tratado"
                 )
             }
         }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.white.opacity(0.2), lineWidth: 0.5)
+        )
+    }
+}
+
+private struct PromptDiffColumn: View {
+    let title: String
+    let systemImage: String
+    let segments: [PromptDiffSegment]
+    let placeholder: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: systemImage)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.78))
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    if segments.isEmpty {
+                        Text(placeholder)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.62))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                    } else {
+                        PromptInlineDiffText(segments: segments)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 168)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(7)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.black.opacity(0.18))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.white.opacity(0.16), lineWidth: 0.5)
+        )
+    }
+}
+
+private struct PromptInlineDiffText: View {
+    let segments: [PromptDiffSegment]
+
+    private var text: Text {
+        var output = Text("")
+        for (index, segment) in segments.enumerated() {
+            if index > 0 {
+                output = output + Text(" ")
+            }
+            output = output + styledText(for: segment)
+        }
+        return output
+    }
+
+    var body: some View {
+        text
+            .font(.caption)
+            .lineSpacing(3)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Texto com diferencas destacadas")
+    }
+
+    private func styledText(for segment: PromptDiffSegment) -> Text {
+        switch segment.kind {
+        case .equal:
+            return Text(segment.text)
+                .foregroundColor(.white.opacity(0.88))
+        case .removed:
+            return Text(segment.text)
+                .foregroundColor(.red.opacity(0.98))
+                .strikethrough(true, color: .red.opacity(0.9))
+        case .added:
+            return Text(segment.text)
+                .foregroundColor(.green.opacity(0.98))
+                .bold()
+        }
+    }
+}
+
+private struct PromptDiffSegmentRow: View {
+    let segment: PromptDiffSegment
+
+    private var tint: Color {
+        switch segment.kind {
+        case .equal: return .white
+        case .removed: return .red
+        case .added: return .green
+        }
+    }
+
+    private var marker: String {
+        switch segment.kind {
+        case .equal: return " "
+        case .removed: return "-"
+        case .added: return "+"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(marker)
+                .font(.caption.monospaced().weight(.bold))
+                .foregroundStyle(tint.opacity(segment.kind == .equal ? 0.25 : 0.95))
+                .frame(width: 12, alignment: .center)
+
+            Text(segment.text)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(segment.kind == .equal ? 0.86 : 0.96))
+                .strikethrough(segment.kind == .removed, color: .white.opacity(0.75))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(segment.kind == .equal ? .white.opacity(0.035) : tint.opacity(0.18))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(segment.kind == .equal ? .white.opacity(0.06) : tint.opacity(0.36), lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(segment.text)
+    }
+
+    private var accessibilityLabel: String {
+        switch segment.kind {
+        case .equal: return "Sem alteração"
+        case .removed: return "Removido"
+        case .added: return "Adicionado"
+        }
+    }
+}
+
+private struct PromptSideBySideDiff {
+    let left: [PromptDiffSegment]
+    let right: [PromptDiffSegment]
+}
+
+private struct PromptDiffSegment: Identifiable {
+    enum Kind {
+        case equal
+        case removed
+        case added
+    }
+
+    let id = UUID()
+    let kind: Kind
+    let text: String
+}
+
+/// Diff simples em estilo GitHub: vermelho para trechos removidos da
+/// transcrição bruta e verde para trechos adicionados pelo prompt/LLM.
+private struct LLMDiffBlock: View {
+    let original: String
+    let revised: String
+
+    private var chunks: [PromptDiffChunk] {
+        PromptWordDiff.chunks(original: original, revised: revised)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Mudanças", systemImage: "plus.forwardslash.minus")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.82))
+
+            if chunks.isEmpty {
+                Text("Sem mudanças relevantes.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.62))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(chunks) { chunk in
+                            PromptDiffRow(chunk: chunk)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 120)
+            }
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.white.opacity(0.2), lineWidth: 0.5)
+        )
+    }
+}
+
+private struct PromptDiffRow: View {
+    let chunk: PromptDiffChunk
+
+    private var tint: Color {
+        switch chunk.kind {
+        case .removed: return .red
+        case .added: return .green
+        }
+    }
+
+    private var prefix: String {
+        switch chunk.kind {
+        case .removed: return "-"
+        case .added: return "+"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(prefix)
+                .font(.caption.monospaced().weight(.bold))
+                .foregroundStyle(tint.opacity(0.95))
+                .frame(width: 12, alignment: .center)
+
+            Text(chunk.text)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.94))
+                .strikethrough(chunk.kind == .removed, color: .white.opacity(0.75))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(tint.opacity(0.18))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(tint.opacity(0.36), lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(chunk.kind == .removed ? "Removido" : "Adicionado")
+        .accessibilityValue(chunk.text)
+    }
+}
+
+private struct PromptDiffChunk: Identifiable {
+    enum Kind {
+        case removed
+        case added
+    }
+
+    let id = UUID()
+    let kind: Kind
+    let text: String
+}
+
+private enum PromptWordDiff {
+    private enum Edit {
+        case equal(String)
+        case removed(String)
+        case added(String)
+    }
+
+    static func chunks(original: String, revised: String) -> [PromptDiffChunk] {
+        let originalTokens = tokenize(original)
+        let revisedTokens = tokenize(revised)
+        guard !originalTokens.isEmpty || !revisedTokens.isEmpty else { return [] }
+
+        let edits = edits(originalTokens: originalTokens, revisedTokens: revisedTokens)
+        return groupedChunks(from: edits)
+    }
+
+    static func sideBySide(original: String, revised: String) -> PromptSideBySideDiff {
+        let originalTokens = tokenize(original)
+        let revisedTokens = tokenize(revised)
+        guard !originalTokens.isEmpty || !revisedTokens.isEmpty else {
+            return PromptSideBySideDiff(left: [], right: [])
+        }
+
+        let edits = edits(originalTokens: originalTokens, revisedTokens: revisedTokens)
+        return groupedSideBySide(from: edits)
+    }
+
+    private static func tokenize(_ text: String) -> [String] {
+        text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    }
+
+    private static func equivalent(_ lhs: String, _ rhs: String) -> Bool {
+        let normalizedLeft = normalized(lhs)
+        let normalizedRight = normalized(rhs)
+        guard !normalizedLeft.isEmpty, !normalizedRight.isEmpty else {
+            return lhs.compare(rhs, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+        return normalizedLeft == normalizedRight
+    }
+
+    private static func normalized(_ token: String) -> String {
+        token
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
+    }
+
+    private static func edits(originalTokens: [String], revisedTokens: [String]) -> [Edit] {
+        let originalCount = originalTokens.count
+        let revisedCount = revisedTokens.count
+        var table = Array(
+            repeating: Array(repeating: 0, count: revisedCount + 1),
+            count: originalCount + 1
+        )
+
+        if originalCount > 0 && revisedCount > 0 {
+            for i in stride(from: originalCount - 1, through: 0, by: -1) {
+                for j in stride(from: revisedCount - 1, through: 0, by: -1) {
+                    if equivalent(originalTokens[i], revisedTokens[j]) {
+                        table[i][j] = table[i + 1][j + 1] + 1
+                    } else {
+                        table[i][j] = max(table[i + 1][j], table[i][j + 1])
+                    }
+                }
+            }
+        }
+
+        var result: [Edit] = []
+        var i = 0
+        var j = 0
+
+        while i < originalCount && j < revisedCount {
+            if equivalent(originalTokens[i], revisedTokens[j]) {
+                result.append(.equal(revisedTokens[j]))
+                i += 1
+                j += 1
+            } else if table[i + 1][j] >= table[i][j + 1] {
+                result.append(.removed(originalTokens[i]))
+                i += 1
+            } else {
+                result.append(.added(revisedTokens[j]))
+                j += 1
+            }
+        }
+
+        while i < originalCount {
+            result.append(.removed(originalTokens[i]))
+            i += 1
+        }
+
+        while j < revisedCount {
+            result.append(.added(revisedTokens[j]))
+            j += 1
+        }
+
+        return result
+    }
+
+    private static func groupedChunks(from edits: [Edit]) -> [PromptDiffChunk] {
+        var chunks: [PromptDiffChunk] = []
+        var currentKind: PromptDiffChunk.Kind?
+        var currentWords: [String] = []
+
+        func flush() {
+            guard let kind = currentKind else { return }
+            let text = currentWords.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                chunks.append(PromptDiffChunk(kind: kind, text: text))
+            }
+            currentKind = nil
+            currentWords = []
+        }
+
+        for edit in edits {
+            switch edit {
+            case .equal:
+                flush()
+            case .removed(let word):
+                if currentKind != .removed {
+                    flush()
+                    currentKind = .removed
+                }
+                currentWords.append(word)
+            case .added(let word):
+                if currentKind != .added {
+                    flush()
+                    currentKind = .added
+                }
+                currentWords.append(word)
+            }
+        }
+
+        flush()
+        return chunks
+    }
+
+    private static func groupedSideBySide(from edits: [Edit]) -> PromptSideBySideDiff {
+        var left: [PromptDiffSegment] = []
+        var right: [PromptDiffSegment] = []
+
+        var leftKind: PromptDiffSegment.Kind?
+        var leftWords: [String] = []
+        var rightKind: PromptDiffSegment.Kind?
+        var rightWords: [String] = []
+
+        func flushLeft() {
+            guard let kind = leftKind else { return }
+            let text = leftWords.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                left.append(PromptDiffSegment(kind: kind, text: text))
+            }
+            leftKind = nil
+            leftWords = []
+        }
+
+        func flushRight() {
+            guard let kind = rightKind else { return }
+            let text = rightWords.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                right.append(PromptDiffSegment(kind: kind, text: text))
+            }
+            rightKind = nil
+            rightWords = []
+        }
+
+        func appendLeft(kind: PromptDiffSegment.Kind, word: String) {
+            if leftKind != kind {
+                flushLeft()
+                leftKind = kind
+            }
+            leftWords.append(word)
+        }
+
+        func appendRight(kind: PromptDiffSegment.Kind, word: String) {
+            if rightKind != kind {
+                flushRight()
+                rightKind = kind
+            }
+            rightWords.append(word)
+        }
+
+        for edit in edits {
+            switch edit {
+            case .equal(let word):
+                appendLeft(kind: .equal, word: word)
+                appendRight(kind: .equal, word: word)
+            case .removed(let word):
+                appendLeft(kind: .removed, word: word)
+            case .added(let word):
+                appendRight(kind: .added, word: word)
+            }
+        }
+
+        flushLeft()
+        flushRight()
+
+        return PromptSideBySideDiff(left: left, right: right)
     }
 }
 

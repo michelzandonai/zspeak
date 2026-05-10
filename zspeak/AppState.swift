@@ -40,7 +40,9 @@ final class AppState {
     var correctionPromptStore: CorrectionPromptStore? {
         didSet { wireActivePromptProvider() }
     }
-    var promptModeManager: PromptModeManager?
+    var promptModeManager: PromptModeManager? {
+        didSet { wirePromptModeHook() }
+    }
     var diarizationManager: DiarizationManager? {
         didSet { fileCoordinator.diarizationManager = diarizationManager }
     }
@@ -217,6 +219,12 @@ final class AppState {
     private func wireActivePromptProvider() {
         llmCoordinator.activePromptProvider = { [weak self] in
             self?.correctionPromptStore?.activePrompt
+        }
+    }
+
+    private func wirePromptModeHook() {
+        recordingController.shouldDeferInsertionAfterTranscription = { [weak self] in
+            self?.promptModeManager?.isEnabled == true
         }
     }
 

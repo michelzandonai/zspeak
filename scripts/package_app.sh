@@ -3,13 +3,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="zspeak"
-BUILD_DIR="$(cd "$ROOT_DIR" && swift build --show-bin-path)"
+DERIVED_DATA_PATH="$ROOT_DIR/build"
+BUILD_DIR="$DERIVED_DATA_PATH/Build/Products/Release"
 APP_DIR="$ROOT_DIR/build/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 INFO_PLIST="$ROOT_DIR/zspeak/Info.plist"
 ENTITLEMENTS="$ROOT_DIR/zspeak/zspeak.entitlements"
+LOCAL_SIGNING_IDENTITY_NAME="zspeak Local Code Signing"
 
 # ffmpeg arm64 — baixa de martin-riedl.de e cacheia localmente
 FFMPEG_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip"
@@ -18,11 +20,91 @@ FFMPEG_CACHE_BINARY="$FFMPEG_CACHE_DIR/ffmpeg"
 
 detect_identity() {
   security find-identity -v -p codesigning \
-    | awk -F '"' '/Apple Development:/ { print $2; exit }'
+    | awk -F '"' '/Developer ID Application:|Apple Development:|Mac Developer:/ { print $2; exit }'
+}
+
+detect_local_identity() {
+  security find-identity -v -p codesigning \
+    | awk -F '"' -v name="$LOCAL_SIGNING_IDENTITY_NAME" '$0 ~ name { print $2; exit }'
+}
+
+create_local_identity() {
+  local identity
+  identity="$(detect_local_identity)"
+  if [[ -n "$identity" ]]; then
+    echo "$identity"
+    return 0
+  fi
+
+  local cert_dir="$HOME/.cache/zspeak/codesign"
+  local keychain="$HOME/Library/Keychains/login.keychain-db"
+  local key_path="$cert_dir/zspeak-local-codesign.key"
+  local cert_path="$cert_dir/zspeak-local-codesign.crt"
+  local p12_path="$cert_dir/zspeak-local-codesign.p12"
+  local p12_password="zspeak-local-codesign"
+  local openssl_config="$cert_dir/openssl-code-signing.cnf"
+
+  mkdir -p "$cert_dir"
+  cat > "$openssl_config" <<CONFIG
+[ req ]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[ req_distinguished_name ]
+CN = $LOCAL_SIGNING_IDENTITY_NAME
+
+[ v3_req ]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature
+extendedKeyUsage = codeSigning
+subjectKeyIdentifier = hash
+CONFIG
+
+  echo "  Criando identidade local de assinatura: $LOCAL_SIGNING_IDENTITY_NAME" >&2
+  openssl req \
+    -new \
+    -newkey rsa:2048 \
+    -x509 \
+    -days 3650 \
+    -nodes \
+    -config "$openssl_config" \
+    -keyout "$key_path" \
+    -out "$cert_path" >/dev/null 2>&1
+
+  openssl pkcs12 \
+    -export \
+    -out "$p12_path" \
+    -inkey "$key_path" \
+    -in "$cert_path" \
+    -passout pass:"$p12_password" >/dev/null 2>&1
+
+  security import "$p12_path" \
+    -k "$keychain" \
+    -P "$p12_password" \
+    -A \
+    -T /usr/bin/codesign \
+    -T /usr/bin/security >/dev/null
+
+  security add-trusted-cert \
+    -d \
+    -r trustRoot \
+    -p codeSign \
+    -k "$keychain" \
+    "$cert_path" >/dev/null 2>&1 || true
+
+  identity="$(detect_local_identity)"
+  if [[ -n "$identity" ]]; then
+    echo "$identity"
+  fi
 }
 
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-$(detect_identity)}"
 if [[ -z "${SIGNING_IDENTITY}" ]]; then
+  SIGNING_IDENTITY="$(create_local_identity)"
+fi
+if [[ -z "${SIGNING_IDENTITY}" ]]; then
+  echo "  AVISO: identidade local indisponível; usando assinatura ad-hoc."
   SIGNING_IDENTITY="-"
 fi
 
@@ -74,7 +156,12 @@ download_ffmpeg() {
 
 echo "==> Buildando binário"
 cd "$ROOT_DIR"
-swift build
+xcodebuild \
+  -scheme "$APP_NAME" \
+  -configuration Release \
+  -destination "platform=macOS" \
+  -derivedDataPath "$DERIVED_DATA_PATH" \
+  build
 
 echo "==> Preparando ffmpeg arm64 (para transcrição de arquivos não-nativos)"
 download_ffmpeg
@@ -97,7 +184,10 @@ else
 fi
 
 echo "==> Compilando Metal shaders do MLX"
-METAL_DIR="$ROOT_DIR/.build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
+METAL_DIR="$ROOT_DIR/build/SourcePackages/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
+if [ ! -d "$METAL_DIR" ]; then
+  METAL_DIR="$ROOT_DIR/.build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
+fi
 if [ ! -d "$METAL_DIR" ]; then
   echo "  AVISO: Diretório Metal do MLX não encontrado, pulando metallib"
 elif ! xcrun -sdk macosx metal --version >/dev/null 2>&1; then

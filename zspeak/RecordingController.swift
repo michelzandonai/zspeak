@@ -65,8 +65,11 @@ final class RecordingController {
 
     /// Hooks sem acoplamento direto aos stores (injetados pelo `AppState`):
     /// - `applyVocabularyReplacements`: pós-transcrição, aplica substituições alias→term.
+    /// - `shouldDeferInsertionAfterTranscription`: quando true, não cola/copia a
+    ///   transcrição bruta; deixa o Modo Prompt inserir apenas o resultado da LLM.
     /// - `persistTranscription`: persiste o record no histórico e retorna o UUID gerado.
     var applyVocabularyReplacements: (@MainActor (String) -> String)?
+    var shouldDeferInsertionAfterTranscription: (@MainActor () -> Bool)?
     var persistTranscription: (@MainActor (_ text: String, _ modelName: String, _ duration: Double, _ targetAppName: String?, _ samples: [Float]?) -> UUID?)?
 
     // MARK: - Tasks internas
@@ -295,7 +298,14 @@ final class RecordingController {
                 )
                 lastTranscriptionRecordID = newID
 
-                if accessibilityGranted {
+                let shouldDeferInsertion = shouldDeferInsertionAfterTranscription?() ?? false
+                if shouldDeferInsertion {
+                    // Modo Prompt: não cola a transcrição bruta. Zera o contador
+                    // para o LLM inserir direto o primeiro resultado, sem apagar
+                    // um paste antigo por engano.
+                    TextInserter.lastPastedCount = 0
+                    logger.info("Modo Prompt ativo: transcrição bruta não será inserida antes da LLM")
+                } else if accessibilityGranted {
                     let inserted = textInserter.insert(text)
                     if !inserted {
                         textInserter.copyToClipboard(text)

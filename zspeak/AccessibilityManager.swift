@@ -60,10 +60,27 @@ final class AccessibilityManager {
 
     // MARK: - Ações
 
+    /// Revalida manualmente o estado após o usuário voltar dos Ajustes do Sistema.
+    func refreshPermissionState() {
+        checkPermission()
+    }
+
     /// Solicita permissão de Acessibilidade (mostra prompt do sistema)
     func requestPermission() {
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
+        checkPermission()
+    }
+
+    /// Solicita a permissão e leva o usuário direto para a tela correta do macOS.
+    func startGuidedPermissionFlow() {
+        requestPermission()
+
+        guard !isGranted else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            openSystemSettings()
+        }
     }
 
     /// Abre System Settings na seção de Acessibilidade

@@ -10,9 +10,24 @@ struct PermissionsPage: View {
     @Environment(MicrophoneManager.self) private var microphoneManager
     @Environment(AccessibilityManager.self) private var accessibilityManager
 
+    @State private var isRunningSetup = false
+
     var body: some View {
         Form {
             Section { summaryHeader }
+
+            if pendingCount > 0 {
+                Section {
+                    Button {
+                        Task { await runGuidedSetup() }
+                    } label: {
+                        Label(isRunningSetup ? "Configurando..." : "Configurar permissões", systemImage: "checklist.checked")
+                    }
+                    .disabled(isRunningSetup)
+                } footer: {
+                    Text("O zspeak abre os prompts e os Ajustes certos. O macOS ainda exige que você confirme Microfone e Acessibilidade manualmente.")
+                }
+            }
 
             // Microfone
             Section {
@@ -50,7 +65,7 @@ struct PermissionsPage: View {
 
             if !accessibilityManager.isGranted {
                 Section("Como ativar a acessibilidade") {
-                    Label("Clique em \"Abrir Ajustes do Sistema\"", systemImage: "1.circle")
+                    Label("Clique em \"Configurar permissões\" ou \"Conceder\"", systemImage: "1.circle")
                     Label("Encontre \"zspeak\" na lista", systemImage: "2.circle")
                     Label("Ative o toggle", systemImage: "3.circle")
                 }
@@ -76,6 +91,10 @@ struct PermissionsPage: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Permissões")
+        .onAppear {
+            microphoneManager.refreshPermissionState()
+            accessibilityManager.refreshPermissionState()
+        }
     }
 
     // MARK: - Header agregado
@@ -159,6 +178,32 @@ struct PermissionsPage: View {
         let run: () -> Void
     }
 
+    private func runGuidedSetup() async {
+        guard !isRunningSetup else { return }
+        isRunningSetup = true
+        defer { isRunningSetup = false }
+
+        microphoneManager.refreshPermissionState()
+        accessibilityManager.refreshPermissionState()
+
+        switch microphoneManager.permissionState {
+        case .notDetermined:
+            _ = await microphoneManager.requestPermissionIfNeeded()
+        case .denied, .restricted:
+            microphoneManager.openSystemSettings()
+        case .authorized, .unavailable:
+            break
+        }
+
+        if !accessibilityManager.isGranted {
+            accessibilityManager.startGuidedPermissionFlow()
+        }
+
+        try? await Task.sleep(for: .milliseconds(500))
+        microphoneManager.refreshPermissionState()
+        accessibilityManager.refreshPermissionState()
+    }
+
     private var microphoneAction: PermissionAction? {
         switch microphoneManager.permissionState {
         case .authorized, .unavailable:
@@ -178,8 +223,8 @@ struct PermissionsPage: View {
 
     private var accessibilityAction: PermissionAction? {
         guard !accessibilityManager.isGranted else { return nil }
-        return PermissionAction(label: "Abrir Ajustes") {
-            accessibilityManager.openSystemSettings()
+        return PermissionAction(label: "Conceder") {
+            accessibilityManager.startGuidedPermissionFlow()
         }
     }
 

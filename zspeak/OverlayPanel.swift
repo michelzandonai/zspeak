@@ -42,6 +42,7 @@ final class OverlayPanel: NSPanel {
             let x = CGFloat(defaults.double(forKey: Self.xKey))
             let y = CGFloat(defaults.double(forKey: Self.yKey))
             setFrameOrigin(NSPoint(x: x, y: y))
+            clampToVisibleScreen()
         } else {
             positionAtBottomCenter()
         }
@@ -125,10 +126,57 @@ final class OverlayPanel: NSPanel {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.12
                 animator().setFrame(newFrame, display: true)
+                clampToVisibleScreen()
             }
         } else {
             setFrame(newFrame, display: true)
+            clampToVisibleScreen()
         }
+    }
+
+    /// Garante que o painel nunca fique salvo fora da área visível do monitor.
+    /// Isso cobre mudanças de monitor/resolução e restores antigos com `y`
+    /// negativo que deixam o overlay invisível.
+    private func clampToVisibleScreen() {
+        guard let screen = nearestScreen() ?? NSScreen.main else { return }
+
+        let visible = screen.visibleFrame.insetBy(dx: 12, dy: 12)
+        var origin = frame.origin
+
+        let maxX = visible.maxX - frame.width
+        let maxY = visible.maxY - frame.height
+
+        origin.x = min(max(origin.x, visible.minX), maxX)
+        origin.y = min(max(origin.y, visible.minY), maxY)
+
+        guard abs(origin.x - frame.origin.x) > 0.5 || abs(origin.y - frame.origin.y) > 0.5 else { return }
+
+        setFrameOrigin(origin)
+        let defaults = UserDefaults.standard
+        defaults.set(Double(origin.x), forKey: Self.xKey)
+        defaults.set(Double(origin.y), forKey: Self.yKey)
+    }
+
+    private func nearestScreen() -> NSScreen? {
+        let center = NSPoint(x: frame.midX, y: frame.midY)
+
+        if let containing = NSScreen.screens.first(where: { $0.visibleFrame.contains(center) }) {
+            return containing
+        }
+
+        return NSScreen.screens.min { lhs, rhs in
+            distanceSquared(from: center, to: centerPoint(of: lhs.visibleFrame)) < distanceSquared(from: center, to: centerPoint(of: rhs.visibleFrame))
+        }
+    }
+
+    private func centerPoint(of rect: NSRect) -> NSPoint {
+        NSPoint(x: rect.midX, y: rect.midY)
+    }
+
+    private func distanceSquared(from lhs: NSPoint, to rhs: NSPoint) -> CGFloat {
+        let dx = lhs.x - rhs.x
+        let dy = lhs.y - rhs.y
+        return dx * dx + dy * dy
     }
 
     /// Mostra o painel com animação.
@@ -145,6 +193,7 @@ final class OverlayPanel: NSPanel {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.adjustToPreferredSize(animated: false)
+            self.clampToVisibleScreen()
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.1
                 self.animator().alphaValue = 1
