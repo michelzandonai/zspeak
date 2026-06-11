@@ -31,7 +31,9 @@ struct HotkeyManagerTests {
             onToggle: {},
             onStartRecording: {},
             onStopRecording: {},
-            onCancelRecording: {}
+            onCancelRecording: {},
+            onTranslateSelection: {},
+            onToggleSelectionLookupMode: {}
         )
 
         // AXIsProcessTrusted() = false → event tap não criado

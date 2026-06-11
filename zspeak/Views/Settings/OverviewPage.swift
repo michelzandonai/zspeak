@@ -16,6 +16,7 @@ struct OverviewPage: View {
     @AppStorage("settings.initialPage") private var initialPage: String = "overview"
 
     @State private var llmState: LLMCorrectionManager.ModelState = .notDownloaded
+    @State private var selectedLLMModel = LLMModelOption.defaultModel
 
     var body: some View {
         Form {
@@ -44,6 +45,7 @@ struct OverviewPage: View {
         .formStyle(.grouped)
         .navigationTitle("Visão Geral")
         .task(id: llmStateTaskID) {
+            selectedLLMModel = await appState.selectedLLMModel()
             llmState = await appState.llmModelState()
         }
     }
@@ -92,7 +94,7 @@ struct OverviewPage: View {
             statusRow(
                 icon: "sparkles",
                 title: "Correção LLM",
-                status: llmStatusText,
+                status: "\(selectedLLMModel.shortName) · \(llmStatusText)",
                 color: llmStatusColor
             )
             if case .notDownloaded = llmState {

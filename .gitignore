@@ -43,6 +43,10 @@ Packages/
 # Build artifacts
 *.dmg
 *.profraw
+.dmg-stage/
+
+# Local assistant/worktree artifacts
+.claude/
 
 # Temp files
 Untitled-*

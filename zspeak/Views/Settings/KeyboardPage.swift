@@ -44,10 +44,12 @@ struct KeyboardPage: View {
 
             Section {
                 KeyboardShortcuts.Recorder("Modo Prompt LLM:", name: .togglePromptMode)
+                KeyboardShortcuts.Recorder("Modo Tradução:", name: .toggleSelectionLookupMode)
+                KeyboardShortcuts.Recorder("Traduzir seleção:", name: .translateSelection)
             } header: {
-                Text("Correção LLM")
+                Text("LLM")
             } footer: {
-                Text("Atalho global para ligar/desligar o Modo Prompt. Quando ativo, o overlay fica visível com chips de prompts clicáveis. ESC também desliga.")
+                Text("O Modo Prompt mantém o overlay aberto para correções. O Modo Tradução mostra uma bolha curta ao selecionar palavras. Traduzir seleção lê o texto selecionado no app ativo e mostra a tradução no overlay.")
             }
 
             Section {

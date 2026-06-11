@@ -38,6 +38,10 @@ final class OverlayController {
             appState?.applyPromptToTextInput(text)
         }
 
+        model.onDismissTranslation = { [weak appState] in
+            appState?.dismissSelectionTranslation()
+        }
+
         panel.setupContent(model: model)
         update()
     }
@@ -51,6 +55,18 @@ final class OverlayController {
             _ = appState.lastTranscription
             _ = appState.lastTranscriptionRecordID
             _ = appState.errorMessage
+            _ = appState.isSelectionTranslationVisible
+            _ = appState.isTranslatingSelection
+            _ = appState.selectionTranslationSourceText
+            _ = appState.selectionTranslationResult
+            _ = appState.selectionTranslationAnchor
+            _ = appState.selectionTranslationError
+            _ = appState.selectionTranslationPresentation
+            _ = appState.selectionLookupTerm
+            _ = appState.selectionLookupTranslation
+            _ = appState.isLookingUpSelectionTerm
+            _ = appState.selectionLookupError
+            _ = appState.isSelectionLookupModeEnabled
             _ = promptModeManager.isEnabled
             _ = appState.correctionPromptStore?.prompts
         } onChange: { [weak self] in
@@ -73,6 +89,16 @@ final class OverlayController {
         model.lastLLMPromptName = appState.lastLLMPromptName
         model.lastTranscription = appState.lastTranscription
         model.errorMessage = appState.errorMessage
+        model.translationVisible = appState.isSelectionTranslationVisible
+        model.isTranslatingSelection = appState.isTranslatingSelection
+        model.selectionTranslationSourceText = appState.selectionTranslationSourceText
+        model.selectionTranslationResult = appState.selectionTranslationResult
+        model.selectionTranslationError = appState.selectionTranslationError
+        model.selectionTranslationPresentation = appState.selectionTranslationPresentation
+        model.selectionLookupTerm = appState.selectionLookupTerm
+        model.selectionLookupTranslation = appState.selectionLookupTranslation
+        model.isLookingUpSelectionTerm = appState.isLookingUpSelectionTerm
+        model.selectionLookupError = appState.selectionLookupError
 
         // Detecta transição do Modo Prompt para preload/release do LLM
         if promptModeManager.isEnabled && !wasPromptModeEnabled {
@@ -116,10 +142,16 @@ final class OverlayController {
             || appState.state == .recording
             || appState.state == .processing
             || promptModeManager.isEnabled
+            || appState.isSelectionTranslationVisible
 
         if shouldShow && !isShowing {
-            panel.show()
+            panel.show(near: appState.isSelectionTranslationVisible ? appState.selectionTranslationAnchor : nil)
             isShowing = true
+        } else if shouldShow && isShowing, appState.isSelectionTranslationVisible,
+                  let anchor = appState.selectionTranslationAnchor {
+            panel.moveNear(anchor)
+        } else if shouldShow && isShowing, !appState.isSelectionTranslationVisible {
+            panel.clearTransientAnchor()
         } else if !shouldShow && isShowing {
             panel.hide()
             isShowing = false
@@ -273,7 +305,13 @@ struct ZSpeakApp: App {
             onToggle: { state.toggleRecording() },
             onStartRecording: { state.startRecordingIfIdle() },
             onStopRecording: { state.stopRecordingIfActive() },
-            onCancelRecording: { state.cancelRecording() }
+            onCancelRecording: {
+                if !state.dismissSelectionTranslation() {
+                    state.cancelRecording()
+                }
+            },
+            onTranslateSelection: { state.translateSelection() },
+            onToggleSelectionLookupMode: { state.toggleSelectionLookupMode() }
         )
 
         // Carrega modelos no startup

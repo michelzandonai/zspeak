@@ -1,8 +1,26 @@
 import Cocoa
 import KeyboardShortcuts
+import os.log
+
+private let hotkeyLogger = Logger(subsystem: "com.zspeak", category: "HotkeyManager")
+
+private let legacyTranslateSelectionShortcut = KeyboardShortcuts.Shortcut(
+    .t,
+    modifiers: [.command, .option]
+)
+
+private let defaultTranslateSelectionShortcut = KeyboardShortcuts.Shortcut(
+    .t,
+    modifiers: [.control, .option]
+)
 
 extension KeyboardShortcuts.Name {
     static let togglePromptMode = Self("togglePromptMode")
+    static let toggleSelectionLookupMode = Self("toggleSelectionLookupMode")
+    static let translateSelection = Self(
+        "translateSelection",
+        default: defaultTranslateSelectionShortcut
+    )
 }
 
 /// Keycodes para teclas modificadoras individuais (left/right)
@@ -35,6 +53,8 @@ final class HotkeyManager {
     private var onStartRecording: (@MainActor () -> Void)?
     private var onStopRecording: (@MainActor () -> Void)?
     private var onCancelRecording: (@MainActor () -> Void)?
+    private var onTranslateSelection: (@MainActor () -> Void)?
+    private var onToggleSelectionLookupMode: (@MainActor () -> Void)?
 
     /// Gerenciador do Modo Prompt LLM (setado externamente via App.swift)
     var promptModeManager: PromptModeManager?
@@ -49,6 +69,10 @@ final class HotkeyManager {
     // Guarda as flags anteriores para detectar key-up de modificadores
     private var previousFlags: CGEventFlags = []
 
+    // Evita duplo disparo quando Carbon e CGEvent tap capturam o mesmo atalho.
+    private var lastTranslateShortcutAt: Date?
+    private let translateShortcutDebounce: TimeInterval = 0.45
+
     init(activationKeyManager: ActivationKeyManager) {
         self.activationKeyManager = activationKeyManager
     }
@@ -60,12 +84,17 @@ final class HotkeyManager {
         onToggle: @escaping @MainActor () -> Void,
         onStartRecording: @escaping @MainActor () -> Void,
         onStopRecording: @escaping @MainActor () -> Void,
-        onCancelRecording: @escaping @MainActor () -> Void
+        onCancelRecording: @escaping @MainActor () -> Void,
+        onTranslateSelection: @escaping @MainActor () -> Void,
+        onToggleSelectionLookupMode: @escaping @MainActor () -> Void
     ) {
         self.onToggle = onToggle
         self.onStartRecording = onStartRecording
         self.onStopRecording = onStopRecording
         self.onCancelRecording = onCancelRecording
+        self.onTranslateSelection = onTranslateSelection
+        self.onToggleSelectionLookupMode = onToggleSelectionLookupMode
+        migrateTranslateSelectionShortcutIfNeeded()
         createEventTap()
 
         // Atalho global de toggle do Modo Prompt LLM.
@@ -76,6 +105,26 @@ final class HotkeyManager {
             TextInserter.saveFocusedApp()
             self?.promptModeManager?.toggle()
         }
+
+        // Caminho principal para atalhos de combinação. O CGEvent tap abaixo
+        // permanece como fallback, mas Carbon é mais confiável para atalhos
+        // customizáveis gravados pelo KeyboardShortcuts.Recorder.
+        KeyboardShortcuts.onKeyDown(for: .translateSelection) { [weak self] in
+            self?.triggerTranslateSelection(source: "KeyboardShortcuts")
+        }
+
+        KeyboardShortcuts.onKeyDown(for: .toggleSelectionLookupMode) { [weak self] in
+            self?.onToggleSelectionLookupMode?()
+        }
+    }
+
+    private func migrateTranslateSelectionShortcutIfNeeded() {
+        guard KeyboardShortcuts.getShortcut(for: .translateSelection) == legacyTranslateSelectionShortcut else {
+            return
+        }
+
+        KeyboardShortcuts.setShortcut(defaultTranslateSelectionShortcut, for: .translateSelection)
+        hotkeyLogger.info("Atalho de tradução migrado de ⌥⌘T para ⌃⌥T para evitar conflito com a tecla de gravação")
     }
 
     /// Recria o event tap (usado quando a permissão de Accessibility é concedida após o startup)
@@ -111,7 +160,9 @@ final class HotkeyManager {
 
                 // Se o tap for desabilitado pelo sistema, reabilitar
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-                    CGEvent.tapEnable(tap: manager.eventTap!, enable: true)
+                    if let eventTap = manager.eventTap {
+                        CGEvent.tapEnable(tap: eventTap, enable: true)
+                    }
                     return Unmanaged.passUnretained(event)
                 }
 
@@ -151,17 +202,72 @@ final class HotkeyManager {
     private nonisolated func handleEvent(type: CGEventType, event: CGEvent) {
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
+        let isAutoRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
 
         MainActor.assumeIsolated {
-            if type == .keyDown && keyCode == KeyCode.escape.rawValue {
-                handleEscape()
-                return
+            if type == .keyDown {
+                if keyCode == KeyCode.escape.rawValue {
+                    handleEscape()
+                    return
+                }
+
+                if !isAutoRepeat,
+                   matchesKeyboardShortcut(keyCode: keyCode, flags: flags, name: .translateSelection) {
+                    triggerTranslateSelection(source: "CGEvent")
+                    return
+                }
             }
 
             if type == .flagsChanged {
                 handleFlagsChanged(keyCode: keyCode, flags: flags)
             }
         }
+    }
+
+    private func triggerTranslateSelection(source: String) {
+        let now = Date()
+        if let lastTranslateShortcutAt,
+           now.timeIntervalSince(lastTranslateShortcutAt) < translateShortcutDebounce {
+            hotkeyLogger.debug("Atalho de tradução ignorado por debounce (\(source, privacy: .public))")
+            return
+        }
+
+        lastTranslateShortcutAt = now
+        hotkeyLogger.debug("Atalho de tradução da seleção acionado via \(source, privacy: .public)")
+        TextInserter.saveFocusedApp()
+        onTranslateSelection?()
+    }
+
+    private func matchesKeyboardShortcut(
+        keyCode: UInt16,
+        flags: CGEventFlags,
+        name: KeyboardShortcuts.Name
+    ) -> Bool {
+        guard let configuredShortcut = KeyboardShortcuts.getShortcut(for: name),
+              configuredShortcut.carbonKeyCode == Int(keyCode)
+        else {
+            return false
+        }
+
+        return modifierFlags(from: flags) == shortcutModifierFlags(configuredShortcut.modifiers)
+    }
+
+    private func modifierFlags(from flags: CGEventFlags) -> NSEvent.ModifierFlags {
+        var modifiers = NSEvent.ModifierFlags()
+        if flags.contains(.maskCommand) { modifiers.insert(.command) }
+        if flags.contains(.maskAlternate) { modifiers.insert(.option) }
+        if flags.contains(.maskControl) { modifiers.insert(.control) }
+        if flags.contains(.maskShift) { modifiers.insert(.shift) }
+        return modifiers
+    }
+
+    private func shortcutModifierFlags(_ flags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
+        var modifiers = NSEvent.ModifierFlags()
+        if flags.contains(.command) { modifiers.insert(.command) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.control) { modifiers.insert(.control) }
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        return modifiers
     }
 
     // MARK: - Escape

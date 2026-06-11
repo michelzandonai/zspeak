@@ -175,6 +175,17 @@ cp "$INFO_PLIST" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP_NAME" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$CONTENTS_DIR/Info.plist"
 
+# Copia resource bundles gerados por dependências SwiftPM.
+# Sem isso, componentes como KeyboardShortcuts.Recorder tentam acessar
+# Bundle.module em runtime e derrubam o app instalado.
+resource_bundles=( "$BUILD_DIR"/*.bundle(N) )
+if (( ${#resource_bundles} > 0 )); then
+  for bundle in "${resource_bundles[@]}"; do
+    ditto "$bundle" "$RESOURCES_DIR/$(basename "$bundle")"
+  done
+  echo "  ${#resource_bundles} resource bundle(s) copiado(s) para Contents/Resources"
+fi
+
 # Copia ffmpeg para dentro do bundle
 if [[ -f "$FFMPEG_CACHE_BINARY" ]]; then
   cp "$FFMPEG_CACHE_BINARY" "$MACOS_DIR/ffmpeg"

@@ -10,6 +10,10 @@ final class OverlayPanel: NSPanel {
 
     private var hostingController: NSHostingController<OverlayView>?
     private var sizeObservation: NSKeyValueObservation?
+    private var ignoresPositionPersistence = false
+    private var currentAnchorRect: NSRect?
+    private enum Orientation { case above, below }
+    private var lockedOrientation: Orientation?
 
     init() {
         super.init(
@@ -68,6 +72,7 @@ final class OverlayPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     @objc private func handleDidMove(_ note: Notification) {
+        guard !ignoresPositionPersistence else { return }
         let defaults = UserDefaults.standard
         defaults.set(Double(frame.origin.x), forKey: Self.xKey)
         defaults.set(Double(frame.origin.y), forKey: Self.yKey)
@@ -121,16 +126,23 @@ final class OverlayPanel: NSPanel {
         let heightDelta = size.height - newFrame.size.height
         newFrame.origin.y -= heightDelta
         newFrame.size = size
+        if let currentAnchorRect {
+            newFrame.origin = frameOriginNear(anchorRect: currentAnchorRect, size: size, useLock: true)
+        }
 
         if animated && alphaValue > 0 && isVisible {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.12
                 animator().setFrame(newFrame, display: true)
-                clampToVisibleScreen()
+                if currentAnchorRect == nil {
+                    clampToVisibleScreen()
+                }
             }
         } else {
             setFrame(newFrame, display: true)
-            clampToVisibleScreen()
+            if currentAnchorRect == nil {
+                clampToVisibleScreen()
+            }
         }
     }
 
@@ -152,9 +164,11 @@ final class OverlayPanel: NSPanel {
         guard abs(origin.x - frame.origin.x) > 0.5 || abs(origin.y - frame.origin.y) > 0.5 else { return }
 
         setFrameOrigin(origin)
-        let defaults = UserDefaults.standard
-        defaults.set(Double(origin.x), forKey: Self.xKey)
-        defaults.set(Double(origin.y), forKey: Self.yKey)
+        if !ignoresPositionPersistence {
+            let defaults = UserDefaults.standard
+            defaults.set(Double(origin.x), forKey: Self.xKey)
+            defaults.set(Double(origin.y), forKey: Self.yKey)
+        }
     }
 
     private func nearestScreen() -> NSScreen? {
@@ -186,19 +200,85 @@ final class OverlayPanel: NSPanel {
     /// renderizar pendências do modelo (ex: `state = .recording` recém-setado),
     /// garantindo que `preferredContentSize` reflita o estado correto antes
     /// do painel ficar visível.
-    func show() {
+    func show(near anchorRect: NSRect? = nil) {
+        currentAnchorRect = anchorRect
+        ignoresPositionPersistence = anchorRect != nil
+        if let anchorRect {
+            lockedOrientation = nil // Reset lock to let positionNear decide initial orientation
+            positionNear(anchorRect: anchorRect)
+        }
+
         alphaValue = 0
         orderFrontRegardless()
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.adjustToPreferredSize(animated: false)
-            self.clampToVisibleScreen()
+            if let anchorRect = self.currentAnchorRect {
+                self.positionNear(anchorRect: anchorRect)
+            } else {
+                self.clampToVisibleScreen()
+            }
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.1
                 self.animator().alphaValue = 1
             }
         }
+    }
+
+    func moveNear(_ anchorRect: NSRect) {
+        currentAnchorRect = anchorRect
+        ignoresPositionPersistence = true
+        positionNear(anchorRect: anchorRect)
+    }
+
+    func clearTransientAnchor() {
+        guard currentAnchorRect != nil || ignoresPositionPersistence else { return }
+        currentAnchorRect = nil
+        ignoresPositionPersistence = false
+        clampToVisibleScreen()
+    }
+
+    private func positionNear(anchorRect: NSRect) {
+        setFrameOrigin(frameOriginNear(anchorRect: anchorRect, size: frame.size, useLock: false))
+    }
+
+    private func frameOriginNear(anchorRect: NSRect, size: NSSize, useLock: Bool) -> NSPoint {
+        guard let screen = screen(containing: anchorRect) ?? NSScreen.main else { return frame.origin }
+        let visible = screen.visibleFrame.insetBy(dx: 12, dy: 12)
+        let gap: CGFloat = 10
+
+        let originAbove = NSPoint(
+            x: anchorRect.midX - size.width / 2,
+            y: anchorRect.maxY + gap
+        )
+        let originBelow = NSPoint(
+            x: anchorRect.midX - size.width / 2,
+            y: anchorRect.minY - size.height - gap
+        )
+
+        var origin: NSPoint
+        if useLock, let lock = lockedOrientation {
+            origin = lock == .above ? originAbove : originBelow
+        } else {
+            // Decide initial orientation: prefer top, but use bottom if top is off-screen
+            if originAbove.y + size.height > visible.maxY {
+                origin = originBelow
+                lockedOrientation = .below
+            } else {
+                origin = originAbove
+                lockedOrientation = .above
+            }
+        }
+
+        origin.x = min(max(origin.x, visible.minX), visible.maxX - size.width)
+        origin.y = min(max(origin.y, visible.minY), visible.maxY - size.height)
+        return origin
+    }
+
+    private func screen(containing rect: NSRect) -> NSScreen? {
+        let point = NSPoint(x: rect.midX, y: rect.midY)
+        return NSScreen.screens.first { $0.visibleFrame.contains(point) }
     }
 
     /// Esconde o painel com animação
@@ -208,6 +288,9 @@ final class OverlayPanel: NSPanel {
             self.animator().alphaValue = 0
         }) { [weak self] in
             MainActor.assumeIsolated {
+                self?.currentAnchorRect = nil
+                self?.lockedOrientation = nil
+                self?.ignoresPositionPersistence = false
                 self?.orderOut(nil)
             }
         }

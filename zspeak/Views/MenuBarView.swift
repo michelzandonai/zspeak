@@ -26,8 +26,17 @@ struct MenuBarView: View {
                 .foregroundStyle(.yellow)
         }
 
+        if appState.isSelectionLookupModeEnabled {
+            Label("Modo Tradução: ATIVO", systemImage: "text.magnifyingglass")
+                .foregroundStyle(.blue)
+        }
+
         Button(promptModeManager.isEnabled ? "Desligar Modo Prompt" : "Ligar Modo Prompt") {
             promptModeManager.toggle()
+        }
+
+        Button(appState.isSelectionLookupModeEnabled ? "Desligar Modo Tradução" : "Ligar Modo Tradução") {
+            appState.toggleSelectionLookupMode()
         }
 
         Divider()

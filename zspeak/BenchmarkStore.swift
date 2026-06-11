@@ -175,11 +175,26 @@ final class BenchmarkStore {
         }
     }
 
-    /// Importa transcrições do histórico como fixtures de benchmark
-    func importFromHistory(historyStore: TranscriptionStore) {
+    /// Importa transcrições do histórico como fixtures de benchmark.
+    ///
+    /// Quando `limit` é informado, pega apenas as transcrições mais recentes.
+    /// Registros gerados por correção LLM são ignorados porque normalmente não
+    /// representam áudio original.
+    @discardableResult
+    func importFromHistory(historyStore: TranscriptionStore, limit: Int? = nil) -> Int {
         let fm = FileManager.default
+        let sortedRecords = historyStore.records
+            .filter { $0.sourceRecordID == nil }
+            .sorted { $0.timestamp > $1.timestamp }
+        let recordsToImport: [TranscriptionRecord]
+        if let limit {
+            recordsToImport = Array(sortedRecords.prefix(limit))
+        } else {
+            recordsToImport = sortedRecords
+        }
 
-        for record in historyStore.records {
+        var importedCount = 0
+        for record in recordsToImport {
             guard let sourceURL = historyStore.audioURL(for: record) else { continue }
 
             let destURL = audioDir.appendingPathComponent(sourceURL.lastPathComponent)
@@ -202,9 +217,11 @@ final class BenchmarkStore {
                 lastResult: nil
             )
             fixtures.append(fixture)
+            importedCount += 1
         }
 
         saveJSON()
+        return importedCount
     }
 
     // MARK: - Persistência JSON

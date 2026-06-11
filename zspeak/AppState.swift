@@ -27,6 +27,7 @@ final class AppState {
     let recordingController: RecordingController
     let llmCoordinator: LLMCoordinator
     let fileCoordinator: FileTranscriptionCoordinator
+    let selectionTranslationCoordinator: SelectionTranslationCoordinator
 
     // MARK: - Stores externos (setados por App.swift)
 
@@ -53,6 +54,9 @@ final class AppState {
         didSet {
             recordingController.accessibilityGranted = accessibilityGranted
             llmCoordinator.accessibilityGranted = accessibilityGranted
+            if accessibilityGranted {
+                selectionTranslationCoordinator.refreshAmbientLookupEventTap()
+            }
         }
     }
 
@@ -122,6 +126,20 @@ final class AppState {
         set { llmCoordinator.llmCorrectionEnabled = newValue }
     }
 
+    // Tradução da seleção — delega para o coordenador dedicado
+    var isSelectionTranslationVisible: Bool { selectionTranslationCoordinator.isVisible }
+    var isTranslatingSelection: Bool { selectionTranslationCoordinator.isTranslating }
+    var selectionTranslationSourceText: String { selectionTranslationCoordinator.sourceText }
+    var selectionTranslationResult: String? { selectionTranslationCoordinator.translatedText }
+    var selectionTranslationAnchor: NSRect? { selectionTranslationCoordinator.anchorRect }
+    var selectionTranslationError: String? { selectionTranslationCoordinator.errorMessage }
+    var selectionLookupTerm: String? { selectionTranslationCoordinator.selectedLookupTerm }
+    var selectionLookupTranslation: String? { selectionTranslationCoordinator.lookupTranslation }
+    var isLookingUpSelectionTerm: Bool { selectionTranslationCoordinator.isLookingUpTerm }
+    var selectionLookupError: String? { selectionTranslationCoordinator.lookupErrorMessage }
+    var selectionTranslationPresentation: SelectionTranslationPresentation { selectionTranslationCoordinator.presentation }
+    var isSelectionLookupModeEnabled: Bool { selectionTranslationCoordinator.isAmbientLookupEnabled }
+
     // MARK: - Dependências compartilhadas
 
     let microphoneManager: MicrophoneManager
@@ -132,6 +150,7 @@ final class AppState {
     private let transcriber: Transcriber
     private let textInserter: TextInserter
     private let llmManager: LLMCorrectionManager
+    private let selectedTextReader: SelectedTextReader
 
     // MARK: - Init
 
@@ -141,12 +160,14 @@ final class AppState {
         let asr = Transcriber()
         let inserter = TextInserter()
         let llm = LLMCorrectionManager()
+        let selectionReader = SelectedTextReader()
 
         self.microphoneManager = micManager
         self.audioCapture = audio
         self.transcriber = asr
         self.textInserter = inserter
         self.llmManager = llm
+        self.selectedTextReader = selectionReader
 
         self.recordingController = RecordingController(
             audioCapture: audio,
@@ -164,6 +185,10 @@ final class AppState {
             },
             textInserter: inserter
         )
+        self.selectionTranslationCoordinator = SelectionTranslationCoordinator(
+            llmManager: llm,
+            selectionReader: selectionReader
+        )
 
         // Propagação bidirecional de erro: controller → façade.
         // Setter do façade propaga na direção inversa, com guarda para evitar loop.
@@ -172,6 +197,10 @@ final class AppState {
             self.errorMessage = newValue
         }
         self.llmCoordinator.onErrorMessageChange = { [weak self] newValue in
+            guard let self, self.errorMessage != newValue else { return }
+            self.errorMessage = newValue
+        }
+        self.selectionTranslationCoordinator.onErrorMessageChange = { [weak self] newValue in
             guard let self, self.errorMessage != newValue else { return }
             self.errorMessage = newValue
         }
@@ -326,13 +355,34 @@ final class AppState {
     func applyPromptToTextInput(_ raw: String) { llmCoordinator.applyPromptToTextInput(raw) }
     func applyPromptToLast(_ prompt: CorrectionPrompt) { llmCoordinator.applyPromptToLast(prompt) }
 
+    func translateSelection() { selectionTranslationCoordinator.translateSelection() }
+    func toggleSelectionLookupMode() {
+        selectionTranslationCoordinator.toggleAmbientLookupEnabled()
+    }
+    func setSelectionLookupModeEnabled(_ enabled: Bool) {
+        selectionTranslationCoordinator.setAmbientLookupEnabled(enabled)
+    }
+
+    @discardableResult
+    func dismissSelectionTranslation() -> Bool { selectionTranslationCoordinator.dismiss() }
+
+    func selectedLLMModel() async -> LLMModelOption { await llmCoordinator.selectedModel() }
+    func selectLLMModel(id: String) async -> LLMCorrectionManager.ModelState { await llmCoordinator.selectModel(id: id) }
     func downloadLLMModel() async -> LLMCorrectionManager.ModelState { await llmCoordinator.downloadModel() }
+    func llmDownloadProgressSnapshot() async -> LLMDownloadProgressSnapshot? {
+        await llmCoordinator.downloadProgressSnapshot()
+    }
+    func cancelLLMModelDownload() async { await llmCoordinator.cancelDownloadAndCleanup() }
     func llmModelState() async -> LLMCorrectionManager.ModelState { await llmCoordinator.modelState() }
     func loadLLMModel() async -> LLMCorrectionManager.ModelState { await llmCoordinator.loadModel() }
     func preloadLLMAndKeepAlive() { llmCoordinator.preloadAndKeepAlive() }
     func releaseLLMKeepAlive() { llmCoordinator.releaseKeepAlive() }
     func removeLLMModel() async { await llmCoordinator.removeModel() }
+    func removeLLMModel(id: String) async { await llmCoordinator.removeModel(id: id) }
     func llmModelSizeOnDisk() async -> Int64? { await llmCoordinator.modelSizeOnDisk() }
+    func cachedLLMModelsOnDisk() async -> [LLMCorrectionManager.CachedModelInfo] {
+        await llmCoordinator.cachedModelsOnDisk()
+    }
 
     // MARK: - Vocabulário
 

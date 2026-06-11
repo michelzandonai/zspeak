@@ -40,6 +40,7 @@ struct CorrectionPromptStoreTests {
         let clareza = try #require(store.prompts.first { $0.name == CorrectionPromptStore.languageCleanupPromptName })
         #expect(clareza.isActive == false)
         #expect(clareza.systemPrompt.contains("vícios de linguagem"))
+        #expect(clareza.systemPrompt.contains("transcrições faladas"))
     }
 
     @Test("activePrompt retorna o prompt ativo")

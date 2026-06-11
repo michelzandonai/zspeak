@@ -525,6 +525,42 @@ struct BenchmarkStoreTests {
         #expect(reloaded.fixtures.count == 2)
     }
 
+    @Test("importFromHistory com limite pega as ultimas transcricoes com audio")
+    func testImportFromHistoryWithLimitUsesMostRecentRecords() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let historyDir = tmpDir.appendingPathComponent("history", isDirectory: true)
+        try FileManager.default.createDirectory(at: historyDir, withIntermediateDirectories: true)
+        let benchmarkDir = tmpDir.appendingPathComponent("benchmark", isDirectory: true)
+        try FileManager.default.createDirectory(at: benchmarkDir, withIntermediateDirectories: true)
+
+        let historyStore = TranscriptionStore(baseDirectory: historyDir)
+        for index in 0..<25 {
+            let fileName = "history-\(index).wav"
+            try placeWAV(in: historyDir, fileName: fileName)
+            historyStore.records.append(
+                TranscriptionRecord(
+                    id: UUID(),
+                    text: "texto \(index)",
+                    timestamp: Date(timeIntervalSince1970: TimeInterval(index)),
+                    modelName: "TestModel",
+                    duration: 1,
+                    targetAppName: nil,
+                    audioFileName: fileName
+                )
+            )
+        }
+
+        let benchmarkStore = makeStore(in: benchmarkDir)
+        let importedCount = benchmarkStore.importFromHistory(historyStore: historyStore, limit: 20)
+
+        #expect(importedCount == 20)
+        #expect(benchmarkStore.fixtures.count == 20)
+        let importedTexts = Set(benchmarkStore.fixtures.map(\.expectedText))
+        #expect(importedTexts == Set((5..<25).map { "texto \($0)" }))
+    }
+
     @Test("importFromHistory ignora registros sem áudio")
     func testImportFromHistorySkipsRecordsWithoutAudio() throws {
         let tmpDir = try makeTmpDir()

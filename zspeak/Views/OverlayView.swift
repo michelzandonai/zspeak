@@ -49,6 +49,19 @@ final class OverlayModel {
     var lastLLMPromptName: String?
     var errorMessage: String?
 
+    // Tradução de seleção
+    var translationVisible: Bool = false
+    var isTranslatingSelection: Bool = false
+    var selectionTranslationSourceText: String = ""
+    var selectionTranslationResult: String?
+    var selectionTranslationError: String?
+    var selectionTranslationPresentation: SelectionTranslationPresentation = .fullTranslation
+    var selectionLookupTerm: String?
+    var selectionLookupTranslation: String?
+    var isLookingUpSelectionTerm: Bool = false
+    var selectionLookupError: String?
+    var onDismissTranslation: (() -> Void)?
+
     /// Toggle para expandir/colapsar a visualização do resultado LLM — persiste em UserDefaults
     var isResultExpanded: Bool {
         didSet { UserDefaults.standard.set(isResultExpanded, forKey: "overlayResultExpanded") }
@@ -88,6 +101,10 @@ struct OverlayView: View {
 
     /// Descrição do estado atual para leitores de tela (VoiceOver).
     private var stateAccessibilityLabel: String {
+        if model.translationVisible {
+            return model.isTranslatingSelection ? "Traduzindo seleção" : "Tradução da seleção"
+        }
+
         switch state {
         case .idle:
             return "Ocioso"
@@ -102,6 +119,13 @@ struct OverlayView: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            if model.translationVisible {
+                if model.selectionTranslationPresentation == .compactLookup {
+                    CompactSelectionLookupOverlayContent(model: model)
+                } else {
+                    SelectionTranslationOverlayContent(model: model)
+                }
+            } else {
             // Linha superior: app em foco + branding (estilo Spokenly)
             HStack(spacing: 8) {
                 if let icon = model.focusedAppIcon {
@@ -210,10 +234,11 @@ struct OverlayView: View {
                     LLMResultView(model: model)
                 }
             }
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(width: model.promptModeEnabled ? 520 : 320)
+        .padding(.horizontal, model.selectionTranslationPresentation == .compactLookup ? 11 : 16)
+        .padding(.vertical, model.selectionTranslationPresentation == .compactLookup ? 9 : 12)
+        .frame(width: overlayWidth)
         .fixedSize(horizontal: false, vertical: true)
         .background(.black.opacity(0.85))
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -228,6 +253,162 @@ struct OverlayView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Overlay do zspeak")
         .accessibilityValue(stateAccessibilityLabel)
+    }
+
+    private var overlayWidth: CGFloat {
+        if model.translationVisible && model.selectionTranslationPresentation == .compactLookup {
+            return 230
+        }
+        if model.translationVisible { return 500 }
+        return model.promptModeEnabled ? 520 : 320
+    }
+}
+
+private struct CompactSelectionLookupOverlayContent: View {
+    let model: OverlayModel
+
+    private var term: String {
+        model.selectionLookupTerm ?? model.selectionTranslationSourceText
+    }
+
+    private var valueText: String {
+        if let error = model.selectionLookupError, !error.isEmpty {
+            return error
+        }
+
+        let text = model.selectionLookupTranslation?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return text.isEmpty ? "..." : text
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if model.isLookingUpSelectionTerm {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(.white.opacity(0.72))
+                    .frame(width: 12, height: 12)
+                    .accessibilityHidden(true)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(term)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.58))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text(valueText)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(model.selectionLookupError == nil ? .white.opacity(0.96) : .red.opacity(0.95))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Tradução rápida")
+        .accessibilityValue("\(term): \(valueText)")
+    }
+}
+
+private struct SelectionTranslationOverlayContent: View {
+    let model: OverlayModel
+
+    private var resultText: String {
+        if let error = model.selectionTranslationError, !error.isEmpty {
+            return error
+        }
+
+        let text = model.selectionTranslationResult?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if text.isEmpty && model.isTranslatingSelection {
+            return "Traduzindo..."
+        }
+        return text
+    }
+
+    private var hasResult: Bool {
+        !(model.selectionTranslationResult ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: "globe")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.86))
+                    .accessibilityHidden(true)
+
+                Text("Tradução")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.94))
+
+                Spacer()
+
+                if model.isTranslatingSelection {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white.opacity(0.75))
+                        .accessibilityLabel("Traduzindo seleção")
+                }
+
+                if hasResult {
+                    Button {
+                        if let text = model.selectionTranslationResult {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(text, forType: .string)
+                        }
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.78))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copiar tradução")
+                    .accessibilityLabel("Copiar tradução")
+                }
+
+                Button {
+                    model.onDismissTranslation?()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+                .buttonStyle(.plain)
+                .help("Fechar")
+                .accessibilityLabel("Fechar tradução")
+            }
+
+            if !model.selectionTranslationSourceText.isEmpty {
+                ScrollView(.vertical, showsIndicators: false) {
+                    Text(model.selectionTranslationSourceText)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 58)
+                .accessibilityLabel("Texto original")
+                .accessibilityValue(model.selectionTranslationSourceText)
+            }
+
+            ScrollView {
+                Text(resultText)
+                    .font(.body)
+                    .foregroundStyle(model.selectionTranslationError == nil ? .white.opacity(0.96) : .red.opacity(0.95))
+                    .italic(resultText == "Traduzindo...")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .accessibilityLabel(model.selectionTranslationError == nil ? "Tradução" : "Erro de tradução")
+                    .accessibilityValue(resultText)
+            }
+            .frame(maxHeight: 180)
+        }
     }
 }
 

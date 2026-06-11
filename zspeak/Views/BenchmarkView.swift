@@ -56,13 +56,33 @@ struct BenchmarkView: View {
         let avgCer = cers.isEmpty ? nil : cers.reduce(0, +) / Double(cers.count)
 
         let avgLatency = evaluated.map(\.latency).reduce(0, +) / Double(evaluated.count)
+        let sortedLatencies = evaluated.map(\.latency).sorted()
+        let p95Latency = percentile(sortedLatencies, percentile: 0.95)
+        let maxLatency = sortedLatencies.last ?? 0
+
+        let realtimeFactors = store.fixtures.compactMap { fixture -> Double? in
+            guard let result = fixture.lastResult, fixture.duration > 0 else { return nil }
+            return result.latency / fixture.duration
+        }
+        let avgRealtimeFactor = realtimeFactors.isEmpty
+            ? nil
+            : realtimeFactors.reduce(0, +) / Double(realtimeFactors.count)
+
+        let slowCount = store.fixtures.filter { fixture in
+            guard let result = fixture.lastResult else { return false }
+            return isSlowResult(result, duration: fixture.duration)
+        }.count
 
         return AggregateMetrics(
             count: evaluated.count,
             averageAccuracy: avgAcc,
             averageWER: avgWer,
             averageCER: avgCer,
-            averageLatency: avgLatency
+            averageLatency: avgLatency,
+            p95Latency: p95Latency,
+            maxLatency: maxLatency,
+            averageRealtimeFactor: avgRealtimeFactor,
+            slowCount: slowCount
         )
     }
 
@@ -88,8 +108,14 @@ struct BenchmarkView: View {
                         }
                         Button {
                             store.importFromHistory(historyStore: historyStore)
+                            availableAudioFiles = store.availableAudioFileNames()
                         } label: {
                             Label("Importar do Histórico", systemImage: "clock.arrow.circlepath")
+                        }
+                        Button {
+                            importRecentHistory(limit: 20)
+                        } label: {
+                            Label("Importar últimas 20", systemImage: "clock.badge")
                         }
                     } label: {
                         Label("Adicionar fixture", systemImage: "plus.circle.fill")
@@ -98,6 +124,12 @@ struct BenchmarkView: View {
                     .controlSize(.large)
                 }
             } else {
+                Section {
+                    Text("Ao importar do histórico, o texto salvo vira a referência local. Isso mede latência real e regressão/estabilidade contra o que o app já transcreveu, não uma revisão humana perfeita.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 // Card agregado no topo — só aparece se há resultados
                 if let metrics = aggregateMetrics {
                     Section {
@@ -161,8 +193,19 @@ struct BenchmarkView: View {
                     }
                     Button {
                         store.importFromHistory(historyStore: historyStore)
+                        availableAudioFiles = store.availableAudioFileNames()
                     } label: {
                         Label("Importar do Histórico", systemImage: "clock.arrow.circlepath")
+                    }
+                    Button {
+                        importRecentHistory(limit: 20)
+                    } label: {
+                        Label("Importar últimas 20", systemImage: "clock.badge")
+                    }
+                    Button {
+                        runRecentHistory(limit: 20)
+                    } label: {
+                        Label("Importar e rodar últimas 20", systemImage: "clock.badge.play")
                     }
                 } label: {
                     Label("Adicionar", systemImage: "plus")
@@ -187,6 +230,14 @@ struct BenchmarkView: View {
                 .help(isRunning ? "Parar transcrição em lote" : "Transcrever todas as fixtures")
                 .keyboardShortcut(isRunning ? .cancelAction : .defaultAction)
                 .disabled(!isRunning && store.fixtures.isEmpty)
+
+                Button {
+                    runRecentHistory(limit: 20)
+                } label: {
+                    Label("Últimas 20", systemImage: "clock.badge.play")
+                }
+                .help("Importar e transcrever as últimas 20 transcrições locais com áudio")
+                .disabled(isRunning)
             }
         }
         .alert("Apagar fixture?", isPresented: .init(
@@ -214,6 +265,10 @@ struct BenchmarkView: View {
         let averageWER: Double?
         let averageCER: Double?
         let averageLatency: TimeInterval
+        let p95Latency: TimeInterval
+        let maxLatency: TimeInterval
+        let averageRealtimeFactor: Double?
+        let slowCount: Int
     }
 
     @ViewBuilder
@@ -228,7 +283,7 @@ struct BenchmarkView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 16) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 12)], spacing: 12) {
                 metricCard(
                     title: "Acurácia média",
                     value: String(format: "%.0f%%", metrics.averageAccuracy * 100),
@@ -259,6 +314,36 @@ struct BenchmarkView: View {
                     value: String(format: "%.0fms", metrics.averageLatency * 1000),
                     icon: "timer",
                     color: .secondary
+                )
+
+                metricCard(
+                    title: "P95 latência",
+                    value: String(format: "%.0fms", metrics.p95Latency * 1000),
+                    icon: "timer.circle",
+                    color: latencyColor(metrics.p95Latency)
+                )
+
+                metricCard(
+                    title: "Pior caso",
+                    value: String(format: "%.0fms", metrics.maxLatency * 1000),
+                    icon: "exclamationmark.speedometer",
+                    color: latencyColor(metrics.maxLatency)
+                )
+
+                if let rtf = metrics.averageRealtimeFactor {
+                    metricCard(
+                        title: "RTF médio",
+                        value: String(format: "%.2fx", rtf),
+                        icon: "waveform.path.ecg",
+                        color: realtimeFactorColor(rtf)
+                    )
+                }
+
+                metricCard(
+                    title: "Casos lentos",
+                    value: "\(metrics.slowCount)",
+                    icon: "tortoise.fill",
+                    color: metrics.slowCount == 0 ? .green : .orange
                 )
             }
         }
@@ -332,7 +417,7 @@ struct BenchmarkView: View {
 
         // Último resultado
         if let result = fixture.lastResult {
-            resultSection(result)
+            resultSection(result, duration: fixture.duration)
         }
 
         // Mensagem de erro (se runBenchmark falhou)
@@ -396,13 +481,17 @@ struct BenchmarkView: View {
     // MARK: - Resultado
 
     @ViewBuilder
-    private func resultSection(_ result: BenchmarkResult) -> some View {
+    private func resultSection(_ result: BenchmarkResult, duration: TimeInterval) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(result.transcribedText)
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 12) {
+                if isSlowResult(result, duration: duration) {
+                    Label("Lento", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
                 Label(String(format: "Acc %.0f%%", result.accuracyScore * 100), systemImage: "checkmark.seal")
                     .foregroundStyle(accuracyColor(result.accuracyScore))
                 if let wer = result.wordErrorRate {
@@ -414,6 +503,11 @@ struct BenchmarkView: View {
                         .foregroundStyle(errorRateColor(cer))
                 }
                 Label(String(format: "%.0fms", result.latency * 1000), systemImage: "timer")
+                    .foregroundStyle(latencyColor(result.latency))
+                if let rtf = realtimeFactor(result: result, duration: duration) {
+                    Label(String(format: "RTF %.2fx", rtf), systemImage: "waveform.path.ecg")
+                        .foregroundStyle(realtimeFactorColor(rtf))
+                }
             }
             .font(.caption)
         }
@@ -439,6 +533,36 @@ struct BenchmarkView: View {
         if value < 0.1 { return .green }
         if value < 0.3 { return .yellow }
         return .red
+    }
+
+    private func latencyColor(_ value: TimeInterval) -> Color {
+        if value < 1.0 { return .green }
+        if value < 2.5 { return .yellow }
+        return .orange
+    }
+
+    private func realtimeFactorColor(_ value: Double) -> Color {
+        if value < 0.35 { return .green }
+        if value < 0.8 { return .yellow }
+        return .orange
+    }
+
+    private func realtimeFactor(result: BenchmarkResult, duration: TimeInterval) -> Double? {
+        guard duration > 0 else { return nil }
+        return result.latency / duration
+    }
+
+    private func isSlowResult(_ result: BenchmarkResult, duration: TimeInterval) -> Bool {
+        if result.latency > 2.5 { return true }
+        guard let rtf = realtimeFactor(result: result, duration: duration) else { return false }
+        return rtf > 0.8
+    }
+
+    private func percentile(_ sortedValues: [Double], percentile: Double) -> Double {
+        guard !sortedValues.isEmpty else { return 0 }
+        let clamped = min(1, max(0, percentile))
+        let index = Int((Double(sortedValues.count - 1) * clamped).rounded(.up))
+        return sortedValues[min(index, sortedValues.count - 1)]
     }
 
     // MARK: - Player de áudio
@@ -477,7 +601,31 @@ struct BenchmarkView: View {
     }
 
     private func runAll() {
-        let fixturesSnapshot = store.fixtures
+        runFixtures(store.fixtures)
+    }
+
+    private func importRecentHistory(limit: Int) {
+        store.importFromHistory(historyStore: historyStore, limit: limit)
+        availableAudioFiles = store.availableAudioFileNames()
+    }
+
+    private func runRecentHistory(limit: Int) {
+        let recentAudioFileNames = Set(
+            historyStore.records
+                .filter { $0.sourceRecordID == nil }
+                .sorted { $0.timestamp > $1.timestamp }
+                .compactMap(\.audioFileName)
+                .prefix(limit)
+        )
+        importRecentHistory(limit: limit)
+
+        let fixturesSnapshot = store.fixtures.filter {
+            recentAudioFileNames.contains($0.audioFileName)
+        }
+        runFixtures(fixturesSnapshot)
+    }
+
+    private func runFixtures(_ fixturesSnapshot: [BenchmarkFixture]) {
         guard !fixturesSnapshot.isEmpty else { return }
 
         runAllCurrent = 0

@@ -28,7 +28,7 @@ struct VocabularyStoreTests {
 
         let store = makeStore(in: tmpDir)
 
-        #expect(store.entries.count == 4)
+        #expect(store.entries.count > 4)
 
         let claude = try #require(store.entries.first { $0.term == "Claude Code" })
         #expect(claude.aliases == ["cloud code"])
@@ -36,7 +36,10 @@ struct VocabularyStoreTests {
         #expect(claude.weight == 10.0)
 
         let gitPull = try #require(store.entries.first { $0.term == "git pull" })
-        #expect(gitPull.aliases == ["git pool"])
+        #expect(gitPull.aliases.contains("git pool"))
+        #expect(gitPull.aliases.contains("gitpool"))
+        #expect(gitPull.aliases.contains("get pull"))
+        #expect(gitPull.aliases.contains("get pool"))
         #expect(gitPull.isEnabled == true)
 
         let branch = try #require(store.entries.first { $0.term == "branch" })
@@ -48,6 +51,35 @@ struct VocabularyStoreTests {
         #expect(branches.aliases.isEmpty)
         #expect(branches.isEnabled == true)
         #expect(branches.weight == 15.0)
+
+        let github = try #require(store.entries.first { $0.term == "GitHub" })
+        #expect(github.aliases.contains("git hub"))
+
+        let xcodebuild = try #require(store.entries.first { $0.term == "xcodebuild" })
+        #expect(xcodebuild.aliases.contains("x code build"))
+
+        let coreML = try #require(store.entries.first { $0.term == "CoreML" })
+        #expect(coreML.aliases.contains("core ml"))
+
+        let llm = try #require(store.entries.first { $0.term == "LLM" })
+        #expect(llm.aliases.contains("l l m"))
+
+        #expect(store.entries.contains { $0.term == "FluidAudio" })
+        #expect(store.entries.contains { $0.term == "Parakeet TDT" })
+        #expect(store.entries.contains { $0.term == "Silero VAD" })
+        #expect(store.entries.contains { $0.term == "macOS" })
+
+        #expect(store.entries.contains { $0.term == "Codex" })
+        #expect(store.entries.contains { $0.term == "git add" })
+        #expect(store.entries.contains { $0.term == "fast-forward" })
+        #expect(store.entries.contains { $0.term == "XCTest" })
+        #expect(store.entries.contains { $0.term == "DMG" })
+        #expect(store.entries.contains { $0.term == "ffmpeg" })
+        #expect(store.entries.contains { $0.term == "ASR" })
+        #expect(store.entries.contains { $0.term == "VAD" })
+        #expect(store.entries.contains { $0.term == "Prompt Mode" })
+        #expect(store.entries.contains { $0.term == "benchmark" })
+        #expect(store.entries.contains { $0.term == "Cmd+V" })
     }
 
     @Test("addEntry adiciona ao final")
@@ -56,10 +88,10 @@ struct VocabularyStoreTests {
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
         let store = makeStore(in: tmpDir)
+        let defaultCount = store.entries.count
         store.addEntry(term: "Kubernetes", aliases: ["cubernetes"], weight: 8.0)
 
-        // 4 padrão + 1 adicionada
-        #expect(store.entries.count == 5)
+        #expect(store.entries.count == defaultCount + 1)
         #expect(store.entries.last?.term == "Kubernetes")
         #expect(store.entries.last?.aliases == ["cubernetes"])
         #expect(store.entries.last?.weight == 8.0)
@@ -72,10 +104,11 @@ struct VocabularyStoreTests {
 
         let store1 = makeStore(in: tmpDir)
         store1.addEntry(term: "SwiftUI")
+        let expectedCount = store1.entries.count
 
         // Novo store lendo do mesmo diretório
         let store2 = makeStore(in: tmpDir)
-        #expect(store2.entries.count == 5)
+        #expect(store2.entries.count == expectedCount)
 
         let added = store2.entries.first { $0.term == "SwiftUI" }
         #expect(added != nil)
@@ -87,15 +120,15 @@ struct VocabularyStoreTests {
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
         let store = makeStore(in: tmpDir)
+        let defaultCount = store.entries.count
         store.addEntry(term: "Temporário")
 
-        #expect(store.entries.count == 5)
+        #expect(store.entries.count == defaultCount + 1)
 
         let toDelete = try #require(store.entries.first { $0.term == "Temporário" })
         store.deleteEntry(toDelete)
 
-        // Restam as entradas padrão
-        #expect(store.entries.count == 4)
+        #expect(store.entries.count == defaultCount)
         #expect(store.entries.contains { $0.term == "Claude Code" })
         #expect(store.entries.contains { $0.term == "git pull" })
         #expect(store.entries.contains { $0.term == "branch" })
@@ -108,6 +141,7 @@ struct VocabularyStoreTests {
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
         let store1 = makeStore(in: tmpDir)
+        let defaultCount = store1.entries.count
         store1.addEntry(term: "ParaDeletar")
 
         // Deleta a entrada adicionada
@@ -116,7 +150,7 @@ struct VocabularyStoreTests {
 
         // Novo store confirma que foi removida — restam apenas os defaults
         let store2 = makeStore(in: tmpDir)
-        #expect(store2.entries.count == 4)
+        #expect(store2.entries.count == defaultCount)
         #expect(store2.entries.contains { $0.term == "ParaDeletar" } == false)
     }
 
@@ -126,13 +160,13 @@ struct VocabularyStoreTests {
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
         let store1 = makeStore(in: tmpDir)
+        let defaultCount = store1.entries.count
         store1.addEntry(term: "React Native", aliases: ["react nativo"], weight: 5.0)
         store1.addEntry(term: "PostgreSQL", aliases: ["postgres", "postgre"], weight: 12.0)
 
         // Recarrega do disco
         let store2 = makeStore(in: tmpDir)
-        // 4 padrão + 2 adicionadas
-        #expect(store2.entries.count == 6)
+        #expect(store2.entries.count == defaultCount + 2)
 
         let react = try #require(store2.entries.first { $0.term == "React Native" })
         #expect(react.aliases == ["react nativo"])
@@ -241,7 +275,7 @@ struct VocabularyStoreTests {
         defer { try? FileManager.default.removeItem(at: tmpDir) }
 
         let store = makeStore(in: tmpDir)
-        #expect(store.entries.count == 4)
+        #expect(store.entries.isEmpty == false)
 
         // Deleta todas as entradas padrão
         while let first = store.entries.first {
@@ -289,12 +323,48 @@ struct VocabularyStoreTests {
 
         let store = makeStore(in: tmpDir)
 
-        #expect(store.entries.count == 4)
+        #expect(store.entries.count > 4)
         #expect(store.entries.contains { $0.term == "Claude Code" })
         #expect(store.entries.contains { $0.term == "git pull" })
         #expect(store.entries.contains { $0.term == "branch" })
         #expect(store.entries.contains { $0.term == "branches" })
+        #expect(store.entries.contains { $0.term == "GitHub" })
+        #expect(store.entries.contains { $0.term == "xcodebuild" })
+        #expect(store.entries.contains { $0.term == "LLM" })
+
+        let gitPull = try #require(store.entries.first { $0.term == "git pull" })
+        #expect(gitPull.aliases.contains("gitpool"))
         #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".vocab_defaults_seeded_v2").path))
+        #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".vocab_defaults_seeded_v3").path))
+        #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".vocab_aliases_seeded_v3").path))
+        #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".vocab_defaults_seeded_v4").path))
+    }
+
+    @Test("Upgrade adiciona aliases compactos ao git pull sem duplicar termo")
+    func testGitPullAliasUpgradeWithoutDuplicateTerm() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let legacyEntries = [
+            VocabularyEntry(term: "git pull", aliases: ["git pool"])
+        ]
+        let data = try JSONEncoder().encode(legacyEntries)
+        try data.write(to: tmpDir.appendingPathComponent("vocabulary.json"))
+        try Data().write(to: tmpDir.appendingPathComponent(".vocab_defaults_seeded"))
+        try Data().write(to: tmpDir.appendingPathComponent(".vocab_defaults_seeded_v2"))
+        try Data().write(to: tmpDir.appendingPathComponent(".vocab_defaults_seeded_v3"))
+
+        let store = makeStore(in: tmpDir)
+
+        let gitPullEntries = store.entries.filter { $0.term == "git pull" }
+        #expect(gitPullEntries.count == 1)
+
+        let gitPull = try #require(gitPullEntries.first)
+        #expect(gitPull.aliases.contains("git pool"))
+        #expect(gitPull.aliases.contains("gitpool"))
+        #expect(gitPull.aliases.contains("get pull"))
+        #expect(gitPull.aliases.contains("get pool"))
+        #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".vocab_aliases_seeded_v3").path))
     }
 
     // MARK: - applyReplacements
@@ -326,8 +396,26 @@ struct VocabularyStoreTests {
 
         let store = makeStore(in: tmpDir)
         #expect(store.applyReplacements(to: "Git Pool é útil") == "git pull é útil")
+        #expect(store.applyReplacements(to: "Faz o GitPool na main") == "Faz o git pull na main")
+        #expect(store.applyReplacements(to: "Faz o get pool na main") == "Faz o git pull na main")
         #expect(store.applyReplacements(to: "GIT POOL na main") == "git pull na main")
         #expect(store.applyReplacements(to: "Cloud Code é top") == "Claude Code é top")
+    }
+
+    @Test("applyReplacements aplica aliases técnicos derivados do uso real")
+    func testApplyReplacementsTechnicalAliasesFromUsage() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let store = makeStore(in: tmpDir)
+
+        #expect(store.applyReplacements(to: "rodar get add agora") == "rodar git add agora")
+        #expect(store.applyReplacements(to: "falhou no fast forward") == "falhou no fast-forward")
+        #expect(store.applyReplacements(to: "regravar os branchmarks") == "regravar os benchmarks")
+        #expect(store.applyReplacements(to: "abrir o pront mode") == "abrir o Prompt Mode")
+        #expect(store.applyReplacements(to: "colar com command v") == "colar com Cmd+V")
+        #expect(store.applyReplacements(to: "exportar o d m g") == "exportar o DMG")
+        #expect(store.applyReplacements(to: "rodar x c test") == "rodar XCTest")
     }
 
     @Test("applyReplacements preserva casing do term cadastrado")
@@ -426,13 +514,13 @@ struct VocabularyStoreTests {
 
         let store = makeStore(in: tmpDir)
         // Dois termos: um com alias curto, outro com alias longo que contém o curto
-        store.addEntry(term: "pull-request", aliases: ["pool request"])
-        store.addEntry(term: "pool", aliases: ["pol"])
+        store.addEntry(term: "alpha-beta", aliases: ["foo bar"])
+        store.addEntry(term: "baz", aliases: ["foo"])
 
-        // "pool request" deve virar "pull-request" — não pode ser fragmentado em
-        // "pool" (virando "pool") + " request"
-        let result = store.applyReplacements(to: "abrir uma pool request agora")
-        #expect(result == "abrir uma pull-request agora")
+        // "foo bar" deve virar "alpha-beta" — não pode ser fragmentado em
+        // "foo" (virando "baz") + " bar"
+        let result = store.applyReplacements(to: "abrir foo bar agora")
+        #expect(result == "abrir alpha-beta agora")
     }
 
     @Test("applyReplacements ignora aliases vazios/whitespace")

@@ -171,6 +171,7 @@ final class LLMCoordinator {
 
                 let trimmed = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
+                    let selectedModel = await llmManager.selectedModel
                     if accessibilityGranted {
                         _ = await textInserter.replaceLastPaste(trimmed)
                     } else {
@@ -179,7 +180,7 @@ final class LLMCoordinator {
 
                     persistLLMResult?(
                         trimmed,
-                        "LLM: \(prompt.name)",
+                        "LLM \(selectedModel.shortName): \(prompt.name)",
                         TextInserter.previousApp?.localizedName,
                         originalID
                     )
@@ -208,6 +209,14 @@ final class LLMCoordinator {
 
     // MARK: - Gerenciamento do modelo
 
+    func selectedModel() async -> LLMModelOption {
+        await llmManager.selectedModel
+    }
+
+    func selectModel(id: String) async -> LLMCorrectionManager.ModelState {
+        await llmManager.selectModel(id: id)
+    }
+
     func downloadModel() async -> LLMCorrectionManager.ModelState {
         do {
             try await llmManager.downloadModel()
@@ -216,6 +225,18 @@ final class LLMCoordinator {
             logger.error("Erro no download do modelo LLM: \(error.localizedDescription)")
         }
         return await llmManager.modelState
+    }
+
+    func downloadProgressSnapshot() async -> LLMDownloadProgressSnapshot? {
+        await llmManager.downloadProgressSnapshot()
+    }
+
+    func cancelDownloadAndCleanup() async {
+        do {
+            try await llmManager.cancelDownloadAndCleanup()
+        } catch {
+            logger.error("Erro ao cancelar download do modelo LLM: \(error.localizedDescription)")
+        }
     }
 
     func modelState() async -> LLMCorrectionManager.ModelState {
@@ -258,8 +279,16 @@ final class LLMCoordinator {
     }
 
     func removeModel() async {
+        await removeModel(id: nil)
+    }
+
+    func removeModel(id modelID: String?) async {
         do {
-            try await llmManager.deleteModel()
+            if let modelID {
+                try await llmManager.deleteModel(id: modelID)
+            } else {
+                try await llmManager.deleteModel()
+            }
         } catch {
             logger.error("Erro ao remover modelo LLM: \(error.localizedDescription)")
         }
@@ -267,5 +296,9 @@ final class LLMCoordinator {
 
     func modelSizeOnDisk() async -> Int64? {
         await llmManager.modelSizeOnDisk()
+    }
+
+    func cachedModelsOnDisk() async -> [LLMCorrectionManager.CachedModelInfo] {
+        await llmManager.cachedModelsOnDisk()
     }
 }

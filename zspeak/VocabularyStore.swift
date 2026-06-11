@@ -193,6 +193,133 @@ final class VocabularyStore {
         ("branches", [], 15.0)
     ]
 
+    /// Primeiro pacote derivado da conversa real do usuário + PRD:
+    /// comandos Git, stack Swift/macOS e termos do pipeline local de ASR/LLM.
+    private static let defaultEntriesV3: [(term: String, aliases: [String], weight: Float)] = [
+        ("main", [], 8.0),
+        ("GitHub", ["git hub"], 12.0),
+        ("git fetch", ["get fetch"], 12.0),
+        ("git status", ["get status"], 12.0),
+        ("git diff", ["get diff"], 12.0),
+        ("git stash", ["get stash"], 12.0),
+        ("git push", ["get push"], 12.0),
+        ("git merge", ["get merge"], 12.0),
+        ("git rebase", ["get rebase"], 12.0),
+        ("git checkout", ["get checkout"], 12.0),
+        ("origin/main", ["origin main"], 10.0),
+        ("pull request", ["pool request"], 12.0),
+        ("commit", [], 10.0),
+        ("merge", [], 10.0),
+        ("deploy", [], 10.0),
+        ("API", ["a p i"], 12.0),
+        ("endpoint", ["end point"], 10.0),
+        ("TypeScript", ["type script"], 12.0),
+        ("Docker", [], 10.0),
+        ("Kubernetes", ["cubernetes"], 12.0),
+        ("CI/CD", ["ci cd", "c i c d"], 12.0),
+        ("Xcode", ["x code", "ex code"], 12.0),
+        ("xcodebuild", ["x code build", "ex code build"], 12.0),
+        ("Swift", [], 10.0),
+        ("SwiftUI", ["swift ui", "swift u i"], 12.0),
+        ("Swift Package Manager", [], 10.0),
+        ("SPM", ["s p m"], 10.0),
+        ("CoreML", ["core ml", "core m l"], 12.0),
+        ("MLX", ["m l x"], 12.0),
+        ("LLM", ["l l m"], 12.0),
+        ("FluidAudio", ["fluid audio"], 12.0),
+        ("AVAudioEngine", ["a v audio engine", "av audio engine"], 12.0),
+        ("CGEvent", ["c g event"], 12.0),
+        ("NSPasteboard", ["n s pasteboard"], 12.0),
+        ("KeyboardShortcuts", ["keyboard shortcuts", "keyboard shortcut"], 10.0),
+        ("LaunchAtLogin", ["launch at login"], 10.0),
+        ("Parakeet TDT", ["parakeet tdt"], 12.0),
+        ("Silero VAD", ["silero vad"], 12.0),
+        ("HuggingFace", ["hugging face"], 10.0),
+        ("Apple Silicon", [], 10.0),
+        ("Apple Neural Engine", [], 10.0),
+        ("ANE", ["a n e"], 10.0),
+        ("macOS", ["mac os"], 10.0),
+        ("MenuBarExtra", ["menu bar extra"], 10.0),
+        ("UserDefaults", ["user defaults"], 10.0),
+        ("snapshot", [], 8.0),
+        ("snapshots", [], 8.0)
+    ]
+
+    /// Aliases novos para termos de batches antigos. Separado para não reintroduzir
+    /// termos que o usuário deletou manualmente em instalações existentes.
+    private static let defaultAliasUpdatesV3: [(term: String, aliases: [String])] = [
+        ("git pull", ["gitpool", "get pull", "get pool"])
+    ]
+
+    /// Segundo pacote derivado de revisão/build/release do projeto.
+    /// Mantido em batch separado para instalações que já semearam a v3.
+    private static let defaultEntriesV4: [(term: String, aliases: [String], weight: Float)] = [
+        ("Codex", ["códex"], 12.0),
+        ("ChatGPT", ["chat gpt", "chat g p t"], 12.0),
+        ("OpenAI", ["open ai", "open a i"], 10.0),
+        ("git add", ["get add"], 12.0),
+        ("git log", ["get log"], 12.0),
+        ("git show", ["get show"], 12.0),
+        ("git reset", ["get reset"], 10.0),
+        ("git clone", ["get clone"], 10.0),
+        ("git clean", ["get clean"], 10.0),
+        ("fast-forward", ["fast forward"], 10.0),
+        ("ff-only", ["ff only", "f f only"], 10.0),
+        ("HEAD", ["head"], 8.0),
+        ("remote", [], 8.0),
+        ("upstream", [], 8.0),
+        ("staged", [], 10.0),
+        ("unstaged", ["un staged"], 10.0),
+        ("untracked", ["un tracked"], 10.0),
+        ("stash@{0}", ["stash zero"], 8.0),
+        ("merge conflict", ["conflito de merge"], 10.0),
+        ("workspace", ["work space"], 8.0),
+        ("worktree", ["work tree"], 8.0),
+        ("scheme", [], 8.0),
+        ("Debug", [], 8.0),
+        ("destination", [], 8.0),
+        ("XCTest", ["x c test"], 10.0),
+        ("Swift Testing", [], 10.0),
+        ("Package.swift", ["package swift"], 10.0),
+        ("Package.resolved", ["package resolved"], 10.0),
+        ("DerivedData", ["derived data"], 10.0),
+        ("Info.plist", ["info plist"], 10.0),
+        ("entitlements", [], 8.0),
+        ("DMG", ["d m g"], 10.0),
+        ("ffmpeg", ["f f mpeg", "efe efe mpeg"], 10.0),
+        ("OPUS", ["opus"], 8.0),
+        ("M4A", ["m quatro a", "m 4 a"], 8.0),
+        ("WAV", ["wave", "uav"], 8.0),
+        ("pyannote", ["pai anote", "py anote"], 10.0),
+        ("WeSpeaker", ["we speaker"], 10.0),
+        ("diarização", ["diarization"], 8.0),
+        ("speaker", [], 8.0),
+        ("speakers", [], 8.0),
+        ("ASR", ["a s r"], 12.0),
+        ("VAD", ["v a d"], 12.0),
+        ("VADManager", ["vad manager", "v a d manager"], 10.0),
+        ("Prompt Mode", ["pront mode", "mode prompt"], 10.0),
+        ("Modo Prompt", ["modo pront"], 10.0),
+        ("prompt", ["pront"], 8.0),
+        ("prompts", ["pronts"], 8.0),
+        ("benchmark", ["branchmark"], 10.0),
+        ("benchmarks", ["branchmarks"], 10.0),
+        ("overlay", [], 10.0),
+        ("hotkey", ["hot key"], 10.0),
+        ("push-to-talk", ["push to talk"], 10.0),
+        ("clipboard", ["clip board"], 10.0),
+        ("paste", [], 8.0),
+        ("Cmd+V", ["command v", "comando v"], 10.0),
+        ("Accessibility", ["acessibility"], 10.0),
+        ("Microphone", [], 8.0),
+        ("System Settings", [], 8.0),
+        ("Privacy & Security", ["privacy security"], 8.0),
+        ("sandbox", [], 8.0),
+        ("Keychain", ["key chain"], 8.0),
+        ("Developer ID", [], 8.0),
+        ("notarização", ["notarization"], 8.0)
+    ]
+
     /// Semeia entradas padrão na primeira inicialização (nova instalação ou upgrade).
     /// Cada batch usa sua própria flag para permitir upgrades incrementais sem
     /// ressuscitar defaults antigos removidos pelo usuário.
@@ -205,6 +332,21 @@ final class VocabularyStore {
         seedDefaults(
             Self.defaultEntriesV2,
             flagName: ".vocab_defaults_seeded_v2",
+            in: directory
+        )
+        seedDefaults(
+            Self.defaultEntriesV3,
+            flagName: ".vocab_defaults_seeded_v3",
+            in: directory
+        )
+        seedAliasUpdates(
+            Self.defaultAliasUpdatesV3,
+            flagName: ".vocab_aliases_seeded_v3",
+            in: directory
+        )
+        seedDefaults(
+            Self.defaultEntriesV4,
+            flagName: ".vocab_defaults_seeded_v4",
             in: directory
         )
     }
@@ -225,6 +367,39 @@ final class VocabularyStore {
             if !alreadyExists {
                 entries.append(VocabularyEntry(term: def.term, aliases: def.aliases, weight: def.weight))
                 mutated = true
+            }
+        }
+
+        if mutated {
+            saveJSON()
+        }
+        try? Data().write(to: flagURL)
+    }
+
+    private func seedAliasUpdates(
+        _ updates: [(term: String, aliases: [String])],
+        flagName: String,
+        in directory: URL
+    ) {
+        let flagURL = directory.appendingPathComponent(flagName)
+        guard !FileManager.default.fileExists(atPath: flagURL.path) else { return }
+
+        var mutated = false
+        for update in updates {
+            guard let entryIndex = entries.firstIndex(where: {
+                $0.term.caseInsensitiveCompare(update.term) == .orderedSame
+            }) else {
+                continue
+            }
+
+            for alias in update.aliases {
+                let alreadyExists = entries[entryIndex].aliases.contains {
+                    $0.caseInsensitiveCompare(alias) == .orderedSame
+                }
+                if !alreadyExists {
+                    entries[entryIndex].aliases.append(alias)
+                    mutated = true
+                }
             }
         }
 

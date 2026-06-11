@@ -54,14 +54,33 @@ protocol TextInserting {
 /// Correção pós-transcrição via LLM local (MLX).
 protocol LLMCorrecting: Actor {
     var modelState: LLMCorrectionManager.ModelState { get async }
+    var selectedModel: LLMModelOption { get async }
     func setKeepAlive(_ alive: Bool) async
+    func selectModel(id: String) async -> LLMCorrectionManager.ModelState
     func downloadModel() async throws
+    func downloadProgressSnapshot() async -> LLMDownloadProgressSnapshot?
+    func cancelDownloadAndCleanup() async throws
     func loadModel() async throws
     func deleteModel() async throws
+    func deleteModel(id: String) async throws
     func modelSizeOnDisk() async -> Int64?
+    func cachedModelsOnDisk() async -> [LLMCorrectionManager.CachedModelInfo]
     func correct(
         text: String,
         systemPrompt: String,
+        maxTokens: Int,
+        onPartial: (@Sendable (String) -> Void)?
+    ) async throws -> String
+    func translate(
+        text: String,
+        targetLanguage: String,
+        maxTokens: Int,
+        onPartial: (@Sendable (String) -> Void)?
+    ) async throws -> String
+    func translateTerm(
+        term: String,
+        context: String?,
+        targetLanguage: String,
         maxTokens: Int,
         onPartial: (@Sendable (String) -> Void)?
     ) async throws -> String
