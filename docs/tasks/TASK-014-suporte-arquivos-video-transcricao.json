@@ -1,0 +1,36 @@
+{
+  "schema": "energimap-doc/v1",
+  "kind": "task",
+  "id": "TASK-014",
+  "title": "Suporte a arquivos de vídeo na transcrição (.mp4, .mov, .m4v, .mkv, .avi, .wmv)",
+  "status": "done",
+  "dateCreated": "2026-05-25",
+  "dateModified": "2026-05-25",
+  "owner": "Michel Zandonai",
+  "context": "Hoje a aba 'Transcrever Arquivo' (TASK-002) só aceita containers de áudio. O usuário tentou transcrever um .mp4 (típico de gravação de tela, vídeo do WhatsApp, screencast) e recebeu 'Formato .mp4 não é suportado'. O ffmpeg embutido no bundle já consegue extrair a trilha de áudio de qualquer container de vídeo — falta apenas habilitar essas extensões no set `ffmpegExtensions` do AudioFileTranscriber e descartar explicitamente streams de vídeo (`-vn`) na invocação do ffmpeg para evitar avisos e garantir saída WAV limpa. Esta é uma extensão direta da TASK-002 e estava listada como followUp dela.",
+  "goal": "Aceitar containers de vídeo comuns (MP4, MOV, M4V, MKV, AVI, WMV) na transcrição de arquivos, extraindo a trilha de áudio via ffmpeg e enviando ao mesmo pipeline atual (ASR + diarização opcional).",
+  "acceptance": [
+    "AudioFileTranscriber.ffmpegExtensions inclui {mp4, mov, m4v, mkv, avi, wmv}",
+    "AudioFileTranscriber.isSupported retorna true para arquivos .mp4/.mov/.m4v/.mkv/.avi/.wmv (case-insensitive)",
+    "AudioFileView.openFilePicker aceita esses containers no NSOpenPanel (via UTType derivado da extensão)",
+    "FFmpegTranscoder.transcodeToWAV passa `-vn` explícito para descartar streams de vídeo (output continua WAV 16kHz mono PCM)",
+    "Teste de regressão valida que cada extensão de vídeo nova está em ffmpegExtensions e satisfaz isSupported",
+    "swift build (Release) compila sem erros e o app gerado abre arquivo .mp4 sem mostrar 'Formato não suportado'"
+  ],
+  "changes": [
+    "Modificar zspeak/AudioFileTranscriber.swift — adicionar {mp4, mov, m4v, mkv, avi, wmv} a ffmpegExtensions",
+    "Modificar zspeak/FFmpegTranscoder.swift — incluir `-vn` nos argumentos do ffmpeg para descartar vídeo",
+    "Estender Tests/AudioFileTranscriberTests.swift — assertions de regressão para extensões de vídeo",
+    "Atualizar docs/adr/010-transcricao-arquivo-audio.md — listar containers de vídeo cobertos e changelog",
+    "Atualizar docs/prd/mvp.md — mover 'Transcrição de arquivos de vídeo (.mp4, .mov)' da seção 9 (Fora do Escopo) para a 5.9 (lista de formatos)",
+    "Atualizar docs/tasks/TASK-002 — remover o followUp 'Suporte a arquivos de vídeo' e registrar conclusão no changelog"
+  ],
+  "followUps": [
+    "Avaliar containers menos comuns sob demanda (.flv, .ts, .mxf, .vob) — adicionar apenas se algum usuário pedir",
+    "Mostrar duração estimada do áudio extraído antes da transcrição (UX: feedback de 'vídeo de 1h12 → transcrevendo...')"
+  ],
+  "changelog": [
+    { "date": "2026-05-25", "change": "Task criada após usuário pedir suporte a MP4 para transcrição de arquivo" },
+    { "date": "2026-05-25", "change": "Implementado: containers {mp4, mov, m4v, mkv, avi, wmv} adicionados a ffmpegExtensions; ffmpeg invocado com -vn; teste de regressão TASK-014 cobre todas as extensões (case-sensitive e case-insensitive)" }
+  ]
+}

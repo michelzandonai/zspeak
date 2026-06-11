@@ -26,17 +26,17 @@ struct LLMModelBenchmarkTests {
             Candidate(
                 name: "Qwen2.5 3B Instruct 4-bit",
                 modelID: "mlx-community/Qwen2.5-3B-Instruct-4bit",
-                note: "baseline ja usado pelo app"
+                note: "baseline antigo do app"
             ),
             Candidate(
                 name: "Qwen3 4B Instruct 2507 4-bit",
                 modelID: "mlx-community/Qwen3-4B-Instruct-2507-4bit",
-                note: "candidato principal: instruct text-only mais novo"
+                note: "baseline anterior do app"
             ),
             Candidate(
-                name: "Qwen3.5 2B OptiQ 4-bit",
-                modelID: "mlx-community/Qwen3.5-2B-OptiQ-4bit",
-                note: "Qwen 3.5 text-generation compativel com MLX LM"
+                name: "Qwen3.5 4B OptiQ 4-bit",
+                modelID: "mlx-community/Qwen3.5-4B-OptiQ-4bit",
+                note: "modelo atual do app"
             ),
         ]
 

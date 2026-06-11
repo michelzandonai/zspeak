@@ -80,6 +80,27 @@ struct AudioFileTranscriberTests {
         #expect(AudioFileTranscriber.ffmpegExtensions.contains("amr"))
     }
 
+    /// Regressão da TASK-014 — containers de vídeo: ffmpeg extrai a trilha de áudio.
+    /// Se algum dia esses formatos saírem do set, a UI volta a rejeitar arquivos .mp4 etc.
+    @Test("Containers de vídeo estão em ffmpegExtensions (TASK-014)")
+    func videoContainersSupported() {
+        let videoExtensions: Set<String> = ["mp4", "mov", "m4v", "mkv", "avi", "wmv"]
+        for ext in videoExtensions {
+            #expect(
+                AudioFileTranscriber.ffmpegExtensions.contains(ext),
+                "Extensão de vídeo .\(ext) deveria estar em ffmpegExtensions"
+            )
+            #expect(
+                AudioFileTranscriber.isSupported(url: URL(fileURLWithPath: "/tmp/video.\(ext)")),
+                "isSupported deveria retornar true para .\(ext)"
+            )
+            #expect(
+                AudioFileTranscriber.isSupported(url: URL(fileURLWithPath: "/tmp/VIDEO.\(ext.uppercased())")),
+                "isSupported deveria retornar true para .\(ext.uppercased()) (case-insensitive)"
+            )
+        }
+    }
+
     @Test("supportedExtensions é união dos dois sets")
     func supportedExtensionsIsUnion() {
         let native = AudioFileTranscriber.supportedNativeExtensions

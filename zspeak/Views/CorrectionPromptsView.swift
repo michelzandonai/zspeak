@@ -124,7 +124,7 @@ struct CorrectionPromptsView: View {
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Qwen 2.5 3B")
+                Text(LLMCorrectionManager.modelDisplayName)
                     .font(.body)
                 Text(modelStateSubtitle)
                     .font(.caption)
@@ -224,11 +224,11 @@ struct CorrectionPromptsView: View {
 
     private var modelStateSubtitle: String {
         switch modelState {
-        case .notDownloaded: "Modelo LLM para correção pós-transcrição"
-        case .downloading: "Baixando pesos do HuggingFace…"
+        case .notDownloaded: LLMCorrectionManager.modelDetails
+        case .downloading: "Baixando \(LLMCorrectionManager.modelDetails)"
         case .loading: "Carregando na memória…"
-        case .downloaded: "Pronto para carregar"
-        case .ready: "Pronto para corrigir transcrições"
+        case .downloaded: "Baixado · \(LLMCorrectionManager.modelDetails)"
+        case .ready: "Pronto · \(LLMCorrectionManager.modelDetails)"
         case .error: "Falha — tente novamente"
         }
     }

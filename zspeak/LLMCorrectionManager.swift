@@ -1,11 +1,143 @@
 import Foundation
 import Hub
+import Metal
 import MLXLLM
 import MLXLMCommon
 import os
 
+/// Localiza e valida os shaders Metal que o MLX precisa carregar em runtime.
+///
+/// Sem um `mlx.metallib` valido, o MLX-Swift dispara uma excecao C++ ao
+/// inicializar o backend Metal. Essa excecao cruza o boundary Swift/C++ e
+/// aborta o processo, entao a validacao precisa acontecer antes de chamar MLX.
+enum MLXRuntimeResources {
+    static let swiftPMBundleName = "mlx-swift_Cmlx.bundle"
+    static let colocatedMetallibName = "mlx.metallib"
+    static let defaultMetallibName = "default.metallib"
+
+    static let missingMetallibMessage = """
+    LLM local indisponivel: o app foi gerado sem os shaders do MLX. Instale o Metal Toolchain e gere o app novamente.
+    """
+
+    static func candidateMetallibURLs(
+        executableURL: URL?,
+        mainBundleURL: URL,
+        bundleResourceURLs: [URL],
+        frameworkResourceURLs: [URL],
+        currentDirectoryURL: URL
+    ) -> [URL] {
+        var urls: [URL] = []
+
+        if let executableURL {
+            let executableDirectory = executableURL.deletingLastPathComponent()
+            urls.append(executableDirectory.appendingPathComponent(colocatedMetallibName))
+            urls.append(
+                executableDirectory
+                    .appendingPathComponent("Resources", isDirectory: true)
+                    .appendingPathComponent(colocatedMetallibName)
+            )
+            urls.append(
+                executableDirectory
+                    .appendingPathComponent("Resources", isDirectory: true)
+                    .appendingPathComponent(defaultMetallibName)
+            )
+            urls.append(contentsOf: swiftPMBundleMetallibURLs(in: executableDirectory))
+        }
+
+        urls.append(contentsOf: swiftPMBundleMetallibURLs(in: mainBundleURL))
+
+        for resourceURL in bundleResourceURLs {
+            urls.append(resourceURL.appendingPathComponent(defaultMetallibName))
+            urls.append(contentsOf: swiftPMBundleMetallibURLs(in: resourceURL))
+        }
+
+        for resourceURL in frameworkResourceURLs {
+            urls.append(resourceURL.appendingPathComponent(defaultMetallibName))
+        }
+
+        urls.append(currentDirectoryURL.appendingPathComponent(defaultMetallibName))
+
+        var seen: Set<String> = []
+        return urls.filter { url in
+            let path = url.standardizedFileURL.path
+            return seen.insert(path).inserted
+        }
+    }
+
+    private static func swiftPMBundleMetallibURLs(in directory: URL) -> [URL] {
+        let bundleURL = directory.appendingPathComponent(swiftPMBundleName, isDirectory: true)
+        return [
+            bundleURL.appendingPathComponent(defaultMetallibName),
+            bundleURL
+                .appendingPathComponent("Contents", isDirectory: true)
+                .appendingPathComponent("Resources", isDirectory: true)
+                .appendingPathComponent(defaultMetallibName),
+        ]
+    }
+
+    static func firstExistingMetallibURL(
+        executableURL: URL? = Bundle.main.executableURL,
+        mainBundleURL: URL = Bundle.main.bundleURL,
+        bundleResourceURLs: [URL] = Bundle.allBundles.compactMap(\.resourceURL),
+        frameworkResourceURLs: [URL] = Bundle.allFrameworks.compactMap {
+            $0.bundleIdentifier == "mlx-swift_Cmlx" ? $0.resourceURL : nil
+        },
+        currentDirectoryURL: URL = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        ),
+        fileManager: FileManager = .default
+    ) -> URL? {
+        candidateMetallibURLs(
+            executableURL: executableURL,
+            mainBundleURL: mainBundleURL,
+            bundleResourceURLs: bundleResourceURLs,
+            frameworkResourceURLs: frameworkResourceURLs,
+            currentDirectoryURL: currentDirectoryURL
+        ).first { isReadableNonEmptyFile($0, fileManager: fileManager) }
+    }
+
+    static func loadableMetallibURL() -> URL? {
+        guard let device = MTLCreateSystemDefaultDevice() else { return nil }
+
+        let candidates = candidateMetallibURLs(
+            executableURL: Bundle.main.executableURL,
+            mainBundleURL: Bundle.main.bundleURL,
+            bundleResourceURLs: Bundle.allBundles.compactMap(\.resourceURL),
+            frameworkResourceURLs: Bundle.allFrameworks.compactMap {
+                $0.bundleIdentifier == "mlx-swift_Cmlx" ? $0.resourceURL : nil
+            },
+            currentDirectoryURL: URL(
+                fileURLWithPath: FileManager.default.currentDirectoryPath,
+                isDirectory: true
+            )
+        )
+
+        for url in candidates where isReadableNonEmptyFile(url, fileManager: .default) {
+            if (try? device.makeLibrary(URL: url)) != nil {
+                return url
+            }
+        }
+
+        return nil
+    }
+
+    private static func isReadableNonEmptyFile(_ url: URL, fileManager: FileManager) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue,
+              fileManager.isReadableFile(atPath: url.path)
+        else {
+            return false
+        }
+
+        let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        return (size ?? 0) > 0
+    }
+}
+
 /// Gerencia o LLM local (MLX) para correção pós-transcrição
-/// Download, carregamento e inferência do modelo Gemma 3 4B quantizado
+/// Download, carregamento e inferência do modelo Qwen3.5 4B quantizado
 actor LLMCorrectionManager {
 
     private static let logger = Logger(
@@ -41,13 +173,16 @@ actor LLMCorrectionManager {
     enum LLMError: LocalizedError {
         case modelNotReady
         case generationFailed(String)
+        case runtimeUnavailable(String)
 
         var errorDescription: String? {
             switch self {
             case .modelNotReady:
-                return "Modelo LLM não est�� pronto"
+                return "Modelo LLM nao esta pronto"
             case .generationFailed(let reason):
                 return "Falha na geração: \(reason)"
+            case .runtimeUnavailable(let reason):
+                return reason
             }
         }
     }
@@ -69,8 +204,10 @@ actor LLMCorrectionManager {
         }
     }
 
-    /// Qwen3 4B Instruct 2507 quantizado 4-bit (~2.26 GB) — melhor instruction following e geração de texto
-    static let modelID = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    /// Qwen3.5 4B OptiQ quantizado 4-bit (~3.27 GB).
+    static let modelID = "mlx-community/Qwen3.5-4B-OptiQ-4bit"
+    static let modelDisplayName = "Qwen3.5 4B OptiQ"
+    static let modelDetails = "MLX OptiQ 4-bit · 4B parâmetros"
 
     /// Tempo de inatividade antes de descarregar o modelo da memória (segundos)
     private static let idleTimeout: TimeInterval = 120
@@ -116,11 +253,14 @@ actor LLMCorrectionManager {
 
     /// Baixa o modelo do HuggingFace com progresso
     func downloadModel() async throws {
-        guard case .notDownloaded = modelState else {
-            if case .downloaded = modelState { return }
-            if case .ready = modelState { return }
+        switch modelState {
+        case .notDownloaded, .error:
+            break
+        case .downloaded, .ready, .downloading, .loading:
             return
         }
+
+        try ensureRuntimeResourcesAvailable()
 
         Self.logger.info("Iniciando download do modelo \(Self.modelID)")
         modelState = .downloading(progress: 0)
@@ -160,6 +300,8 @@ actor LLMCorrectionManager {
     /// Carrega o modelo na memória (se já foi baixado)
     func loadModel() async throws {
         if case .ready = modelState { return }
+
+        try ensureRuntimeResourcesAvailable()
 
         Self.logger.info("Carregando modelo na memória")
         modelState = .loading
@@ -208,10 +350,14 @@ actor LLMCorrectionManager {
     ) async throws -> String {
         // Lazy load do disco se já baixado — NUNCA faz download aqui
         if modelContainer == nil {
-            guard case .downloaded = modelState else {
+            switch modelState {
+            case .downloaded:
+                try await loadModel()
+            case .error(let description):
+                throw LLMError.runtimeUnavailable(description)
+            default:
                 throw LLMError.modelNotReady
             }
-            try await loadModel()
         }
 
         guard case .ready = modelState, let container = modelContainer else {
@@ -279,7 +425,7 @@ actor LLMCorrectionManager {
             }
         }
 
-        // Remove tags <think>...</think> se presentes (Qwen3 thinking mode)
+        // Remove tags <think>...</think> se presentes (Qwen3/Qwen3.5 thinking mode)
         var cleaned = result
         if let thinkStart = cleaned.range(of: "<think>"),
            let thinkEnd = cleaned.range(of: "</think>") {
@@ -291,6 +437,17 @@ actor LLMCorrectionManager {
     }
 
     // MARK: - Gerenciamento do Modelo
+
+    private func ensureRuntimeResourcesAvailable() throws {
+        guard let url = MLXRuntimeResources.loadableMetallibURL() else {
+            let message = MLXRuntimeResources.missingMetallibMessage
+            modelState = .error(message)
+            Self.logger.error("\(message, privacy: .public)")
+            throw LLMError.runtimeUnavailable(message)
+        }
+
+        Self.logger.debug("MLX metallib validado em \(url.path, privacy: .public)")
+    }
 
     /// Verifica se o modelo já foi baixado localmente
     func checkModelExists() -> Bool {

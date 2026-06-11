@@ -96,6 +96,7 @@ actor FFmpegTranscoder {
         process.arguments = [
             "-nostdin",                 // Não lê stdin (evita hangs)
             "-i", inputURL.path,
+            "-vn",                      // Descarta streams de vídeo (TASK-014: aceita .mp4/.mov/.mkv etc)
             "-ar", "16000",             // Sample rate 16 kHz
             "-ac", "1",                 // Mono
             "-c:a", "pcm_s16le",        // PCM 16-bit little-endian

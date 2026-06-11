@@ -16,7 +16,7 @@ Todas as dependências devem ter licenças **Apache 2.0** ou **MIT** (permissiva
 
 | Dependência | Versão | Licença | Uso | Verificado |
 |---|---|---|---|---|
-| **FluidAudio** | v0.12.6 | Apache 2.0 | ASR (Parakeet TDT) + VAD (Silero) | github.com/FluidInference/FluidAudio |
+| **FluidAudio** | v0.12.6 | Apache 2.0 | ASR (Parakeet TDT), diarização e utilitários de áudio | github.com/FluidInference/FluidAudio |
 | **KeyboardShortcuts** | latest | MIT | Hotkey global customizável | github.com/sindresorhus/KeyboardShortcuts |
 | **LaunchAtLogin** | latest | MIT | Auto-start com sistema | github.com/sindresorhus/LaunchAtLogin |
 
@@ -25,7 +25,6 @@ Todas as dependências devem ter licenças **Apache 2.0** ou **MIT** (permissiva
 | Modelo | Licença | Origem |
 |---|---|---|
 | **Parakeet TDT 0.6B V3** (CoreML) | CC-BY-4.0 | FluidInference/parakeet-tdt-0.6b-v3-coreml |
-| **Silero VAD** (CoreML) | MIT | FluidInference/silero-vad-coreml |
 
 ### APIs do sistema (sem licença necessária)
 

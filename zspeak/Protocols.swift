@@ -45,10 +45,10 @@ protocol Transcribing: Actor {
 @MainActor
 protocol TextInserting {
     @discardableResult
-    func insert(_ text: String) -> Bool
+    func insert(_ text: String) async -> Bool
     func copyToClipboard(_ text: String)
     @discardableResult
-    func replaceLastPaste(_ newText: String) -> Bool
+    func replaceLastPaste(_ newText: String) async -> Bool
 }
 
 /// Correção pós-transcrição via LLM local (MLX).

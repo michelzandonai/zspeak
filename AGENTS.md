@@ -9,9 +9,8 @@
 
 ## Tech Stack
 
-- **FluidAudio** v0.12.6 (Apache 2.0) — ASR + VAD via CoreML/Apple Neural Engine
+- **FluidAudio** v0.12.6 (Apache 2.0) — ASR via CoreML/Apple Neural Engine
 - **Parakeet TDT 0.6B V3** — modelo de transcrição (~496 MB, 25 idiomas, PT-BR incluído)
-- **Silero VAD** — detecção de atividade vocal via CoreML
 - **AVAudioEngine** — captura de áudio nativa (16kHz mono float32)
 - **CGEvent + NSPasteboard** — inserção de texto no app ativo
 - **KeyboardShortcuts** (sindresorhus) — hotkey global customizável
@@ -29,7 +28,7 @@
 
 - Single process — no sidecar, no WebSocket, no IPC
 - MenuBarExtra (tray app, hidden from Dock)
-- Pipeline: `Mic → AVAudioEngine → Silero VAD → Parakeet TDT (CoreML/ANE) → Clipboard → Cmd+V`
+- Pipeline: `Mic → AVAudioEngine → Parakeet TDT (CoreML/ANE) → Clipboard → Cmd+V`
 - Models auto-downloaded from HuggingFace on first use
 
 ## Conventions
@@ -61,8 +60,10 @@ zspeak/
 │   ├── App.swift
 │   ├── AppState.swift
 │   ├── AudioCapture.swift
+│   ├── RecordingController.swift
+│   ├── LLMCoordinator.swift
+│   ├── FileTranscriptionCoordinator.swift
 │   ├── Transcriber.swift
-│   ├── VADManager.swift
 │   ├── HotkeyManager.swift
 │   ├── TextInserter.swift
 │   └── Views/

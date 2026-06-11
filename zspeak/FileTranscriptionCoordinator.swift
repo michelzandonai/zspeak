@@ -34,6 +34,10 @@ final class FileTranscriptionCoordinator {
     /// Copia o texto final para o clipboard.
     private let textInserter: any TextInserting
 
+    /// Evita gerar WAVs enormes no histórico para gravações longas importadas.
+    /// O resultado atual ainda mantém os samples em memória para a UI enquanto aberto.
+    private static let maxPersistedAudioDurationSeconds: Double = 30 * 60
+
     init(
         transcribe: @escaping @MainActor ([Float]) async throws -> String,
         textInserter: any TextInserting
@@ -90,12 +94,16 @@ final class FileTranscriptionCoordinator {
             }
         }()
 
+        let samplesForHistory: [Float]? = result.durationSeconds <= Self.maxPersistedAudioDurationSeconds
+            ? result.samples
+            : nil
+
         let newID = persistTranscription?(
             result.text,
             modelName,
             result.durationSeconds,
             nil,
-            result.samples
+            samplesForHistory
         )
 
         // Copia para o clipboard

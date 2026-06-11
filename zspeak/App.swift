@@ -39,7 +39,6 @@ final class OverlayController {
         }
 
         panel.setupContent(model: model)
-        startObserving()
         update()
     }
 
@@ -51,6 +50,7 @@ final class OverlayController {
             _ = appState.lastLLMPromptName
             _ = appState.lastTranscription
             _ = appState.lastTranscriptionRecordID
+            _ = appState.errorMessage
             _ = promptModeManager.isEnabled
             _ = appState.correctionPromptStore?.prompts
         } onChange: { [weak self] in
@@ -72,6 +72,7 @@ final class OverlayController {
         model.lastLLMResult = appState.lastLLMResult
         model.lastLLMPromptName = appState.lastLLMPromptName
         model.lastTranscription = appState.lastTranscription
+        model.errorMessage = appState.errorMessage
 
         // Detecta transição do Modo Prompt para preload/release do LLM
         if promptModeManager.isEnabled && !wasPromptModeEnabled {

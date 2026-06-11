@@ -75,6 +75,7 @@ final class RecordingController {
     // MARK: - Tasks internas
 
     private var recordingTask: Task<Void, Never>?
+    private var recordingSessionID: UUID?
     private var isRequestingMicrophonePermission = false
 
     private enum SettingsKey {
@@ -167,12 +168,16 @@ final class RecordingController {
     /// Cancela gravação em andamento (ESC). Aceita `.preparing` e `.recording`.
     func cancelRecording() {
         guard isRecordingOrPreparing else { return }
+        let taskToCancel = recordingTask
+        let sessionID = recordingSessionID
         state = .idle
-        recordingTask?.cancel()
+        recordingTask = nil
+        taskToCancel?.cancel()
         Task {
-            await recordingTask?.value
-            recordingTask = nil
+            await taskToCancel?.value
+            guard recordingSessionID == sessionID else { return }
             _ = await audioCapture.stop()
+            recordingSessionID = nil
             // Repreparar engine para economizar cold start na próxima gravação.
             await warmUpAudioCapture()
         }
@@ -198,6 +203,8 @@ final class RecordingController {
         state = .preparing
         errorMessage = nil
         TextInserter.saveFocusedApp()
+        let sessionID = UUID()
+        recordingSessionID = sessionID
         let tStartRec = CFAbsoluteTimeGetCurrent()
         PerfSignposter.mark(.hotkey, metadata: ["state": "idle_to_preparing"])
         logger.info("t=0ms startRecording: estado → preparing")
@@ -212,6 +219,7 @@ final class RecordingController {
             Task { @MainActor in
                 guard let self else { return }
                 guard self.state == .preparing else { return }
+                guard self.recordingSessionID == sessionID else { return }
                 self.state = .recording
                 if self.playRecordingSounds {
                     self.startChime?.play()
@@ -238,7 +246,9 @@ final class RecordingController {
                     return
                 } catch {
                     logger.error("startRecording: preferido \(uid, privacy: .public) falhou (\(String(describing: error), privacy: .public)) — caindo para default")
-                    _ = await audioCapture.stop()
+                    if recordingSessionID == sessionID {
+                        _ = await audioCapture.stop()
+                    }
                 }
                 if Task.isCancelled { return }
             }
@@ -252,21 +262,30 @@ final class RecordingController {
             } catch {
                 logger.error("startRecording: default falhou → \(String(describing: error), privacy: .public)")
                 microphoneManager.activeMicrophoneID = nil
+                guard recordingSessionID == sessionID else { return }
                 state = .idle
+                recordingSessionID = nil
                 errorMessage = "Não foi possível iniciar gravação em nenhum microfone disponível"
             }
         }
     }
 
     private func stopRecording() {
+        let taskToStop = recordingTask
+        let sessionID = recordingSessionID
         state = .processing
 
         Task {
             do {
-                await recordingTask?.value
-                recordingTask = nil
+                await taskToStop?.value
+                if recordingSessionID == sessionID {
+                    recordingTask = nil
+                }
 
                 let samples = await audioCapture.stop()
+                if recordingSessionID == sessionID {
+                    recordingSessionID = nil
+                }
                 if playRecordingSounds {
                     stopChime?.play()
                 }
@@ -306,7 +325,7 @@ final class RecordingController {
                     TextInserter.lastPastedCount = 0
                     logger.info("Modo Prompt ativo: transcrição bruta não será inserida antes da LLM")
                 } else if accessibilityGranted {
-                    let inserted = textInserter.insert(text)
+                    let inserted = await textInserter.insert(text)
                     if !inserted {
                         textInserter.copyToClipboard(text)
                         errorMessage = "Falha ao inserir automaticamente. Texto copiado para o clipboard."

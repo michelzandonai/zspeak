@@ -78,6 +78,7 @@ final class LLMCoordinator {
     /// Task que aplica o prompt LLM na última transcrição. Cancelada quando o
     /// usuário dispara uma nova aplicação.
     private var llmCorrectionTask: Task<Void, Never>?
+    private var llmCorrectionRunID: UUID?
 
     // MARK: - Init
 
@@ -137,6 +138,8 @@ final class LLMCoordinator {
         }
 
         llmCorrectionTask?.cancel()
+        let runID = UUID()
+        llmCorrectionRunID = runID
 
         // Re-salva o app em foco atual (pode ter mudado desde a transcrição)
         TextInserter.saveFocusedApp()
@@ -157,18 +160,19 @@ final class LLMCoordinator {
                     onPartial: { [weak self] partial in
                         Task { @MainActor in
                             guard let self else { return }
-                            guard !Task.isCancelled else { return }
+                            guard self.llmCorrectionRunID == runID else { return }
                             self.lastLLMResult = partial
                         }
                     }
                 )
 
                 if Task.isCancelled { return }
+                guard llmCorrectionRunID == runID else { return }
 
                 let trimmed = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
                     if accessibilityGranted {
-                        _ = textInserter.replaceLastPaste(trimmed)
+                        _ = await textInserter.replaceLastPaste(trimmed)
                     } else {
                         textInserter.copyToClipboard(trimmed)
                     }
@@ -189,15 +193,16 @@ final class LLMCoordinator {
             } catch is CancellationError {
                 logger.debug("applyPromptToLast cancelado")
             } catch {
-                if !Task.isCancelled {
+                if !Task.isCancelled && llmCorrectionRunID == runID {
                     errorMessage = "Erro ao aplicar prompt: \(error.localizedDescription)"
                     logger.error("applyPromptToLast falhou: \(error.localizedDescription)")
                 }
             }
-            if !Task.isCancelled {
+            if llmCorrectionRunID == runID {
                 isApplyingPrompt = false
+                llmCorrectionRunID = nil
+                llmCorrectionTask = nil
             }
-            llmCorrectionTask = nil
         }
     }
 
@@ -207,6 +212,7 @@ final class LLMCoordinator {
         do {
             try await llmManager.downloadModel()
         } catch {
+            errorMessage = "Erro no download do modelo LLM: \(error.localizedDescription)"
             logger.error("Erro no download do modelo LLM: \(error.localizedDescription)")
         }
         return await llmManager.modelState
@@ -220,6 +226,7 @@ final class LLMCoordinator {
         do {
             try await llmManager.loadModel()
         } catch {
+            errorMessage = "Erro ao carregar modelo LLM: \(error.localizedDescription)"
             logger.error("Erro ao carregar modelo LLM: \(error.localizedDescription)")
         }
         return await llmManager.modelState
@@ -228,11 +235,16 @@ final class LLMCoordinator {
     /// Pré-carrega em background + ativa keep-alive. Chamado quando Modo Prompt liga.
     func preloadAndKeepAlive() {
         let manager = llmManager
-        Task.detached(priority: .userInitiated) {
+        Task(priority: .userInitiated) { [weak self] in
             await manager.setKeepAlive(true)
             let state = await manager.modelState
             if case .downloaded = state {
-                try? await manager.loadModel()
+                do {
+                    try await manager.loadModel()
+                } catch {
+                    self?.errorMessage = "Erro ao preparar Modo Prompt: \(error.localizedDescription)"
+                    logger.error("preloadAndKeepAlive falhou: \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -240,7 +252,7 @@ final class LLMCoordinator {
     /// Libera keep-alive. Chamado quando Modo Prompt desliga.
     func releaseKeepAlive() {
         let manager = llmManager
-        Task.detached(priority: .utility) {
+        Task(priority: .utility) {
             await manager.setKeepAlive(false)
         }
     }

@@ -5,7 +5,7 @@
   "title": "Transcrição de arquivos de áudio com diarização opcional",
   "status": "in_progress",
   "dateCreated": "2026-04-07",
-  "dateModified": "2026-04-07",
+  "dateModified": "2026-05-25",
   "owner": "Michel Zandonai",
   "context": "Hoje o zspeak só transcreve áudio capturado em tempo real do microfone. O usuário precisa transcrever arquivos de áudio externos — áudios do WhatsApp (.opus/.ogg), gravações antigas, podcasts, reuniões. O modelo Parakeet TDT v3 já está carregado, custo incremental é quase zero. A feature está listada como 'Fora do Escopo' no PRD do MVP e precisa ser movida para escopo pós-MVP. Escopo inclui identificação de interlocutores (diarização) para áudios de reunião, usando OfflineDiarizerManager do FluidAudio (já disponível no SDK que usamos).",
   "goal": "Permitir transcrever arquivos de áudio de qualquer formato (incluindo Opus/Ogg do WhatsApp via ffmpeg embutido) com opção de identificar interlocutores em reuniões. Resultado mostrado na tela com botões Copiar e Baixar .txt, salvo no histórico.",
@@ -44,12 +44,12 @@
     "Avaliar licença do repo FluidInference/speaker-diarization-coreml no HuggingFace — se for não-comercial, adicionar disclaimer explícito na UI do modo Reunião",
     "Batch transcription (múltiplos arquivos de uma vez)",
     "Drop de arquivo no ícone do tray (requer NSApplicationDelegate.openURLs)",
-    "Suporte a arquivos de vídeo (.mp4, .mov — ffmpeg já extrai o áudio, só faltaria ajustar UI)",
     "Exportar como .srt / .vtt (legendas com timestamps do modo Reunião)",
     "Nomear speakers (renomear 'Speaker 0' → 'João', etc.)",
     "Suporte a speaker embeddings persistentes (reconhecer mesmo falante entre arquivos)"
   ],
   "changelog": [
-    { "date": "2026-04-07", "change": "Task criada após decisão do usuário por ffmpeg embutido + diarização via FluidAudio" }
+    { "date": "2026-04-07", "change": "Task criada após decisão do usuário por ffmpeg embutido + diarização via FluidAudio" },
+    { "date": "2026-05-25", "change": "FollowUp 'Suporte a arquivos de vídeo' extraído para TASK-014 e implementado" }
   ]
 }

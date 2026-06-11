@@ -13,6 +13,10 @@ struct LanguageCleanupPromptTests {
             print("SKIP: modelo LLM nao baixado")
             return
         }
+        guard MLXRuntimeResources.loadableMetallibURL() != nil else {
+            print("SKIP: runtime MLX sem metallib valido")
+            return
+        }
 
         try await manager.loadModel()
         guard case .ready = await manager.modelState else {

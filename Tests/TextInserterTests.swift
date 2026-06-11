@@ -31,17 +31,17 @@ struct TextInserterTests {
     }
 
     @Test("insert retorna false sem permissão de Acessibilidade")
-    func testInsertReturnsFalseWithoutAccessibility() {
+    func testInsertReturnsFalseWithoutAccessibility() async {
         let inserter = TextInserter()
-        let result = inserter.insert("texto de teste")
+        let result = await inserter.insert("texto de teste")
         // AXIsProcessTrusted() = false no ambiente de teste → retorna false
         #expect(result == false)
     }
 
     @Test("insert com string vazia retorna false sem Acessibilidade")
-    func testInsertEmptyStringReturnsFalse() {
+    func testInsertEmptyStringReturnsFalse() async {
         let inserter = TextInserter()
-        let result = inserter.insert("")
+        let result = await inserter.insert("")
         // Sem permissão, qualquer insert retorna false
         #expect(result == false)
     }

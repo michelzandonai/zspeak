@@ -21,11 +21,13 @@ Embutir o binário **ffmpeg arm64** (martin-riedl.de, pré-assinado, ~35-40 MB, 
 
 Fluxo:
 - Extensão está em `supportedNativeExtensions` (`wav`, `mp3`, `m4a`, `aac`, `flac`, `aif`, `aiff`, `caf`) → pula ffmpeg, lê direto com `AudioConverter.resampleAudioFile`
-- Extensão é outra (`opus`, `ogg`, `wma`, `amr`, `3gp`, `mka`, `webm`, `oga`) → chama ffmpeg para transcodar para WAV temp em `NSTemporaryDirectory()` → lê o WAV com `AudioConverter.resampleAudioFile`
+- Extensão é outra (`opus`, `ogg`, `wma`, `amr`, `3gp`, `mka`, `webm`, `oga`, ou container de vídeo) → chama ffmpeg para transcodar para WAV temp em `NSTemporaryDirectory()` → lê o WAV com `AudioConverter.resampleAudioFile`
+
+Containers de vídeo cobertos (TASK-014): `mp4`, `mov`, `m4v`, `mkv`, `avi`, `wmv`. O ffmpeg extrai a trilha de áudio e descarta o vídeo via `-vn`, sem custo adicional além do já pago pela transcodificação de áudio.
 
 Comando ffmpeg:
 ```
-ffmpeg -i {input} -ar 16000 -ac 1 -c:a pcm_s16le -fflags +discardcorrupt -y {output.wav}
+ffmpeg -i {input} -vn -ar 16000 -ac 1 -c:a pcm_s16le -fflags +discardcorrupt -y {output.wav}
 ```
 
 ### 2. Diarização via OfflineDiarizerManager do FluidAudio
@@ -142,3 +144,9 @@ Rodar pyannote.audio em Python como sidecar process. **Rejeitado** porque viola 
 - ADR 002: Runtime de Inferência (FluidAudio CoreML/ANE)
 - ADR 008: Licenciamento de Dependências
 - TASK-002: Implementação desta feature
+- TASK-014: Extensão para containers de vídeo (`.mp4`, `.mov`, `.m4v`, `.mkv`, `.avi`, `.wmv`)
+
+## Changelog
+
+- **2026-05-25** — Adicionado suporte a containers de vídeo (`mp4`, `mov`, `m4v`, `mkv`, `avi`, `wmv`) via ffmpeg `-vn` (TASK-014).
+- **2026-04-07** — Aceito (TASK-002).

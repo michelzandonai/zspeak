@@ -6,7 +6,7 @@ Transcrição por voz local para macOS, feita para devs.
 
 - App de menu bar, sem Dock
 - 100% local, sem cloud e sem API keys
-- Pipeline: `Mic -> AVAudioEngine -> Silero VAD -> Parakeet TDT v3 -> Clipboard -> Cmd+V`
+- Pipeline: `Mic -> AVAudioEngine -> Parakeet TDT v3 -> Clipboard -> Cmd+V`
 - Modelos baixados automaticamente na primeira execução
 
 ## Requisitos
@@ -54,7 +54,6 @@ Na primeira execução, o app baixa sozinho:
 
 - Dependências do Swift Package Manager, quando o Xcode abrir o projeto
 - Modelo de transcrição `Parakeet TDT 0.6B V3` via `FluidAudio`
-- Modelo de VAD `Silero VAD` via `FluidAudio`
 
 Isso significa que:
 
@@ -98,13 +97,13 @@ Se o app ainda estiver carregando os modelos, ele pode levar um pouco mais na pr
 - Hotkey global com modos `Toggle`, `Hold` e `Double Tap`
 - Seleção de microfone
 - Ordem de prioridade dos microfones conectados
+- Prompt Mode com LLM local opcional para pós-processamento
 - `Iniciar com o sistema`
 - `Use Escape to cancel recording`
 
 ## Modelo e processamento
 
 - ASR: `Parakeet TDT 0.6B V3`
-- VAD: `Silero VAD`
 - Execução local via `FluidAudio`
 - Download inicial do modelo de ASR: cerca de 496 MB
 
@@ -114,6 +113,14 @@ Se o app ainda estiver carregando os modelos, ele pode levar um pouco mais na pr
 xcodebuild -scheme zspeak -configuration Debug -destination 'platform=macOS' build
 ```
 
+Para empacotar localmente:
+
+```bash
+scripts/package_app.sh
+```
+
+Se não houver identidade Apple/Developer ID disponível, o script cria uma identidade local autoassinada chamada `zspeak Local Code Signing` no Keychain de login. Para builds distribuíveis, use `SIGNING_IDENTITY` com uma identidade apropriada e notarização fora deste script.
+
 ## Estrutura
 
 ```text
@@ -122,8 +129,10 @@ zspeak/
 │   ├── App.swift
 │   ├── AppState.swift
 │   ├── AudioCapture.swift
+│   ├── RecordingController.swift
+│   ├── LLMCoordinator.swift
+│   ├── FileTranscriptionCoordinator.swift
 │   ├── Transcriber.swift
-│   ├── VADManager.swift
 │   ├── HotkeyManager.swift
 │   ├── TextInserter.swift
 │   └── Views/

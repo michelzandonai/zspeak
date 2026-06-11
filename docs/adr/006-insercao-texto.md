@@ -24,23 +24,18 @@ Adotamos **NSPasteboard** (clipboard) + **CGEvent** (Cmd+V simulado).
 
 ### Implementação
 ```swift
-// 1. Salvar clipboard atual (para restaurar depois)
-let previousContents = NSPasteboard.general.string(forType: .string)
-
-// 2. Escrever texto transcrito no clipboard
+// 1. Escrever texto transcrito no clipboard
 NSPasteboard.general.clearContents()
 NSPasteboard.general.setString(transcribedText, forType: .string)
 
-// 3. Delay de 50ms (clipboard precisa propagar)
-// 4. Simular Cmd+V via CGEvent
+// 2. Delay curto para o app alvo reativar e o clipboard propagar
+// 3. Simular Cmd+V via CGEvent
 let source = CGEventSource(stateID: .hidSystemState)
 let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true) // 9 = V
 let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
 keyDown?.flags = .maskCommand
 keyDown?.post(tap: .cgAnnotatedSessionEventTap)
 keyUp?.post(tap: .cgAnnotatedSessionEventTap)
-
-// 5. Restaurar clipboard anterior (após delay)
 ```
 
 ### Requisitos
@@ -49,9 +44,9 @@ keyUp?.post(tap: .cgAnnotatedSessionEventTap)
 - `AXIsProcessTrustedWithOptions` para verificar/solicitar permissão
 
 ### UX
-- Delay de 50ms entre clipboard write e Cmd+V (necessário)
-- Restaurar clipboard anterior opcionalmente (bom UX, evita perder conteúdo do usuário)
-- Timeout de 200ms para restauração do clipboard
+- Delay curto entre reativar app, escrever no clipboard e postar Cmd+V
+- Não restaurar o clipboard anterior: se o paste automático falhar silenciosamente,
+  o texto transcrito permanece disponível para Cmd+V manual
 
 ## Consequências
 
@@ -62,14 +57,14 @@ keyUp?.post(tap: .cgAnnotatedSessionEventTap)
 - Mesmo método usado pelo Spokenly, SuperWhisper, VoiceInk, etc.
 
 ### Negativas
-- Sobrescreve clipboard temporariamente (mitigado com save/restore)
+- Sobrescreve clipboard do usuário com o texto transcrito
 - Requer permissão de Acessibilidade (prompt na primeira vez)
 - Não funciona se app estiver em sandbox
 - Não funciona se o app em foco não aceitar paste
 
 ### Riscos
 - Race condition entre clipboard write e Cmd+V → mitigado com delay de 50ms
-- Clipboard manager do usuário pode interferir → delay de restore ajustável
+- Clipboard manager do usuário pode interferir no conteúdo colado
 
 ## Alternativas rejeitadas
 - **Accessibility API (AXUIElement)**: Mais "correto" mas muitos apps não expõem text fields via AX. Menos confiável na prática.

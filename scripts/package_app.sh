@@ -12,6 +12,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 INFO_PLIST="$ROOT_DIR/zspeak/Info.plist"
 ENTITLEMENTS="$ROOT_DIR/zspeak/zspeak.entitlements"
 LOCAL_SIGNING_IDENTITY_NAME="zspeak Local Code Signing"
+ALLOW_MISSING_MLX_METALLIB="${ALLOW_MISSING_MLX_METALLIB:-0}"
 
 # ffmpeg arm64 — baixa de martin-riedl.de e cacheia localmente
 FFMPEG_URL="https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip"
@@ -189,10 +190,24 @@ if [ ! -d "$METAL_DIR" ]; then
   METAL_DIR="$ROOT_DIR/.build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
 fi
 if [ ! -d "$METAL_DIR" ]; then
-  echo "  AVISO: Diretório Metal do MLX não encontrado, pulando metallib"
+  if [[ "$ALLOW_MISSING_MLX_METALLIB" == "1" ]]; then
+    echo "  AVISO: diretório Metal do MLX não encontrado: $METAL_DIR"
+    echo "         Gerando bundle sem MLX; Modo Prompt mostrara erro em runtime."
+  else
+    echo "  ERRO: diretório Metal do MLX não encontrado: $METAL_DIR"
+    echo "        Rode swift package resolve/swift build antes de empacotar."
+    exit 1
+  fi
 elif ! xcrun -sdk macosx metal --version >/dev/null 2>&1; then
-  echo "  AVISO: Metal Toolchain ausente — correção LLM (MLX) ficará indisponível no DMG."
-  echo "         Para habilitar, rode: xcodebuild -downloadComponent MetalToolchain"
+  if [[ "$ALLOW_MISSING_MLX_METALLIB" == "1" ]]; then
+    echo "  AVISO: Metal Toolchain ausente."
+    echo "         Gerando bundle sem MLX; Modo Prompt mostrara erro em runtime."
+  else
+    echo "  ERRO: Metal Toolchain ausente."
+    echo "        Rode: xcodebuild -downloadComponent MetalToolchain"
+    echo "        Sem mlx.metallib, o Modo Prompt/LLM nao pode inicializar com seguranca."
+    exit 1
+  fi
 else
   MLX_AIR_DIR="$(mktemp -d)"
   find "$METAL_DIR" -name "*.metal" -exec sh -c '
@@ -204,9 +219,24 @@ else
     xcrun -sdk macosx metallib "${air_files[@]}" -o "$MACOS_DIR/mlx.metallib" 2>/dev/null
     echo "  mlx.metallib gerado ($(du -h "$MACOS_DIR/mlx.metallib" | cut -f1)) — ${#air_files} shaders"
   else
-    echo "  AVISO: nenhum .air gerado, pulando metallib"
+    rm -rf "$MLX_AIR_DIR"
+    if [[ "$ALLOW_MISSING_MLX_METALLIB" == "1" ]]; then
+      echo "  AVISO: nenhum .air gerado; bundle sera criado sem MLX."
+    else
+      echo "  ERRO: nenhum .air gerado; nao foi possivel criar mlx.metallib"
+      exit 1
+    fi
   fi
   rm -rf "$MLX_AIR_DIR"
+fi
+
+if [[ ! -s "$MACOS_DIR/mlx.metallib" ]]; then
+  if [[ "$ALLOW_MISSING_MLX_METALLIB" == "1" ]]; then
+    echo "  AVISO: mlx.metallib ausente no bundle final"
+  else
+    echo "  ERRO: mlx.metallib ausente no bundle final"
+    exit 1
+  fi
 fi
 
 # Assina o ffmpeg embutido ANTES do app (requisito do hardened runtime)

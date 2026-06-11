@@ -59,7 +59,7 @@ App de menubar que:
 - Texto transcrito inserido automaticamente no app em foco
 - Via clipboard + Cmd+V simulado
 - Funcionar em: VS Code, Terminal, Slack, browser, Notes, qualquer text field
-- Restaurar clipboard anterior após inserção
+- Manter o texto transcrito no clipboard como fallback para Cmd+V manual se o paste automático falhar
 
 ### 5.4 Indicador visual (P0 — Must Have)
 
@@ -77,12 +77,12 @@ App de menubar que:
   - Branding "zspeak" no canto direito
   - Animação a ~45 FPS via Timer (22ms interval)
 
-### 5.5 Detecção de atividade vocal (P0 — Must Have)
+### 5.5 Controle de silêncio e gravações curtas (P0 — Must Have)
 
-- Silero VAD detecta início e fim de fala
-- Silêncio > 500ms marca fim de fala
-- Buffer de áudio acumula somente durante fala
-- Silêncio puro nunca é enviado para transcrição
+- Gravação é controlada explicitamente pela hotkey (toggle/hold/double tap)
+- Buffer de áudio acumula enquanto a sessão está ativa
+- Áudios com menos de 0,5s são descartados antes da transcrição
+- Silêncio puro ou gravações curtas não inserem texto
 
 ### 5.6 Configurações (P1 — Should Have)
 
@@ -108,7 +108,8 @@ App de menubar que:
 - Aba dedicada em Settings (drag & drop + file picker) e atalho no menu do tray
 - Suporte universal a formatos via ffmpeg embutido no bundle:
   - Nativo (AVAudioFile): WAV, MP3, M4A, AAC, FLAC, AIFF, CAF
-  - Via ffmpeg: OPUS, OGG (WhatsApp), WMA, AMR, WebM, MKA, 3GP
+  - Via ffmpeg (áudio): OPUS, OGG (WhatsApp), WMA, AMR, WebM, MKA, 3GP
+  - Via ffmpeg (vídeo — extrai trilha de áudio): MP4, MOV, M4V, MKV, AVI, WMV (TASK-014)
 - Dois modos de visualização:
   - **Texto corrido:** transcrição plana (simples, ideal para áudios de mensagem)
   - **Reunião:** identifica interlocutores via `OfflineDiarizerManager` do FluidAudio (pyannote 3.1 + WeSpeaker), mostra segmentos com badge colorida por speaker e timestamps
@@ -172,7 +173,7 @@ App de menubar que:
 1. Usuário pressiona hotkey
 2. Não fala nada (ou fica pensando)
 3. Pressiona hotkey novamente
-4. Nenhum texto é inserido (VAD detectou que não houve fala)
+4. Nenhum texto é inserido se o áudio capturado for curto/vazio ou se a transcrição vier vazia
 
 ---
 
@@ -189,7 +190,7 @@ App de menubar que:
 | CA-07 | Latência < 1s                   | Medir tempo entre fim da fala e texto inserido                     |
 | CA-08 | Funciona offline                | Desconectar Wi-Fi, testar transcrição completa                     |
 | CA-09 | Hotkey customizável             | Mudar atalho nas configurações, verificar que funciona             |
-| CA-10 | Restaura clipboard              | Copiar algo, ditar texto, verificar que clipboard original volta   |
+| CA-10 | Fallback no clipboard           | Forçar falha de paste automático e verificar que o texto transcrito fica disponível para Cmd+V manual |
 
 ---
 
@@ -203,10 +204,9 @@ App de menubar que:
 - Agent Mode
 - Text-to-Speech
 - Gravação de áudio do sistema
-- Transcrição de arquivos de vídeo (.mp4, .mov)
 - Batch transcription de múltiplos arquivos simultaneamente
 
-> **Nota:** "Pós-processamento com LLM" foi implementado no Prompt Mode. "Speaker Diarization" e "Transcrição de arquivos de áudio" foram movidos para seção 5.9 via TASK-002.
+> **Nota:** "Pós-processamento com LLM" foi implementado no Prompt Mode. "Speaker Diarization" e "Transcrição de arquivos de áudio" foram movidos para seção 5.9 via TASK-002. "Transcrição de arquivos de vídeo" foi movida para a seção 5.9 via TASK-014.
 
 ---
 

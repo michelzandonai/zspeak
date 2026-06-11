@@ -47,6 +47,7 @@ final class OverlayModel {
     /// Último resultado gerado pela LLM (para exibir no overlay)
     var lastLLMResult: String?
     var lastLLMPromptName: String?
+    var errorMessage: String?
 
     /// Toggle para expandir/colapsar a visualização do resultado LLM — persiste em UserDefaults
     var isResultExpanded: Bool {
@@ -196,6 +197,10 @@ struct OverlayView: View {
                     .background(.white.opacity(0.25))
 
                 PromptSelectorBar(model: model)
+
+                if let error = model.errorMessage {
+                    PromptErrorView(message: error)
+                }
 
                 // Resultado da última correção LLM (toggleável)
                 if model.lastLLMResult != nil {
@@ -372,6 +377,41 @@ struct PromptSelectorBar: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// Erro compacto dentro do overlay do Modo Prompt.
+struct PromptErrorView: View {
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red.opacity(0.9))
+                .accessibilityHidden(true)
+
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.9))
+                .lineLimit(3)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.red.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.red.opacity(0.28), lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Erro no modo prompt")
+        .accessibilityValue(message)
     }
 }
 

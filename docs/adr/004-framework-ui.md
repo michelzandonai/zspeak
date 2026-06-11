@@ -18,7 +18,7 @@ Adotamos **Swift + SwiftUI nativo** com **MenuBarExtra**.
 ## Justificativa
 
 ### Processo único
-- ASR (FluidAudio) + VAD + UI tudo no mesmo processo Swift
+- ASR (FluidAudio), captura de áudio, LLM local opcional e UI tudo no mesmo processo Swift
 - Sem IPC, sem WebSocket, sem latência de comunicação entre processos
 - Menos pontos de falha
 

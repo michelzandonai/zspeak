@@ -94,8 +94,13 @@ final class AudioFileTranscriber {
     ]
 
     /// Formatos que requerem transcodificação via ffmpeg
+    /// Inclui containers de áudio E containers de vídeo (TASK-014) — ffmpeg
+    /// extrai a trilha de áudio automaticamente e descarta o vídeo via `-vn`.
     nonisolated static let ffmpegExtensions: Set<String> = [
-        "opus", "ogg", "oga", "wma", "amr", "3gp", "webm", "mka"
+        // Áudio
+        "opus", "ogg", "oga", "wma", "amr", "3gp", "webm", "mka",
+        // Vídeo (extrai trilha de áudio via ffmpeg)
+        "mp4", "mov", "m4v", "mkv", "avi", "wmv"
     ]
 
     /// Todos os formatos suportados (união dos acima)
@@ -189,13 +194,14 @@ final class AudioFileTranscriber {
         case .plain:
             // Para arquivos grandes, divide em chunks de 30s para reportar progresso
             // chunk a chunk e evitar transcrições gigantes em uma única chamada
-            let chunks = Self.makeChunks(samples: samples)
+            let chunkRanges = Self.makeChunkRanges(sampleCount: samples.count)
             var collectedTexts: [String] = []
-            collectedTexts.reserveCapacity(chunks.count)
+            collectedTexts.reserveCapacity(chunkRanges.count)
 
-            for (idx, chunk) in chunks.enumerated() {
+            for (idx, range) in chunkRanges.enumerated() {
                 try Task.checkCancellation()
-                onProgress(.transcribing(current: idx + 1, total: chunks.count))
+                onProgress(.transcribing(current: idx + 1, total: chunkRanges.count))
+                let chunk = Array(samples[range])
                 let chunkText: String
                 do {
                     chunkText = try await transcribe(chunk)
@@ -249,10 +255,12 @@ final class AudioFileTranscriber {
 
             // Se diarização retornou nada, faz fallback para texto corrido (com chunking)
             if speakerSegments.isEmpty {
-                let chunks = Self.makeChunks(samples: samples)
+                let chunkRanges = Self.makeChunkRanges(sampleCount: samples.count)
                 var collectedTexts: [String] = []
-                for (idx, chunk) in chunks.enumerated() {
-                    onProgress(.transcribing(current: idx + 1, total: chunks.count))
+                collectedTexts.reserveCapacity(chunkRanges.count)
+                for (idx, range) in chunkRanges.enumerated() {
+                    onProgress(.transcribing(current: idx + 1, total: chunkRanges.count))
+                    let chunk = Array(samples[range])
                     let text: String
                     do {
                         text = try await transcribe(chunk)
@@ -335,22 +343,33 @@ final class AudioFileTranscriber {
         samples: [Float],
         sampleRate: Int = 16000
     ) -> [[Float]] {
-        let totalSeconds = Double(samples.count) / Double(sampleRate)
+        makeChunkRanges(sampleCount: samples.count, sampleRate: sampleRate).map { range in
+            Array(samples[range])
+        }
+    }
+
+    /// Divide o áudio em ranges para o pipeline real não duplicar todos os chunks
+    /// em memória antes da transcrição.
+    nonisolated static func makeChunkRanges(
+        sampleCount: Int,
+        sampleRate: Int = 16000
+    ) -> [Range<Int>] {
+        let totalSeconds = Double(sampleCount) / Double(sampleRate)
 
         // Áudio curto: retorna como um único chunk
         if totalSeconds <= chunkingThresholdSeconds {
-            return [samples]
+            return [0..<sampleCount]
         }
 
         let chunkSize = Int(chunkDurationSeconds * Double(sampleRate))
-        var chunks: [[Float]] = []
+        var ranges: [Range<Int>] = []
         var idx = 0
-        while idx < samples.count {
-            let end = min(idx + chunkSize, samples.count)
-            chunks.append(Array(samples[idx..<end]))
+        while idx < sampleCount {
+            let end = min(idx + chunkSize, sampleCount)
+            ranges.append(idx..<end)
             idx = end
         }
-        return chunks
+        return ranges
     }
 
     /// Real-time factor empírico do diarizer FluidAudio em Apple Silicon (~8x)

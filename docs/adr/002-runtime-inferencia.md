@@ -35,11 +35,9 @@ Adotamos **FluidAudio** (github.com/FluidInference/FluidAudio) com inferencia vi
 
 ### O que vem incluso
 
-- ASR: Parakeet TDT 0.6B v2/v3 via CoreML
-- VAD: Silero VAD via CoreML
-- ITN: Inverse Text Normalization (7 idiomas)
-- Streaming ASR: Parakeet EOU 120M
-- TTS, Speaker Diarization (nao usamos agora, mas disponivel)
+- ASR usado pelo app: Parakeet TDT 0.6B v3 via CoreML
+- Diarizacao offline usada no modo Reuniao
+- Utilitarios de audio para leitura/resampling de arquivos
 - Auto-download de modelos do HuggingFace
 - Modelos CoreML pre-convertidos: `FluidInference/parakeet-tdt-0.6b-v3-coreml` (164k downloads)
 
@@ -72,7 +70,7 @@ let result = try await asrManager.transcribe(samples)
 - Performance maxima no Apple Silicon (ANE)
 - Stack identica ao Spokenly
 - Processo unico, sem overhead de IPC
-- Biblioteca completa (ASR + VAD + ITN)
+- Biblioteca nativa para ASR, diarizacao e utilitarios de audio
 - API simples e bem documentada
 
 ### Negativas

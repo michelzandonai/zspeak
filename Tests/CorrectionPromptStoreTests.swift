@@ -27,7 +27,7 @@ struct CorrectionPromptStoreTests {
 
         let store = makeStore(in: tmpDir)
 
-        #expect(store.prompts.count == 2)
+        #expect(store.prompts.count == 3)
 
         let geral = try #require(store.prompts.first { $0.name == "Correção geral" })
         #expect(geral.isActive == true)
@@ -36,6 +36,10 @@ struct CorrectionPromptStoreTests {
         let formal = try #require(store.prompts.first { $0.name == "Formalizar" })
         #expect(formal.isActive == false)
         #expect(formal.systemPrompt.contains("formal"))
+
+        let clareza = try #require(store.prompts.first { $0.name == CorrectionPromptStore.languageCleanupPromptName })
+        #expect(clareza.isActive == false)
+        #expect(clareza.systemPrompt.contains("vícios de linguagem"))
     }
 
     @Test("activePrompt retorna o prompt ativo")
@@ -57,13 +61,13 @@ struct CorrectionPromptStoreTests {
         let store = makeStore(in: tmpDir)
         store.addPrompt(name: "Custom", systemPrompt: "Faça algo custom.")
 
-        #expect(store.prompts.count == 3)
-        #expect(store.prompts[2].name == "Custom")
-        #expect(store.prompts[2].isActive == false)
+        #expect(store.prompts.count == 4)
+        #expect(store.prompts.last?.name == "Custom")
+        #expect(store.prompts.last?.isActive == false)
 
         // Persiste no disco
         let store2 = makeStore(in: tmpDir)
-        #expect(store2.prompts.count == 3)
+        #expect(store2.prompts.count == 4)
         #expect(store2.prompts.contains { $0.name == "Custom" })
     }
 
@@ -75,17 +79,17 @@ struct CorrectionPromptStoreTests {
         let store = makeStore(in: tmpDir)
         store.addPrompt(name: "ParaDeletar", systemPrompt: "Temporário.")
 
-        #expect(store.prompts.count == 3)
+        #expect(store.prompts.count == 4)
 
         let toDelete = try #require(store.prompts.first { $0.name == "ParaDeletar" })
         store.deletePrompt(toDelete)
 
-        #expect(store.prompts.count == 2)
+        #expect(store.prompts.count == 3)
         #expect(store.prompts.contains { $0.name == "ParaDeletar" } == false)
 
         // Persiste no disco
         let store2 = makeStore(in: tmpDir)
-        #expect(store2.prompts.count == 2)
+        #expect(store2.prompts.count == 3)
         #expect(store2.prompts.contains { $0.name == "ParaDeletar" } == false)
     }
 
@@ -130,8 +134,8 @@ struct CorrectionPromptStoreTests {
 
         // Recarrega do disco
         let store2 = makeStore(in: tmpDir)
-        // 2 padrão + 2 adicionados
-        #expect(store2.prompts.count == 4)
+        // 3 padrão + 2 adicionados
+        #expect(store2.prompts.count == 5)
 
         let tecnicoReloaded = try #require(store2.prompts.first { $0.name == "Técnico" })
         #expect(tecnicoReloaded.isActive == true)
@@ -143,6 +147,31 @@ struct CorrectionPromptStoreTests {
         // "Correção geral" deve estar desativado após setActive
         let geral = try #require(store2.prompts.first { $0.name == "Correção geral" })
         #expect(geral.isActive == false)
+    }
+
+    @Test("Upgrade legado adiciona prompt novo sem ressuscitar defaults v1 removidos")
+    func testLegacyUpgradeSeedsOnlyNewDefaultPrompts() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let legacyPrompts = [
+            CorrectionPrompt(
+                name: "Correção geral",
+                systemPrompt: "Corrija ortografia.",
+                isActive: true
+            )
+        ]
+        let data = try JSONEncoder().encode(legacyPrompts)
+        try data.write(to: tmpDir.appendingPathComponent("correction-prompts.json"))
+
+        let store = makeStore(in: tmpDir)
+
+        #expect(store.prompts.count == 2)
+        #expect(store.prompts.contains { $0.name == "Correção geral" })
+        #expect(store.prompts.contains { $0.name == "Formalizar" } == false)
+        #expect(store.prompts.contains { $0.name == CorrectionPromptStore.languageCleanupPromptName })
+        #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".correction_prompts_defaults_seeded").path))
+        #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".correction_prompts_defaults_seeded_v2").path))
     }
 
     @Test("CorrectionPrompt Codable round-trip")
