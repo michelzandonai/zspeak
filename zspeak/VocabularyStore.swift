@@ -14,7 +14,7 @@ final class VocabularyStore {
     private let persistQueue: DispatchQueue
 
     init() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = SafePath.firstURL(for: .applicationSupportDirectory)
         let appDir = base.appendingPathComponent("zspeak", isDirectory: true)
         vocabularyFile = appDir.appendingPathComponent("vocabulary.json")
         persistQueue = StorePersistQueue.shared(forFileAt: vocabularyFile)

@@ -252,7 +252,7 @@ actor LLMCorrectionManager {
     /// Diretório base onde o defaultHubApi armazena modelos baixados:
     /// ~/Library/Caches/models
     private static func defaultModelCacheBaseDirectory() -> URL {
-        let cacheBase = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let cacheBase = SafePath.firstURL(for: .cachesDirectory)
         return cacheBase
             .appendingPathComponent("models", isDirectory: true)
     }

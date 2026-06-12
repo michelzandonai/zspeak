@@ -56,7 +56,7 @@ actor DiarizationManager {
 
     /// Diretório exclusivo do zspeak para modelos de diarização
     static let modelsDirectory: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = SafePath.firstURL(for: .applicationSupportDirectory)
         return base.appendingPathComponent("zspeak", isDirectory: true)
             .appendingPathComponent("Models", isDirectory: true)
             .appendingPathComponent("diarizer", isDirectory: true)

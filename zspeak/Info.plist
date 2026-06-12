@@ -4,8 +4,12 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>pt-BR</string>
+	<key>CFBundleDisplayName</key>
+	<string>zspeak</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIconFile</key>
+	<string>zspeak.icns</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.zspeak.app</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -15,13 +19,13 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.1</string>
+	<string>1.0.2</string>
 	<key>CFBundleVersion</key>
-	<string>101</string>
+	<string>1.0.2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
-	<true/>
+	<false/>
 	<key>NSAccessibilityUsageDescription</key>
 	<string>zspeak precisa de permissão de Acessibilidade para inserir texto transcrito no app ativo via atalho de teclado.</string>
 	<key>NSMicrophoneUsageDescription</key>

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Gerencia o overlay flutuante — precisa ser classe para evitar problemas com struct App
 @MainActor
@@ -117,9 +118,12 @@ final class OverlayController {
 
         if let store = appState.correctionPromptStore {
             model.prompts = store.prompts
-            let selectedStillExists = model.selectedPromptID.map { selectedID in
-                store.prompts.contains(where: { $0.id == selectedID })
-            } ?? false
+            let selectedStillExists: Bool
+            if let selectedPromptID = model.selectedPromptID {
+                selectedStillExists = store.prompts.contains(where: { $0.id == selectedPromptID })
+            } else {
+                selectedStillExists = false
+            }
             if !selectedStillExists {
                 model.selectedPromptID = store.activePrompt?.id ?? store.prompts.first?.id
             }
@@ -196,55 +200,24 @@ final class OverlayController {
 @main
 struct ZSpeakApp: App {
 
-    @State private var appState = AppState()
-    @State private var store = TranscriptionStore()
-    @State private var benchmarkStore = BenchmarkStore()
-    @State private var vocabularyStore = VocabularyStore()
-    @State private var correctionPromptStore = CorrectionPromptStore()
-    @State private var promptModeManager = PromptModeManager()
-    private let diarizationManager = DiarizationManager()
-    private let activationKeyManager = ActivationKeyManager()
-    private let accessibilityManager = AccessibilityManager()
+    @NSApplicationDelegateAdaptor(ZSpeakAppDelegate.self) private var appDelegate
+    @State private var appState: AppState
+    @State private var store: TranscriptionStore
+    @State private var benchmarkStore: BenchmarkStore
+    @State private var vocabularyStore: VocabularyStore
+    @State private var correctionPromptStore: CorrectionPromptStore
+    @State private var promptModeManager: PromptModeManager
+    private let diarizationManager: DiarizationManager
+    private let activationKeyManager: ActivationKeyManager
+    private let accessibilityManager: AccessibilityManager
     private let hotkeyManager: HotkeyManager
     /// Retém referência estática para evitar desalocação por ARC
     nonisolated(unsafe) private static var overlayController: OverlayController?
+    nonisolated(unsafe) private static var settingsWindowController: SettingsWindowController?
+    nonisolated(unsafe) private static var audioFileWindowController: AudioFileWindowController?
+    nonisolated(unsafe) private static var statusItemController: StatusItemController?
 
     var body: some Scene {
-        // App vive exclusivamente no menu bar (sem janela principal).
-        // Dependências são injetadas via `.environment(_:)` — SwiftUI 5 aceita
-        // classes `@Observable` diretamente, sem precisar de `@EnvironmentObject`.
-        MenuBarExtra {
-            MenuBarView()
-                .preferredColorScheme(.dark)
-                .environment(appState)
-                .environment(appState.microphoneManager)
-                .environment(activationKeyManager)
-                .environment(accessibilityManager)
-                .environment(store)
-                .environment(benchmarkStore)
-                .environment(vocabularyStore)
-                .environment(correctionPromptStore)
-                .environment(promptModeManager)
-        } label: {
-            Image(systemName: menuBarIcon)
-                .symbolRenderingMode(.palette)
-        }
-
-        // Janela de configurações — init sem parâmetros; consome `@Environment`.
-        Settings {
-            SettingsView()
-                .preferredColorScheme(.dark)
-                .environment(appState)
-                .environment(appState.microphoneManager)
-                .environment(activationKeyManager)
-                .environment(accessibilityManager)
-                .environment(store)
-                .environment(benchmarkStore)
-                .environment(vocabularyStore)
-                .environment(correctionPromptStore)
-                .environment(promptModeManager)
-        }
-
         // Janela dedicada para transcrever arquivo de áudio (Cmd+Shift+T).
         Window("Transcrever arquivo", id: AudioFileWindowID.value) {
             AudioFileWindowContent()
@@ -253,27 +226,37 @@ struct ZSpeakApp: App {
                 .environment(store)
         }
         .defaultSize(width: 720, height: 580)
-    }
-
-    /// Ícone do menu bar baseado no estado atual
-    private var menuBarIcon: String {
-        switch appState.state {
-        case .idle:
-            return "mic"
-        case .preparing, .recording:
-            return "mic.fill"
-        case .processing:
-            return "waveform"
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Configurações...") {
+                    Self.settingsWindowController?.show(initialPage: .overview)
+                }
+                .keyboardShortcut(",", modifiers: [.command])
+            }
         }
     }
 
     init() {
-        NSApp.appearance = NSAppearance(named: .darkAqua)
+        _appState = State(initialValue: AppState())
+        _store = State(initialValue: TranscriptionStore())
+        _benchmarkStore = State(initialValue: BenchmarkStore())
+        _vocabularyStore = State(initialValue: VocabularyStore())
+        _correctionPromptStore = State(initialValue: CorrectionPromptStore())
+        _promptModeManager = State(initialValue: PromptModeManager())
+        self.diarizationManager = DiarizationManager()
+        self.activationKeyManager = ActivationKeyManager()
+        self.accessibilityManager = AccessibilityManager()
 
         let keyManager = activationKeyManager
         self.hotkeyManager = HotkeyManager(activationKeyManager: keyManager)
         let state = appState
         let promptMode = promptModeManager
+        let transcriptions = store
+        let benchmarks = benchmarkStore
+        let vocabulary = vocabularyStore
+        let correctionPrompts = correctionPromptStore
+        let activation = activationKeyManager
+        let accessibility = accessibilityManager
 
         // Conecta stores ao AppState
         state.store = store
@@ -326,5 +309,33 @@ struct ZSpeakApp: App {
 
         // Cria overlay controller e retém referência estática para evitar desalocação por ARC
         Self.overlayController = OverlayController(appState: state, promptModeManager: promptMode)
+
+        // Cria o status item somente depois do AppKit finalizar o launch.
+        // Isso evita crash/intermitência ao tocar em NSApplication ou NSStatusBar no init do SwiftUI App.
+        ZSpeakAppDelegate.onDidFinishLaunching = {
+            let settingsController = SettingsWindowController(
+                appState: state,
+                activationKeyManager: activation,
+                accessibilityManager: accessibility,
+                store: transcriptions,
+                benchmarkStore: benchmarks,
+                vocabularyStore: vocabulary,
+                correctionPromptStore: correctionPrompts,
+                promptModeManager: promptMode
+            )
+            let audioFileController = AudioFileWindowController(appState: state, store: transcriptions)
+            let statusController = StatusItemController(
+                appState: state,
+                store: transcriptions,
+                promptModeManager: promptMode,
+                accessibilityManager: accessibility,
+                settingsWindowController: settingsController,
+                audioFileWindowController: audioFileController
+            )
+
+            Self.settingsWindowController = settingsController
+            Self.audioFileWindowController = audioFileController
+            Self.statusItemController = statusController
+        }
     }
 }

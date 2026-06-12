@@ -12,7 +12,7 @@ actor Transcriber {
 
     /// Diretório exclusivo do zspeak para modelos — evita conflito com outros apps (Spokenly)
     private static let modelsDirectory: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = SafePath.firstURL(for: .applicationSupportDirectory)
         return base.appendingPathComponent("zspeak", isDirectory: true)
             .appendingPathComponent("Models", isDirectory: true)
     }()

@@ -16,7 +16,7 @@ final class BenchmarkStore {
 
     /// Init padrão do app — NÃO faz I/O síncrono. A view deve chamar `loadFixturesAsync()`.
     init() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = SafePath.firstURL(for: .applicationSupportDirectory)
         let defaultBase = base.appendingPathComponent("zspeak", isDirectory: true)
             .appendingPathComponent("benchmarks", isDirectory: true)
         baseDir = defaultBase

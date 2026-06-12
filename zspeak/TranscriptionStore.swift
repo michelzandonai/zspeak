@@ -35,7 +35,7 @@ final class TranscriptionStore {
     private let persistQueue: DispatchQueue
 
     init() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = SafePath.firstURL(for: .applicationSupportDirectory)
         let defaultBase = base.appendingPathComponent("zspeak", isDirectory: true)
         appSupportDir = defaultBase
         audioDir = defaultBase.appendingPathComponent("audio", isDirectory: true)

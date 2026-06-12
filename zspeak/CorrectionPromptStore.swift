@@ -13,7 +13,7 @@ final class CorrectionPromptStore {
     private let persistQueue: DispatchQueue
 
     init() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = SafePath.firstURL(for: .applicationSupportDirectory)
         let appDir = base.appendingPathComponent("zspeak", isDirectory: true)
         promptsFile = appDir.appendingPathComponent("correction-prompts.json")
         persistQueue = StorePersistQueue.shared(forFileAt: promptsFile)

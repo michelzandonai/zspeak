@@ -11,6 +11,7 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 INFO_PLIST="$ROOT_DIR/zspeak/Info.plist"
 ENTITLEMENTS="$ROOT_DIR/zspeak/zspeak.entitlements"
+APP_RESOURCES_DIR="$ROOT_DIR/Resources"
 LOCAL_SIGNING_IDENTITY_NAME="zspeak Local Code Signing"
 ALLOW_MISSING_MLX_METALLIB="${ALLOW_MISSING_MLX_METALLIB:-0}"
 
@@ -174,6 +175,11 @@ cp "$BUILD_DIR/$APP_NAME" "$MACOS_DIR/$APP_NAME"
 cp "$INFO_PLIST" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP_NAME" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_NAME" "$CONTENTS_DIR/Info.plist"
+
+# Copia recursos próprios do app, incluindo o ícone usado pelo Dock/Finder.
+if [[ -d "$APP_RESOURCES_DIR" ]]; then
+  ditto "$APP_RESOURCES_DIR" "$RESOURCES_DIR"
+fi
 
 # Copia resource bundles gerados por dependências SwiftPM.
 # Sem isso, componentes como KeyboardShortcuts.Recorder tentam acessar
