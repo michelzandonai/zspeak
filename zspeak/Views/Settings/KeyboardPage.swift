@@ -15,6 +15,15 @@ struct KeyboardPage: View {
 
         Form {
             Section {
+                ZSFormHero(
+                    title: "Atalhos de Teclado",
+                    subtitle: "Configure a tecla principal e os atalhos globais dos modos inteligentes.",
+                    systemImage: "keyboard",
+                    tone: .accent
+                )
+            }
+
+            Section {
                 shortcutPreview
             }
 
@@ -59,6 +68,7 @@ struct KeyboardPage: View {
             }
         }
         .formStyle(.grouped)
+        .zsFormPage()
         .navigationTitle("Atalhos de Teclado")
     }
 

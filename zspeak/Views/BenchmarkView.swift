@@ -29,6 +29,18 @@ struct BenchmarkView: View {
     // MARK: - Filtros
     @State private var showOnlyHighError = false
 
+    init(
+        appState: AppState,
+        store: BenchmarkStore,
+        historyStore: TranscriptionStore,
+        initialIsLoadingFixtures: Bool = true
+    ) {
+        self.appState = appState
+        self.store = store
+        self.historyStore = historyStore
+        _isLoadingFixtures = State(initialValue: initialIsLoadingFixtures)
+    }
+
     /// Fixtures visíveis após aplicar filtro de alto erro (> 10% WER).
     private var visibleFixtures: [(offset: Int, element: BenchmarkFixture)] {
         let all = Array(store.fixtures.enumerated())
@@ -88,6 +100,15 @@ struct BenchmarkView: View {
 
     var body: some View {
         Form {
+            Section {
+                ZSFormHero(
+                    title: "Benchmark",
+                    subtitle: "Meça acurácia, WER, CER e latência das transcrições locais.",
+                    systemImage: "gauge.with.needle",
+                    tone: .info
+                )
+            }
+
             if isLoadingFixtures {
                 ContentUnavailableView {
                     Label("Carregando benchmarks…", systemImage: "hourglass")
@@ -169,6 +190,7 @@ struct BenchmarkView: View {
             }
         }
         .formStyle(.grouped)
+        .zsFormPage()
         .navigationTitle("Benchmark")
         .task {
             await store.loadFixturesAsync()
@@ -326,7 +348,7 @@ struct BenchmarkView: View {
                 metricCard(
                     title: "Pior caso",
                     value: String(format: "%.0fms", metrics.maxLatency * 1000),
-                    icon: "exclamationmark.speedometer",
+                    icon: "exclamationmark.triangle.fill",
                     color: latencyColor(metrics.maxLatency)
                 )
 

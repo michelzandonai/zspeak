@@ -13,59 +13,73 @@ struct AboutPage: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                HStack {
-                    Spacer()
-                    VStack(spacing: 6) {
-                        Image(systemName: "waveform.badge.mic")
-                            .font(.system(size: 48))
-                            .foregroundStyle(Color.accentColor)
-                            .padding(.top, 8)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                ZSPageHeader(
+                    title: "zspeak",
+                    subtitle: "Transcrição local para devs · versão \(appVersion) (\(buildNumber))",
+                    systemImage: "waveform.badge.mic",
+                    tone: .accent
+                ) {
+                    ZSStatusChip(text: "100% local", tone: .success, systemImage: "lock.fill")
+                }
 
-                        Text("zspeak")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-
-                        Text("versão \(appVersion) (\(buildNumber))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                LazyVGrid(columns: aboutColumns, alignment: .leading, spacing: 16) {
+                    ZSSectionCard {
+                        sectionTitle("Tecnologia", systemImage: "cpu")
+                        LabeledContent("Modelo ASR", value: "Parakeet TDT 0.6B V3")
+                        LabeledContent("Motor", value: "FluidAudio (CoreML / ANE)")
+                        LabeledContent("Processamento", value: "No dispositivo")
                     }
-                    .padding(.vertical, 8)
-                    Spacer()
-                }
-            }
 
-            Section("Tecnologia") {
-                LabeledContent("Modelo ASR", value: "Parakeet TDT 0.6B V3")
-                LabeledContent("Motor", value: "FluidAudio (CoreML / ANE)")
-                LabeledContent("Processamento", value: "100% local")
-            }
-
-            Section("Plataforma") {
-                LabeledContent("Sistema", value: "macOS 14+ (Apple Silicon)")
-                LabeledContent("Privacidade", value: "Nenhum dado sai do dispositivo")
-            }
-
-            Section("Links") {
-                Button {
-                    if let url = URL(string: "https://github.com/michelzandonai/zspeak") {
-                        NSWorkspace.shared.open(url)
+                    ZSSectionCard {
+                        sectionTitle("Plataforma", systemImage: "macbook")
+                        LabeledContent("Sistema", value: "macOS 14+")
+                        LabeledContent("Arquitetura", value: "Apple Silicon")
+                        LabeledContent("IDE", value: "Xcode 15+")
                     }
-                } label: {
-                    Label("Abrir repositório no GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
-                }
 
-                // TODO: implementar em onda futura
-                Button {
-                    // placeholder não-funcional
-                } label: {
-                    Label("Verificar atualizações", systemImage: "arrow.triangle.2.circlepath")
+                    ZSSectionCard {
+                        sectionTitle("Privacidade", systemImage: "lock.shield")
+                        LabeledContent("Rede", value: "Sem envio de áudio")
+                        LabeledContent("Chaves", value: "Sem API keys")
+                        LabeledContent("Modelo", value: "Baixado no Mac")
+                    }
+
+                    ZSSectionCard {
+                        sectionTitle("Links", systemImage: "link")
+                        Button {
+                            if let url = URL(string: "https://github.com/michelzandonai/zspeak") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        } label: {
+                            Label("Abrir repositório no GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
+                        }
+
+                        Button {
+                            // TODO: implementar em onda futura
+                        } label: {
+                            Label("Verificar atualizações", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .disabled(true)
+                    }
                 }
-                .disabled(true)
             }
+            .padding(ZSDesign.pagePadding)
         }
-        .formStyle(.grouped)
+        .background(ZSDesign.pageBackground)
         .navigationTitle("Sobre")
+    }
+
+    private func sectionTitle(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.headline)
+            .foregroundStyle(.primary)
+    }
+
+    private var aboutColumns: [GridItem] {
+        [
+            GridItem(.adaptive(minimum: 280), spacing: 16, alignment: .top),
+        ]
     }
 }

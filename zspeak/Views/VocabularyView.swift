@@ -25,6 +25,15 @@ struct VocabularyView: View {
 
     var body: some View {
         Form {
+            Section {
+                ZSFormHero(
+                    title: "Vocabulário",
+                    subtitle: "Cadastre termos técnicos, aliases e pesos para melhorar a precisão local.",
+                    systemImage: "text.book.closed",
+                    tone: .accent
+                )
+            }
+
             if store.entries.isEmpty {
                 emptyStateSection
             } else {
@@ -56,6 +65,7 @@ struct VocabularyView: View {
             }
         }
         .formStyle(.grouped)
+        .zsFormPage()
         .navigationTitle("Vocabulário")
         .searchable(text: $searchText, placement: .toolbar, prompt: "Buscar termo ou alias")
         .toolbar {

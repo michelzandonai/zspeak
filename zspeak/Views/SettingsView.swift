@@ -102,6 +102,7 @@ struct SettingsView: View {
             detailView(for: selectedPage)
         }
         .frame(minWidth: 720, idealWidth: 820, minHeight: 480, idealHeight: 560)
+        .tint(.accentColor)
         .onAppear {
             // Sincroniza a aba inicial com o AppStorage que o MenuBar manipula
             if let page = SettingsPage(rawValue: initialPageRaw) {

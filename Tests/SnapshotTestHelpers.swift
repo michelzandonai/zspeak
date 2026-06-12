@@ -55,7 +55,7 @@ enum SnapshotTestHelpers {
 
         let hostingView = NSHostingView(rootView: rootView)
         hostingView.frame = NSRect(origin: .zero, size: size)
-        hostingView.appearance = NSAppearance(named: .aqua)
+        hostingView.appearance = NSAppearance(named: .darkAqua)
         hostingView.layoutSubtreeIfNeeded()
 
         let bitmap = try makeBitmap(for: hostingView)

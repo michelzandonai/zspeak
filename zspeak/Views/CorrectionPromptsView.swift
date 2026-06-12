@@ -95,6 +95,15 @@ struct CorrectionPromptsView: View {
 
     var body: some View {
         Form {
+            Section {
+                ZSFormHero(
+                    title: "Correção LLM",
+                    subtitle: "Escolha o modelo local e gerencie prompts de pós-processamento.",
+                    systemImage: "sparkles",
+                    tone: .accent
+                )
+            }
+
             // Toggle global
             Section {
                 Toggle("Correção LLM ativa", isOn: Bindable(appState).llmCorrectionEnabled)
@@ -140,6 +149,7 @@ struct CorrectionPromptsView: View {
             }
         }
         .formStyle(.grouped)
+        .zsFormPage()
         .navigationTitle("Correção LLM")
         .toolbar {
             ToolbarItemGroup {
@@ -248,11 +258,11 @@ struct CorrectionPromptsView: View {
         }
         .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: ZSDesign.radius)
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: ZSDesign.radius)
                 .stroke(Color.secondary.opacity(0.14))
         )
         .padding(.vertical, 6)
@@ -381,7 +391,7 @@ struct CorrectionPromptsView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: ZSDesign.radius)
                 .fill(isSelected ? Color.green.opacity(0.12) : Color.gray.opacity(0.08))
         )
         .contentShape(Rectangle())

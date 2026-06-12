@@ -20,6 +20,11 @@ struct MenuBarView: View {
     @AppStorage("settings.initialPage") private var initialSettingsPage: String = SettingsPage.overview.rawValue
 
     var body: some View {
+        Label(statusText, systemImage: statusIcon)
+            .foregroundStyle(statusColor)
+
+        Divider()
+
         // Indicador do Modo Prompt LLM
         if promptModeManager.isEnabled {
             Label("Modo Prompt LLM: ATIVO", systemImage: "sparkles")
@@ -31,24 +36,17 @@ struct MenuBarView: View {
                 .foregroundStyle(.blue)
         }
 
-        Button(promptModeManager.isEnabled ? "Desligar Modo Prompt" : "Ligar Modo Prompt") {
+        Button {
             promptModeManager.toggle()
+        } label: {
+            Label(promptModeManager.isEnabled ? "Desligar Modo Prompt" : "Ligar Modo Prompt", systemImage: "sparkles")
         }
 
-        Button(appState.isSelectionLookupModeEnabled ? "Desligar Modo Tradução" : "Ligar Modo Tradução") {
+        Button {
             appState.toggleSelectionLookupMode()
+        } label: {
+            Label(appState.isSelectionLookupModeEnabled ? "Desligar Modo Tradução" : "Ligar Modo Tradução", systemImage: "text.magnifyingglass")
         }
-
-        Divider()
-
-        // Status atual
-        HStack {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-            Text(statusText)
-        }
-        .padding(.horizontal)
 
         if appState.microphoneManager.permissionState != .authorized {
             Label(microphonePermissionTitle, systemImage: "mic.slash")
@@ -82,8 +80,10 @@ struct MenuBarView: View {
         Divider()
 
         // Toggle de gravação
-        Button(appState.isRecordingOrPreparing ? "Parar Gravação" : "Iniciar Gravação") {
+        Button {
             appState.toggleRecording()
+        } label: {
+            Label(appState.isRecordingOrPreparing ? "Parar Gravação" : "Iniciar Gravação", systemImage: appState.isRecordingOrPreparing ? "stop.fill" : "mic.fill")
         }
         .keyboardShortcut("r", modifiers: [.command])
         .disabled(appState.state == .processing || !appState.isModelReady)
@@ -124,20 +124,26 @@ struct MenuBarView: View {
         }
 
         // Transcrever arquivo de áudio — abre janela flutuante dedicada
-        Button("Transcrever arquivo...") {
+        Button {
             openWindow(id: AudioFileWindowID.value)
+        } label: {
+            Label("Transcrever arquivo...", systemImage: "waveform.badge.plus")
         }
         .keyboardShortcut("t", modifiers: [.command, .shift])
         .disabled(!appState.isModelReady)
 
         // Configurações e sair
-        Button("Configurações...") {
+        Button {
             openSettingsOn(.overview)
+        } label: {
+            Label("Configurações...", systemImage: "gearshape")
         }
         .keyboardShortcut(",", modifiers: [.command])
 
-        Button("Sair") {
+        Button {
             NSApplication.shared.terminate(nil)
+        } label: {
+            Label("Sair", systemImage: "power")
         }
         .keyboardShortcut("q", modifiers: [.command])
     }
@@ -174,6 +180,19 @@ struct MenuBarView: View {
         case .preparing: return "Preparando..."
         case .recording: return "Gravando..."
         case .processing: return "Transcrevendo..."
+        }
+    }
+
+    private var statusIcon: String {
+        switch appState.state {
+        case .idle:
+            return appState.isModelReady ? "checkmark.circle.fill" : "hourglass"
+        case .preparing:
+            return "mic.badge.plus"
+        case .recording:
+            return "mic.fill"
+        case .processing:
+            return "waveform"
         }
     }
 

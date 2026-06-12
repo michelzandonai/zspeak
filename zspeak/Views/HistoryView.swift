@@ -86,6 +86,15 @@ struct HistoryView: View {
 
     var body: some View {
         Form {
+            Section {
+                ZSFormHero(
+                    title: "Histórico",
+                    subtitle: "Revise, copie e ouça transcrições recentes com contexto do app de destino.",
+                    systemImage: "clock.arrow.circlepath",
+                    tone: .info
+                )
+            }
+
             if store.records.isEmpty {
                 emptyState
             } else {
@@ -118,6 +127,7 @@ struct HistoryView: View {
             }
         }
         .formStyle(.grouped)
+        .zsFormPage()
         .navigationTitle("Histórico")
         .onDisappear { stopAudio() }
         .onChange(of: store.records.count) { _, newCount in

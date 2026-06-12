@@ -240,13 +240,24 @@ struct OverlayView: View {
         .padding(.vertical, model.selectionTranslationPresentation == .compactLookup ? 9 : 12)
         .frame(width: overlayWidth)
         .fixedSize(horizontal: false, vertical: true)
-        .background(.black.opacity(0.85))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.045, green: 0.047, blue: 0.050).opacity(0.96),
+                            Color(red: 0.010, green: 0.012, blue: 0.014).opacity(0.94),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(.white.opacity(0.18), lineWidth: 1)
+                .stroke(.white.opacity(0.22), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
+        .shadow(color: .black.opacity(0.36), radius: 16, y: 6)
         // VoiceOver: anuncia o estado corrente do overlay como valor do container.
         // O label de cada bloco interno (preparing/recording/processing) também
         // é exposto, mas esse valor global ajuda a orientar quem entra no overlay.

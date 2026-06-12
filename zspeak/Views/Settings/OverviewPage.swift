@@ -19,21 +19,46 @@ struct OverviewPage: View {
     @State private var selectedLLMModel = LLMModelOption.defaultModel
 
     var body: some View {
-        Form {
-            Section { summaryHeader }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                ZSPageHeader(
+                    title: attentionIssues.isEmpty ? "Tudo funcionando" : "Atenção necessária",
+                    subtitle: attentionIssues.isEmpty
+                        ? "zspeak está pronto para transcrever localmente no Mac."
+                        : "Resolva os itens pendentes para liberar gravação, colagem e correções.",
+                    systemImage: attentionIssues.isEmpty ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
+                    tone: attentionIssues.isEmpty ? .success : .warning
+                ) {
+                    ZSStatusChip(
+                        text: attentionIssues.isEmpty ? "Pronto" : "\(attentionIssues.count) pendente\(attentionIssues.count == 1 ? "" : "s")",
+                        tone: attentionIssues.isEmpty ? .success : .warning
+                    )
+                }
 
-            Section("Status") {
-                asrStatusRow
-                llmStatusRow
-                permissionsStatusRow
-                shortcutRow
-            }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+                    ZSMetricTile(title: "Transcrição", value: asrStatus.text, systemImage: "waveform", tone: asrTone)
+                    ZSMetricTile(title: "LLM", value: llmStatusText, systemImage: "sparkles", tone: llmTone)
+                    ZSMetricTile(title: "Permissões", value: pendingPermissions.isEmpty ? "OK" : "\(pendingPermissions.count)", systemImage: "lock.shield", tone: pendingPermissions.isEmpty ? .success : .warning)
+                    ZSMetricTile(title: "Atalho", value: activationKeyManager.selectedKey.rawValue, systemImage: "keyboard", tone: .neutral)
+                }
 
-            if let last = lastTranscriptionSnippet {
-                Section("Última transcrição") {
-                    VStack(alignment: .leading, spacing: 4) {
+                ZSSectionCard {
+                    sectionTitle("Estado operacional", systemImage: "list.bullet.rectangle")
+                    asrStatusRow
+                    Divider()
+                    llmStatusRow
+                    Divider()
+                    permissionsStatusRow
+                    Divider()
+                    shortcutRow
+                }
+
+                if let last = lastTranscriptionSnippet {
+                    ZSSectionCard {
+                        sectionTitle("Última transcrição", systemImage: "text.bubble")
                         Text(last.text)
-                            .lineLimit(3)
+                            .lineLimit(4)
+                            .textSelection(.enabled)
                             .foregroundStyle(.primary)
                         Text(last.relative)
                             .font(.caption)
@@ -41,8 +66,9 @@ struct OverviewPage: View {
                     }
                 }
             }
+            .padding(ZSDesign.pagePadding)
         }
-        .formStyle(.grouped)
+        .background(ZSDesign.pageBackground)
         .navigationTitle("Visão Geral")
         .task(id: llmStateTaskID) {
             selectedLLMModel = await appState.selectedLLMModel()
@@ -50,32 +76,10 @@ struct OverviewPage: View {
         }
     }
 
-    // MARK: - Header agregado
-
-    private var summaryHeader: some View {
-        let issues = attentionIssues
-        let allGood = issues.isEmpty
-
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Image(systemName: allGood ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 32))
-                    .foregroundStyle(allGood ? .green : .orange)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(allGood ? "Tudo funcionando" : "Atenção necessária")
-                        .font(.title3)
-                        .fontWeight(.semibold)
-                    Text(allGood
-                         ? "zspeak está pronto para transcrever."
-                         : "Verifique os itens abaixo para liberar todas as funcionalidades."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-        }
-        .padding(.vertical, 4)
+    private func sectionTitle(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.headline)
+            .foregroundStyle(.primary)
     }
 
     // MARK: - Linhas de status
@@ -180,6 +184,19 @@ struct OverviewPage: View {
         case .downloading, .loading: return .orange
         case .downloaded, .ready: return .green
         case .error: return .red
+        }
+    }
+
+    private var asrTone: ZSTone {
+        appState.isModelReady ? .success : .warning
+    }
+
+    private var llmTone: ZSTone {
+        switch llmState {
+        case .notDownloaded: return .neutral
+        case .downloading, .loading: return .warning
+        case .downloaded, .ready: return .success
+        case .error: return .danger
         }
     }
 

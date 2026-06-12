@@ -14,6 +14,15 @@ struct MicrophonePage: View {
 
         Form {
             Section {
+                ZSFormHero(
+                    title: "Microfone",
+                    subtitle: "Escolha o padrão do sistema ou priorize dispositivos específicos.",
+                    systemImage: "mic.fill",
+                    tone: .danger
+                )
+            }
+
+            Section {
                 Toggle("Usar padrão do sistema", isOn: $mic.useSystemDefault)
             } footer: {
                 Text("Quando ligado, zspeak usa sempre o microfone padrão do sistema. Desligue para definir uma ordem de prioridade.")
@@ -21,15 +30,20 @@ struct MicrophonePage: View {
 
             if !microphoneManager.useSystemDefault {
                 Section {
-                    List {
-                        ForEach(microphoneManager.microphones) { mic in
-                            micRow(for: mic)
+                    if microphoneManager.microphones.isEmpty {
+                        emptyMicrophoneState
+                            .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+                    } else {
+                        List {
+                            ForEach(microphoneManager.microphones) { mic in
+                                micRow(for: mic)
+                            }
+                            .onMove { offsets, destination in
+                                microphoneManager.reorder(fromOffsets: offsets, toOffset: destination)
+                            }
                         }
-                        .onMove { offsets, destination in
-                            microphoneManager.reorder(fromOffsets: offsets, toOffset: destination)
-                        }
+                        .frame(minHeight: listHeight)
                     }
-                    .frame(minHeight: rowHeight * CGFloat(max(microphoneManager.microphones.count, 1)))
                 } header: {
                     Text("Ordem de prioridade")
                 } footer: {
@@ -38,6 +52,7 @@ struct MicrophonePage: View {
             }
         }
         .formStyle(.grouped)
+        .zsFormPage()
         .navigationTitle("Microfone")
         .animation(.default, value: microphoneManager.useSystemDefault)
     }
@@ -45,6 +60,35 @@ struct MicrophonePage: View {
     // MARK: - Linha
 
     private let rowHeight: CGFloat = 32
+
+    private var listHeight: CGFloat {
+        if microphoneManager.microphones.isEmpty {
+            return 112
+        }
+        return rowHeight * CGFloat(max(microphoneManager.microphones.count, 1))
+    }
+
+    private var emptyMicrophoneState: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "mic.badge.plus")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 32)
+                .background(.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Nenhum microfone listado")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text("Conecte um dispositivo ou ligue o padrão do sistema.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 14)
+    }
 
     @ViewBuilder
     private func micRow(for mic: MicrophoneInfo) -> some View {

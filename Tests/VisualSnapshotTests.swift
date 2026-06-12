@@ -187,6 +187,174 @@ struct VisualSnapshotTests {
         )
     }
 
+    // MARK: - Settings
+
+    @Test("Settings overview permanece estável")
+    func testSettingsOverviewSnapshot() throws {
+        let context = makeSettingsContext()
+        context.historyStore.addRecord(
+            text: "Preciso revisar o pipeline de deploy no Kubernetes e abrir um pull request.",
+            modelName: "Parakeet TDT 0.6B V3",
+            duration: 4.2,
+            targetAppName: "Cursor",
+            samples: nil
+        )
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-overview",
+            of: settingsEnvironment(OverviewPage(), context: context),
+            size: CGSize(width: 980, height: 720)
+        )
+    }
+
+    @Test("Settings history permanece estável")
+    func testSettingsHistorySnapshot() throws {
+        let context = makeSettingsContext()
+        context.historyStore.addRecord(
+            text: "Vamos ajustar o fluxo de permissões e validar a nova tela em dark mode.",
+            modelName: "Parakeet TDT 0.6B V3",
+            duration: 5.1,
+            targetAppName: "Xcode",
+            samples: nil
+        )
+        context.historyStore.addRecord(
+            text: "Correção geral aplicada ao texto transcrito com termos técnicos em inglês.",
+            modelName: "LLM local",
+            duration: 0.8,
+            targetAppName: "Cursor",
+            samples: nil
+        )
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-history",
+            of: HistoryView(store: context.historyStore),
+            size: CGSize(width: 980, height: 720)
+        )
+    }
+
+    @Test("Settings benchmark permanece estável")
+    func testSettingsBenchmarkSnapshot() throws {
+        let context = makeSettingsContext()
+        context.benchmarkStore.fixtures = [
+            BenchmarkFixture(
+                id: UUID(),
+                name: "Frase técnica PT-BR",
+                expectedText: "Ajustar o pipeline de deploy no Kubernetes",
+                audioFileName: "fixture-pt.wav",
+                duration: 4.8,
+                lastResult: BenchmarkResult(
+                    transcribedText: "Ajustar o pipeline de deploy no Kubernetes",
+                    latency: 0.84,
+                    timestamp: Date(),
+                    similarity: 0.96,
+                    wordErrorRate: 0.04,
+                    characterErrorRate: 0.02
+                )
+            ),
+            BenchmarkFixture(
+                id: UUID(),
+                name: "Code-switching",
+                expectedText: "Abrir pull request e revisar cache Redis",
+                audioFileName: "fixture-code.wav",
+                duration: 3.6,
+                lastResult: BenchmarkResult(
+                    transcribedText: "Abrir pull request e revisar cache Redis",
+                    latency: 0.66,
+                    timestamp: Date(),
+                    similarity: 0.92,
+                    wordErrorRate: 0.08,
+                    characterErrorRate: 0.03
+                )
+            ),
+        ]
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-benchmark",
+            of: BenchmarkView(
+                appState: context.appState,
+                store: context.benchmarkStore,
+                historyStore: context.historyStore,
+                initialIsLoadingFixtures: false
+            ),
+            size: CGSize(width: 980, height: 820)
+        )
+    }
+
+    @Test("Settings vocabulary permanece estável")
+    func testSettingsVocabularySnapshot() throws {
+        let context = makeSettingsContext()
+        context.vocabularyStore.addEntry(term: "GitHub Actions", aliases: ["guithub actions", "git actions"], weight: 14)
+        context.vocabularyStore.addEntry(term: "CoreML", aliases: ["core ml"], weight: 12)
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-vocabulary",
+            of: VocabularyView(appState: context.appState, store: context.vocabularyStore),
+            size: CGSize(width: 980, height: 760)
+        )
+    }
+
+    @Test("Settings correction permanece estável")
+    func testSettingsCorrectionSnapshot() throws {
+        let context = makeSettingsContext()
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-correction",
+            of: CorrectionPromptsView(appState: context.appState, store: context.correctionPromptStore),
+            size: CGSize(width: 980, height: 900)
+        )
+    }
+
+    @Test("Settings keyboard permanece estável")
+    func testSettingsKeyboardSnapshot() throws {
+        let context = makeSettingsContext()
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-keyboard",
+            of: settingsEnvironment(KeyboardPage(), context: context),
+            size: CGSize(width: 980, height: 720)
+        )
+    }
+
+    @Test("Settings microphone permanece estável")
+    func testSettingsMicrophoneSnapshot() throws {
+        let context = makeSettingsContext()
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-microphone",
+            of: settingsEnvironment(MicrophonePage(), context: context),
+            size: CGSize(width: 980, height: 720)
+        )
+    }
+
+    @Test("Settings general permanece estável")
+    func testSettingsGeneralSnapshot() throws {
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-general",
+            of: GeneralPage(),
+            size: CGSize(width: 980, height: 720)
+        )
+    }
+
+    @Test("Settings permissions permanece estável")
+    func testSettingsPermissionsSnapshot() throws {
+        let context = makeSettingsContext()
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-permissions",
+            of: settingsEnvironment(PermissionsPage(refreshOnAppear: false), context: context),
+            size: CGSize(width: 980, height: 760)
+        )
+    }
+
+    @Test("Settings about permanece estável")
+    func testSettingsAboutSnapshot() throws {
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-about",
+            of: AboutPage(),
+            size: CGSize(width: 980, height: 720)
+        )
+    }
+
     // MARK: - MenuBar
     //
     // Snapshots de `MenuBarView` ficam pra Onda 2: hoje ele depende de
@@ -203,5 +371,67 @@ struct VisualSnapshotTests {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private struct SettingsSnapshotContext {
+        let appState: AppState
+        let historyStore: TranscriptionStore
+        let benchmarkStore: BenchmarkStore
+        let vocabularyStore: VocabularyStore
+        let correctionPromptStore: CorrectionPromptStore
+        let activationKeyManager: ActivationKeyManager
+        let accessibilityManager: AccessibilityManager
+        let promptModeManager: PromptModeManager
+    }
+
+    private func makeSettingsContext() -> SettingsSnapshotContext {
+        let appState = AppState(skipBundlePermissionCheck: true)
+        let historyStore = TranscriptionStore(baseDirectory: makeTemporaryDirectory())
+        let benchmarkStore = BenchmarkStore(baseDirectory: makeTemporaryDirectory())
+        let vocabularyStore = VocabularyStore(baseDirectory: makeTemporaryDirectory())
+        let correctionPromptStore = CorrectionPromptStore(baseDirectory: makeTemporaryDirectory())
+        let promptModeManager = PromptModeManager()
+        let activationKeyManager = ActivationKeyManager()
+        let accessibilityManager = AccessibilityManager(initialIsGranted: true, startPolling: false)
+
+        appState.microphoneManager.permissionState = .authorized
+        appState.microphoneManager.useSystemDefault = false
+        appState.microphoneManager.microphones = []
+        appState.accessibilityGranted = true
+
+        activationKeyManager.selectedKey = .rightCommand
+        activationKeyManager.activationMode = .toggle
+        activationKeyManager.escapeToCancel = true
+        activationKeyManager.customShortcutDescription = ""
+
+        appState.store = historyStore
+        appState.benchmarkStore = benchmarkStore
+        appState.vocabularyStore = vocabularyStore
+        appState.correctionPromptStore = correctionPromptStore
+        appState.promptModeManager = promptModeManager
+
+        return SettingsSnapshotContext(
+            appState: appState,
+            historyStore: historyStore,
+            benchmarkStore: benchmarkStore,
+            vocabularyStore: vocabularyStore,
+            correctionPromptStore: correctionPromptStore,
+            activationKeyManager: activationKeyManager,
+            accessibilityManager: accessibilityManager,
+            promptModeManager: promptModeManager
+        )
+    }
+
+    private func settingsEnvironment<V: View>(_ view: V, context: SettingsSnapshotContext) -> some View {
+        view
+            .environment(context.appState)
+            .environment(context.appState.microphoneManager)
+            .environment(context.activationKeyManager)
+            .environment(context.accessibilityManager)
+            .environment(context.historyStore)
+            .environment(context.benchmarkStore)
+            .environment(context.vocabularyStore)
+            .environment(context.correctionPromptStore)
+            .environment(context.promptModeManager)
     }
 }

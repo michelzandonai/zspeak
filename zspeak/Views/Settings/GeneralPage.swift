@@ -33,6 +33,15 @@ struct GeneralPage: View {
     var body: some View {
         Form {
             Section {
+                ZSFormHero(
+                    title: "Geral",
+                    subtitle: "Defina inicialização, inserção de texto e feedback do fluxo de gravação.",
+                    systemImage: "gearshape",
+                    tone: .neutral
+                )
+            }
+
+            Section {
                 LaunchAtLogin.Toggle("Iniciar com o sistema")
             } footer: {
                 Text("Abre o zspeak automaticamente quando você faz login no macOS.")
@@ -65,6 +74,7 @@ struct GeneralPage: View {
             }
         }
         .formStyle(.grouped)
+        .zsFormPage()
         .navigationTitle("Geral")
     }
 }

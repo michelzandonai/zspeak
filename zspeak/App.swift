@@ -215,6 +215,7 @@ struct ZSpeakApp: App {
         // classes `@Observable` diretamente, sem precisar de `@EnvironmentObject`.
         MenuBarExtra {
             MenuBarView()
+                .preferredColorScheme(.dark)
                 .environment(appState)
                 .environment(appState.microphoneManager)
                 .environment(activationKeyManager)
@@ -232,6 +233,7 @@ struct ZSpeakApp: App {
         // Janela de configurações — init sem parâmetros; consome `@Environment`.
         Settings {
             SettingsView()
+                .preferredColorScheme(.dark)
                 .environment(appState)
                 .environment(appState.microphoneManager)
                 .environment(activationKeyManager)
@@ -246,6 +248,7 @@ struct ZSpeakApp: App {
         // Janela dedicada para transcrever arquivo de áudio (Cmd+Shift+T).
         Window("Transcrever arquivo", id: AudioFileWindowID.value) {
             AudioFileWindowContent()
+                .preferredColorScheme(.dark)
                 .environment(appState)
                 .environment(store)
         }
@@ -265,6 +268,8 @@ struct ZSpeakApp: App {
     }
 
     init() {
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+
         let keyManager = activationKeyManager
         self.hotkeyManager = HotkeyManager(activationKeyManager: keyManager)
         let state = appState

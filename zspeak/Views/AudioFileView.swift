@@ -78,28 +78,35 @@ struct AudioFileView: View {
             VStack(alignment: .leading, spacing: 16) {
                 AudioFileHeader()
 
-                // Picker de modo (sempre visível)
-                Picker("Modo", selection: $mode) {
-                    Label("Texto corrido", systemImage: "text.alignleft").tag(AudioFileTranscriber.Mode.plain)
-                    Label("Reunião", systemImage: "person.2.wave.2").tag(AudioFileTranscriber.Mode.meeting)
-                }
-                .pickerStyle(.segmented)
-                .disabled(state.isProcessing)
+                ZSSectionCard {
+                    HStack(alignment: .center, spacing: 12) {
+                        Label("Modo", systemImage: "slider.horizontal.3")
+                            .font(.headline)
+                        Spacer()
+                        Picker("Modo", selection: $mode) {
+                            Label("Texto corrido", systemImage: "text.alignleft").tag(AudioFileTranscriber.Mode.plain)
+                            Label("Reunião", systemImage: "person.2.wave.2").tag(AudioFileTranscriber.Mode.meeting)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 260)
+                        .disabled(state.isProcessing)
+                    }
 
-                // Aviso de download de modelos de diarização + picker de speakers
-                if mode == .meeting {
-                    DiarizerStatusSection(
-                        diarizerState: diarizerState,
-                        isPreparingDiarizer: isPreparingDiarizer,
-                        onPrepare: prepareDiarizer
-                    )
-                    SpeakersHintPicker(
-                        numSpeakersHint: $numSpeakersHint,
-                        isDisabled: state.isProcessing
-                    )
+                    if mode == .meeting {
+                        Divider()
+                        DiarizerStatusSection(
+                            diarizerState: diarizerState,
+                            isPreparingDiarizer: isPreparingDiarizer,
+                            onPrepare: prepareDiarizer
+                        )
+                        SpeakersHintPicker(
+                            numSpeakersHint: $numSpeakersHint,
+                            isDisabled: state.isProcessing
+                        )
+                    }
                 }
 
-                // Conteúdo principal
                 switch state {
                 case .initial:
                     AudioFileDropZone(
@@ -129,8 +136,9 @@ struct AudioFileView: View {
                     )
                 }
             }
-            .padding()
+            .padding(ZSDesign.pagePadding)
         }
+        .background(ZSDesign.pageBackground)
         .navigationTitle("Transcrever Arquivo")
         .task(id: mode) {
             if mode == .meeting {
@@ -294,13 +302,19 @@ struct AudioFileView: View {
 
 private struct AudioFileHeader: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Transcrever arquivo de áudio")
-                .font(.title2)
-                .fontWeight(.semibold)
-            Text("Qualquer formato: WAV, MP3, M4A, FLAC, OPUS (WhatsApp), OGG, WMA, AMR e mais.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        ZSPageHeader(
+            title: "Transcrever arquivo de áudio",
+            subtitle: "Importe arquivos longos, áudios de WhatsApp e reuniões sem enviar nada para a nuvem.",
+            systemImage: "waveform.badge.plus",
+            tone: .accent
+        ) {
+            VStack(alignment: .trailing, spacing: 6) {
+                ZSStatusChip(text: "Local", tone: .success, systemImage: "lock.fill")
+                Text("WAV · MP3 · M4A · FLAC · OPUS")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
     }
 }
@@ -313,15 +327,20 @@ private struct AudioFileDropZone: View {
     let onDrop: ([NSItemProvider]) -> Bool
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             Image(systemName: "waveform.badge.plus")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 44, weight: .semibold))
+                .foregroundStyle(isDropTargeted ? Color.accentColor : .secondary)
+                .frame(width: 68, height: 68)
+                .background(
+                    RoundedRectangle(cornerRadius: ZSDesign.radius)
+                        .fill((isDropTargeted ? Color.accentColor : Color.secondary).opacity(0.10))
+                )
 
             Text("Arraste um arquivo de áudio aqui")
-                .font(.headline)
+                .font(.title3.weight(.semibold))
 
-            Text("ou")
+            Text("Solte para começar a transcrição ou selecione manualmente.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -331,18 +350,19 @@ private struct AudioFileDropZone: View {
             .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, minHeight: 240)
-        .padding()
+        .padding(24)
         .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isDropTargeted ? Color.accentColor.opacity(0.1) : Color(.textBackgroundColor))
+            RoundedRectangle(cornerRadius: ZSDesign.radius)
+                .fill(isDropTargeted ? Color.accentColor.opacity(0.10) : ZSDesign.cardBackground)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: ZSDesign.radius)
                 .strokeBorder(
-                    isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.3),
+                    isDropTargeted ? Color.accentColor : ZSDesign.hairline,
                     style: StrokeStyle(lineWidth: 2, dash: [8])
                 )
         )
+        .animation(.easeInOut(duration: 0.16), value: isDropTargeted)
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             onDrop(providers)
         }
@@ -357,42 +377,46 @@ private struct AudioFileProcessingView: View {
     let onCancel: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
-            // Barra determinada quando temos progresso, indeterminada caso contrário
-            if let progress = phaseProgress {
-                VStack(spacing: 6) {
-                    ProgressView(value: progress, total: 1.0)
-                        .progressViewStyle(.linear)
-                        .frame(maxWidth: 360)
-                    Text("\(Int(progress * 100))%")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospaced()
+        ZSSectionCard {
+            VStack(spacing: 18) {
+                ZSIconBadge(systemImage: "waveform.badge.magnifyingglass", tone: .accent)
+
+                VStack(spacing: 5) {
+                    Text(phaseDescription)
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+
+                    if !fileName.isEmpty {
+                        Text(fileName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
-            } else {
-                ProgressView()
-                    .progressViewStyle(.circular)
-            }
 
-            Text(phaseDescription)
-                .font(.headline)
-                .multilineTextAlignment(.center)
+                if let progress = phaseProgress {
+                    VStack(spacing: 7) {
+                        ProgressView(value: progress, total: 1.0)
+                            .progressViewStyle(.linear)
+                            .frame(maxWidth: 420)
+                        Text("\(Int(progress * 100))%")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .controlSize(.large)
+                }
 
-            if !fileName.isEmpty {
-                Text(fileName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                Button(role: .destructive, action: onCancel) {
+                    Label("Cancelar", systemImage: "xmark.circle")
+                }
+                .padding(.top, 2)
             }
-
-            Button(role: .destructive, action: onCancel) {
-                Label("Cancelar", systemImage: "xmark.circle")
-            }
-            .padding(.top, 4)
+            .frame(maxWidth: .infinity, minHeight: 260)
         }
-        .frame(maxWidth: .infinity, minHeight: 240)
-        .padding()
     }
 
     /// Progresso 0.0-1.0 da fase atual, ou nil se indeterminado
@@ -440,24 +464,26 @@ private struct AudioFileResultView: View {
     let onTranscribeAnother: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Cabeçalho do resultado
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
+        ZSSectionCard {
+            HStack(alignment: .center, spacing: 12) {
+                ZSIconBadge(systemImage: result.segments?.isEmpty == false ? "person.2.wave.2" : "text.alignleft", tone: .success)
+
+                VStack(alignment: .leading, spacing: 3) {
                     Text(result.sourceFileName)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                        .font(.headline)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text("\(String(format: "%.1fs", result.durationSeconds)) · \((result.segments?.count).map { "\($0) segmentos" } ?? "texto corrido")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        ZSStatusChip(text: String(format: "%.1fs", result.durationSeconds), tone: .neutral, systemImage: "clock")
+                        ZSStatusChip(text: (result.segments?.count).map { "\($0) segmentos" } ?? "Texto corrido", tone: .info)
+                    }
                 }
                 Spacer()
-                Button("Transcrever outro", action: onTranscribeAnother)
+                Button(action: onTranscribeAnother) {
+                    Label("Transcrever outro", systemImage: "arrow.counterclockwise")
+                }
             }
 
-            // Painel de identificação de speakers (modo Reunião)
             if let segments = result.segments, !segments.isEmpty {
                 SpeakersPanel(
                     result: result,
@@ -469,7 +495,6 @@ private struct AudioFileResultView: View {
                 )
             }
 
-            // Botões de ação
             HStack(spacing: 8) {
                 Button {
                     NSPasteboard.general.clearContents()
@@ -492,11 +517,11 @@ private struct AudioFileResultView: View {
                     }
                     .disabled(appState.isApplyingPrompt)
                 }
+                Spacer()
             }
 
             Divider()
 
-            // Conteúdo
             if let segments = result.segments, !segments.isEmpty {
                 MeetingResultView(segments: segments, speakerNames: speakerNames)
             } else {
@@ -531,11 +556,10 @@ private struct SpeakersPanel: View {
 
     var body: some View {
         let speakerIds = Array(Set(segments.map(\.speakerId))).sorted()
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Interlocutores")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-            VStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Interlocutores", systemImage: "person.2.fill")
+                .font(.subheadline.weight(.semibold))
+            VStack(spacing: 6) {
                 ForEach(speakerIds, id: \.self) { speakerId in
                     SpeakerRow(
                         speakerId: speakerId,
@@ -548,9 +572,12 @@ private struct SpeakersPanel: View {
                     )
                 }
             }
-            .padding(8)
-            .background(Color(.textBackgroundColor).opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .padding(10)
+            .background(ZSDesign.raisedBackground, in: RoundedRectangle(cornerRadius: ZSDesign.compactRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: ZSDesign.compactRadius)
+                    .strokeBorder(ZSDesign.hairline)
+            )
         }
     }
 }
@@ -619,8 +646,11 @@ private struct PlainResultView: View {
                 .padding()
         }
         .frame(minHeight: 280)
-        .background(Color(.textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .background(ZSDesign.raisedBackground, in: RoundedRectangle(cornerRadius: ZSDesign.radius))
+        .overlay(
+            RoundedRectangle(cornerRadius: ZSDesign.radius)
+                .strokeBorder(ZSDesign.hairline)
+        )
     }
 }
 
@@ -638,8 +668,11 @@ private struct MeetingResultView: View {
             .padding()
         }
         .frame(minHeight: 280)
-        .background(Color(.textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .background(ZSDesign.raisedBackground, in: RoundedRectangle(cornerRadius: ZSDesign.radius))
+        .overlay(
+            RoundedRectangle(cornerRadius: ZSDesign.radius)
+                .strokeBorder(ZSDesign.hairline)
+        )
     }
 }
 
@@ -656,7 +689,7 @@ private struct MeetingSegmentRow: View {
                 .fontWeight(.semibold)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(colorForSpeaker(segment.speakerId).opacity(0.2), in: Capsule())
+                .background(colorForSpeaker(segment.speakerId).opacity(0.16), in: Capsule())
                 .foregroundStyle(colorForSpeaker(segment.speakerId))
                 .frame(minWidth: 80, alignment: .leading)
 
@@ -682,18 +715,22 @@ private struct AudioFileErrorView: View {
     let onRetry: () -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(.orange)
-            Text(message)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            Button("Tentar outro arquivo", action: onRetry)
+        ZSSectionCard {
+            VStack(spacing: 14) {
+                ZSIconBadge(systemImage: "exclamationmark.triangle.fill", tone: .warning)
+                Text("Não foi possível transcrever")
+                    .font(.headline)
+                Text(message)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                Button(action: onRetry) {
+                    Label("Tentar outro arquivo", systemImage: "arrow.counterclockwise")
+                }
                 .buttonStyle(.borderedProminent)
+            }
+            .frame(maxWidth: .infinity, minHeight: 240)
         }
-        .frame(maxWidth: .infinity, minHeight: 240)
-        .padding()
     }
 }
 

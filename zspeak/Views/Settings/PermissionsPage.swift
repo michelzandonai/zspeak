@@ -11,116 +11,140 @@ struct PermissionsPage: View {
     @Environment(AccessibilityManager.self) private var accessibilityManager
 
     @State private var isRunningSetup = false
+    private let refreshOnAppear: Bool
+
+    init(refreshOnAppear: Bool = true) {
+        self.refreshOnAppear = refreshOnAppear
+    }
 
     var body: some View {
-        Form {
-            Section { summaryHeader }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                ZSPageHeader(
+                    title: pendingCount == 0 ? "Tudo concedido" : "Atenção necessária",
+                    subtitle: pendingCount == 0
+                        ? "zspeak tem todas as permissões para gravar e inserir texto."
+                        : "\(pendingCount) permissão\(pendingCount == 1 ? "" : "es") faltando para o fluxo completo.",
+                    systemImage: pendingCount == 0 ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
+                    tone: pendingCount == 0 ? .success : .warning
+                ) {
+                    ZSStatusChip(
+                        text: pendingCount == 0 ? "Completo" : "\(pendingCount) pendente\(pendingCount == 1 ? "" : "s")",
+                        tone: pendingCount == 0 ? .success : .warning
+                    )
+                }
 
-            if pendingCount > 0 {
-                Section {
-                    Button {
-                        Task { await runGuidedSetup() }
-                    } label: {
-                        Label(isRunningSetup ? "Configurando..." : "Configurar permissões", systemImage: "checklist.checked")
+                if pendingCount > 0 {
+                    ZSSectionCard {
+                        sectionTitle("Configuração guiada", systemImage: "checklist.checked")
+                        Text("O zspeak abre os prompts e os Ajustes certos. O macOS ainda exige que você confirme Microfone e Acessibilidade manualmente.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Button {
+                            Task { await runGuidedSetup() }
+                        } label: {
+                            Label(isRunningSetup ? "Configurando..." : "Configurar permissões", systemImage: "checklist.checked")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isRunningSetup)
                     }
-                    .disabled(isRunningSetup)
-                } footer: {
-                    Text("O zspeak abre os prompts e os Ajustes certos. O macOS ainda exige que você confirme Microfone e Acessibilidade manualmente.")
-                }
-            }
-
-            // Microfone
-            Section {
-                permissionRow(
-                    title: "Microfone",
-                    granted: microphoneManager.isPermissionGranted,
-                    iconName: microphoneStatusIcon,
-                    iconColor: microphoneStatusColor,
-                    action: microphoneAction
-                )
-            } footer: {
-                Text(microphonePermissionFooter)
-            }
-
-            if !microphoneManager.isPermissionGranted && microphoneManager.permissionState != .unavailable {
-                Section("Como ativar o microfone") {
-                    Label("Clique em \"Solicitar Permissão\" ou inicie uma gravação", systemImage: "1.circle")
-                    Label("Se o macOS negar, abra Ajustes do Sistema", systemImage: "2.circle")
-                    Label("Ative zspeak em Privacidade → Microfone", systemImage: "3.circle")
-                }
-            }
-
-            // Acessibilidade
-            Section {
-                permissionRow(
-                    title: "Acessibilidade",
-                    granted: accessibilityManager.isGranted,
-                    iconName: accessibilityManager.isGranted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
-                    iconColor: accessibilityManager.isGranted ? .green : .orange,
-                    action: accessibilityAction
-                )
-            } footer: {
-                Text("Necessário para colar no app ativo e para a hotkey global. Sem isso, a transcrição continua funcionando com cópia para o clipboard.")
-            }
-
-            if !accessibilityManager.isGranted {
-                Section("Como ativar a acessibilidade") {
-                    Label("Clique em \"Configurar permissões\" ou \"Conceder\"", systemImage: "1.circle")
-                    Label("Encontre \"zspeak\" na lista", systemImage: "2.circle")
-                    Label("Ative o toggle", systemImage: "3.circle")
                 }
 
-                Section("Resolução de problemas") {
-                    Text("Se zspeak não aparece na lista: clique \"+\" e navegue até /Applications/zspeak.app")
-                        .font(.callout)
+                ZSSectionCard {
+                    sectionTitle("Microfone", systemImage: "mic.fill")
+                    permissionRow(
+                        title: "Microfone",
+                        granted: microphoneManager.isPermissionGranted,
+                        iconName: microphoneStatusIcon,
+                        iconColor: microphoneStatusColor,
+                        action: microphoneAction
+                    )
+                    Text(microphonePermissionFooter)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Se o toggle está ativo mas aqui mostra inativo: remova da lista, adicione novamente e reinicie o app.")
+                }
+
+                if !microphoneManager.isPermissionGranted && microphoneManager.permissionState != .unavailable {
+                    stepsCard(
+                        title: "Como ativar o microfone",
+                        steps: [
+                            "Clique em \"Conceder\" ou inicie uma gravação",
+                            "Se o macOS negar, abra Ajustes do Sistema",
+                            "Ative zspeak em Privacidade → Microfone",
+                        ]
+                    )
+                }
+
+                ZSSectionCard {
+                    sectionTitle("Acessibilidade", systemImage: "accessibility")
+                    permissionRow(
+                        title: "Acessibilidade",
+                        granted: accessibilityManager.isGranted,
+                        iconName: accessibilityManager.isGranted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+                        iconColor: accessibilityManager.isGranted ? .green : .orange,
+                        action: accessibilityAction
+                    )
+                    Text("Necessário para colar no app ativo e para a hotkey global. Sem isso, a transcrição continua funcionando com cópia para o clipboard.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-            }
 
-            // Build sem Info.plist — mostrar apenas no caso técnico
-            if microphoneManager.permissionState == .unavailable {
-                Section("Build") {
-                    Text("O build atual não expõe permissão de microfone. Isso acontece quando o app é rodado fora de um bundle .app com Info.plist embutido.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                if !accessibilityManager.isGranted {
+                    stepsCard(
+                        title: "Como ativar a acessibilidade",
+                        steps: [
+                            "Clique em \"Configurar permissões\" ou \"Conceder\"",
+                            "Encontre \"zspeak\" na lista",
+                            "Ative o toggle",
+                        ]
+                    )
+
+                    ZSSectionCard {
+                        sectionTitle("Resolução de problemas", systemImage: "wrench.and.screwdriver")
+                        Text("Se zspeak não aparece na lista: clique \"+\" e navegue até /Applications/zspeak.app")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Text("Se o toggle está ativo mas aqui mostra inativo: remova da lista, adicione novamente e reinicie o app.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if microphoneManager.permissionState == .unavailable {
+                    ZSSectionCard {
+                        sectionTitle("Build", systemImage: "hammer")
+                        Text("O build atual não expõe permissão de microfone. Isso acontece quando o app é rodado fora de um bundle .app com Info.plist embutido.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
+            .padding(ZSDesign.pagePadding)
         }
-        .formStyle(.grouped)
+        .background(ZSDesign.pageBackground)
         .navigationTitle("Permissões")
         .onAppear {
+            guard refreshOnAppear else { return }
             microphoneManager.refreshPermissionState()
             accessibilityManager.refreshPermissionState()
         }
     }
 
-    // MARK: - Header agregado
+    private func sectionTitle(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.headline)
+            .foregroundStyle(.primary)
+    }
 
-    private var summaryHeader: some View {
-        let pending = pendingCount
-        let allGranted = pending == 0
-
-        return HStack(spacing: 10) {
-            Image(systemName: allGranted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                .font(.title2)
-                .foregroundStyle(allGranted ? .green : .orange)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(allGranted ? "Tudo concedido" : "Atenção necessária")
-                    .font(.headline)
-                Text(allGranted
-                     ? "zspeak tem todas as permissões para funcionar completamente."
-                     : "\(pending) permissão\(pending == 1 ? "" : "es") faltando para o app funcionar completamente."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    private func stepsCard(title: String, steps: [String]) -> some View {
+        ZSSectionCard {
+            sectionTitle(title, systemImage: "list.number")
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                Label(step, systemImage: "\(index + 1).circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
-            Spacer()
         }
-        .padding(.vertical, 4)
     }
 
     private var pendingCount: Int {

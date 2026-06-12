@@ -17,9 +17,11 @@ final class AccessibilityManager {
     /// Timer usado para revalidar o estado da permissão ao longo da execução
     private var timer: Timer?
 
-    init() {
-        isGranted = AXIsProcessTrusted()
-        startPolling()
+    init(initialIsGranted: Bool? = nil, startPolling: Bool = true) {
+        isGranted = initialIsGranted ?? AXIsProcessTrusted()
+        if startPolling {
+            self.startPolling()
+        }
     }
 
     // MARK: - Polling
