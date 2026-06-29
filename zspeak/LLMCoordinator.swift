@@ -156,7 +156,7 @@ final class LLMCoordinator {
                 let corrected = try await llmManager.correct(
                     text: originalText,
                     systemPrompt: prompt.systemPrompt,
-                    maxTokens: 384,
+                    maxTokens: LLMGenerationProfile.correctionMaxTokens,
                     onPartial: { [weak self] partial in
                         Task { @MainActor in
                             guard let self else { return }

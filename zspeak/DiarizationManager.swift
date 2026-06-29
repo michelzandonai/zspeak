@@ -294,11 +294,14 @@ actor DiarizationManager {
         samples: [Float],
         from startSeconds: Double,
         to endSeconds: Double,
-        sampleRate: Int = 16000
+        sampleRate: Int = 16000,
+        paddingSeconds: Double = 0
     ) -> [Float] {
         let totalSamples = samples.count
-        let startIdx = max(0, min(totalSamples, Int(startSeconds * Double(sampleRate))))
-        let endIdx = max(startIdx, min(totalSamples, Int(endSeconds * Double(sampleRate))))
+        let paddedStart = startSeconds - max(0, paddingSeconds)
+        let paddedEnd = endSeconds + max(0, paddingSeconds)
+        let startIdx = max(0, min(totalSamples, Int(paddedStart * Double(sampleRate))))
+        let endIdx = max(startIdx, min(totalSamples, Int(paddedEnd * Double(sampleRate))))
         guard endIdx > startIdx else { return [] }
         return Array(samples[startIdx..<endIdx])
     }

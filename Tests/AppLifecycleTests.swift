@@ -57,4 +57,17 @@ struct AppLifecycleTests {
         #expect(didActivateApplication)
         #expect(didShowWindow)
     }
+
+    @Test("Startup abre configuracoes na pagina inicial")
+    func testStartupWindowPresenterShowsSettingsOverview() {
+        var openedPage: SettingsPage?
+
+        let presenter = StartupWindowPresenter(showSettings: { page in
+            openedPage = page
+        })
+
+        presenter.showInitialWindow()
+
+        #expect(openedPage?.rawValue == SettingsPage.overview.rawValue)
+    }
 }

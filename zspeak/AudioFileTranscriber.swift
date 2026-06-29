@@ -38,8 +38,8 @@ enum FileTranscriptionPhase: Sendable, Equatable {
     /// o início da chamada do diarizer, e `estimated` é uma estimativa baseada
     /// em RTFx ~8x. Não é progresso real (a lib não dá callback) — apenas honesto.
     case diarizing(elapsed: TimeInterval, estimated: TimeInterval)
-    /// Transcrevendo chunk/segmento atual/total.
-    /// Em modo .plain: chunks de 30s. Em modo .meeting: segmentos de speaker.
+    /// Transcrevendo etapa atual/total.
+    /// Em modo .plain: single-pass do arquivo. Em modo .meeting: segmentos de speaker.
     case transcribing(current: Int, total: Int)
 }
 
@@ -175,13 +175,14 @@ final class AudioFileTranscriber {
 
         // Fase 2: carrega samples 16 kHz mono float32
         onProgress(.loadingSamples)
-        let samples: [Float]
+        let loadedSamples: [Float]
         do {
-            samples = try audioConverter.resampleAudioFile(workingURL)
+            loadedSamples = try audioConverter.resampleAudioFile(workingURL)
         } catch {
             throw TranscriberError.audioLoadFailed(error.localizedDescription)
         }
 
+        let samples = Self.sanitizeSamples(loadedSamples)
         guard samples.count > 8000 else {  // Menos de 0.5s
             throw TranscriberError.emptyAudio
         }
@@ -192,31 +193,7 @@ final class AudioFileTranscriber {
         // Fase 3: transcrição conforme modo
         switch mode {
         case .plain:
-            // Para arquivos grandes, divide em chunks de 30s para reportar progresso
-            // chunk a chunk e evitar transcrições gigantes em uma única chamada
-            let chunkRanges = Self.makeChunkRanges(sampleCount: samples.count)
-            var collectedTexts: [String] = []
-            collectedTexts.reserveCapacity(chunkRanges.count)
-
-            for (idx, range) in chunkRanges.enumerated() {
-                try Task.checkCancellation()
-                onProgress(.transcribing(current: idx + 1, total: chunkRanges.count))
-                let chunk = Array(samples[range])
-                let chunkText: String
-                do {
-                    chunkText = try await transcribe(chunk)
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    throw TranscriberError.transcriptionFailed(error.localizedDescription)
-                }
-                let trimmed = chunkText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    collectedTexts.append(trimmed)
-                }
-            }
-
-            let finalText = collectedTexts.joined(separator: " ")
+            let finalText = try await transcribePlain(samples: samples, onProgress: onProgress)
             return FileTranscriptionResult(
                 text: finalText,
                 segments: nil,
@@ -253,26 +230,9 @@ final class AudioFileTranscriber {
                 throw TranscriberError.transcriptionFailed(error.localizedDescription)
             }
 
-            // Se diarização retornou nada, faz fallback para texto corrido (com chunking)
+            // Se diarização retornou nada, faz fallback para texto corrido.
             if speakerSegments.isEmpty {
-                let chunkRanges = Self.makeChunkRanges(sampleCount: samples.count)
-                var collectedTexts: [String] = []
-                collectedTexts.reserveCapacity(chunkRanges.count)
-                for (idx, range) in chunkRanges.enumerated() {
-                    onProgress(.transcribing(current: idx + 1, total: chunkRanges.count))
-                    let chunk = Array(samples[range])
-                    let text: String
-                    do {
-                        text = try await transcribe(chunk)
-                    } catch {
-                        throw TranscriberError.transcriptionFailed(error.localizedDescription)
-                    }
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        collectedTexts.append(trimmed)
-                    }
-                }
-                let finalText = collectedTexts.joined(separator: " ")
+                let finalText = try await transcribePlain(samples: samples, onProgress: onProgress)
                 return FileTranscriptionResult(
                     text: finalText,
                     segments: nil,
@@ -291,7 +251,8 @@ final class AudioFileTranscriber {
                 let slice = DiarizationManager.slice(
                     samples: samples,
                     from: seg.startTimeSeconds,
-                    to: seg.endTimeSeconds
+                    to: seg.endTimeSeconds,
+                    paddingSeconds: Self.diarizedSegmentPaddingSeconds
                 )
 
                 // Segmento muito curto: pula
@@ -299,7 +260,7 @@ final class AudioFileTranscriber {
 
                 let segmentText: String
                 do {
-                    segmentText = try await transcribe(slice)
+                    segmentText = try await transcribe(Self.prepareSamplesForASR(slice))
                 } catch {
                     Self.logger.error("Segmento \(idx) falhou: \(error.localizedDescription, privacy: .public)")
                     continue
@@ -331,13 +292,49 @@ final class AudioFileTranscriber {
         }
     }
 
-    /// Duração de cada chunk para transcrição em modo plain (segundos)
-    nonisolated static let chunkDurationSeconds: Double = 30.0
+    private func transcribePlain(
+        samples: [Float],
+        onProgress: @escaping @MainActor (FileTranscriptionPhase) -> Void
+    ) async throws -> String {
+        try Task.checkCancellation()
+        onProgress(.transcribing(current: 1, total: 1))
 
-    /// Limite mínimo para ativar chunking: arquivos < 60s são transcritos de uma vez
+        do {
+            let shouldPadBoundaries = Self.shouldApplyPlainBoundaryPadding(sampleCount: samples.count)
+            let text = try await transcribe(Self.prepareSamplesForASR(
+                samples,
+                addBoundaryPadding: shouldPadBoundaries
+            ))
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw TranscriberError.transcriptionFailed(error.localizedDescription)
+        }
+    }
+
+    /// Duração do chunk de fallback manual. O caminho principal usa single-pass
+    /// para deixar o `AsrManager` aplicar o chunking interno com estado do decoder.
+    nonisolated static let chunkDurationSeconds: Double = 45.0
+
+    /// Overlap do fallback manual para reduzir corte de fonemas/palavras na borda.
+    nonisolated static let chunkOverlapSeconds: Double = 1.0
+
+    /// Limite mínimo para ativar fallback manual: arquivos < 60s usam um único range.
     nonisolated static let chunkingThresholdSeconds: Double = 60.0
 
-    /// Divide samples em chunks de ~30s para transcrição progressiva.
+    /// Padding aplicado ao redor de segmentos diarizados para não cortar fonemas.
+    nonisolated static let diarizedSegmentPaddingSeconds: Double = 0.35
+
+    /// Silêncio sintético nas bordas do áudio enviado ao ASR. Ajuda o encoder a
+    /// não perder a primeira/última sílaba em arquivos que começam "secos".
+    nonisolated static let asrBoundaryPaddingSeconds: Double = 0.25
+
+    /// Para texto corrido, padding de borda é mais útil em frases curtas. Em
+    /// arquivos longos, o chunker interno do FluidAudio já tem contexto suficiente.
+    nonisolated static let plainBoundaryPaddingMaxDurationSeconds: Double = 8.0
+
+    /// Divide samples em chunks de fallback com overlap.
     /// Função pura — testável. Áudios curtos retornam um único chunk.
     nonisolated static func makeChunks(
         samples: [Float],
@@ -348,8 +345,7 @@ final class AudioFileTranscriber {
         }
     }
 
-    /// Divide o áudio em ranges para o pipeline real não duplicar todos os chunks
-    /// em memória antes da transcrição.
+    /// Divide o áudio em ranges de fallback sem pré-alocar todos os chunks.
     nonisolated static func makeChunkRanges(
         sampleCount: Int,
         sampleRate: Int = 16000
@@ -361,15 +357,64 @@ final class AudioFileTranscriber {
             return [0..<sampleCount]
         }
 
-        let chunkSize = Int(chunkDurationSeconds * Double(sampleRate))
+        let chunkSize = max(1, Int(chunkDurationSeconds * Double(sampleRate)))
+        let overlapSize = max(0, min(chunkSize - 1, Int(chunkOverlapSeconds * Double(sampleRate))))
         var ranges: [Range<Int>] = []
         var idx = 0
         while idx < sampleCount {
             let end = min(idx + chunkSize, sampleCount)
             ranges.append(idx..<end)
-            idx = end
+            if end == sampleCount { break }
+            idx = max(idx + 1, end - overlapSize)
         }
         return ranges
+    }
+
+    /// Garante amostras finitas dentro do intervalo esperado por CoreML.
+    nonisolated static func sanitizeSamples(_ samples: [Float]) -> [Float] {
+        samples.map { sample in
+            guard sample.isFinite else { return 0 }
+            return min(1, max(-1, sample))
+        }
+    }
+
+    /// O ASR do FluidAudio exige pelo menos 1s de áudio. Para capturas/segmentos
+    /// curtos válidos, completamos com silêncio em vez de falhar a transcrição.
+    nonisolated static func padSamplesForASRIfNeeded(
+        _ samples: [Float],
+        sampleRate: Int = 16000
+    ) -> [Float] {
+        guard samples.count < sampleRate else { return samples }
+        return samples + Array(repeating: 0, count: sampleRate - samples.count)
+    }
+
+    /// Prepara áudio de arquivo/segmento para o ASR priorizando assertividade:
+    /// padding silencioso nas bordas + mínimo de 1s exigido pelo FluidAudio.
+    nonisolated static func prepareSamplesForASR(
+        _ samples: [Float],
+        sampleRate: Int = 16000,
+        addBoundaryPadding: Bool = true
+    ) -> [Float] {
+        guard addBoundaryPadding else {
+            return padSamplesForASRIfNeeded(samples, sampleRate: sampleRate)
+        }
+
+        let paddingCount = max(0, Int(asrBoundaryPaddingSeconds * Double(sampleRate)))
+        guard paddingCount > 0 else {
+            return padSamplesForASRIfNeeded(samples, sampleRate: sampleRate)
+        }
+
+        let padded = Array(repeating: Float(0), count: paddingCount)
+            + samples
+            + Array(repeating: Float(0), count: paddingCount)
+        return padSamplesForASRIfNeeded(padded, sampleRate: sampleRate)
+    }
+
+    nonisolated static func shouldApplyPlainBoundaryPadding(
+        sampleCount: Int,
+        sampleRate: Int = 16000
+    ) -> Bool {
+        Double(sampleCount) / Double(sampleRate) <= plainBoundaryPaddingMaxDurationSeconds
     }
 
     /// Real-time factor empírico do diarizer FluidAudio em Apple Silicon (~8x)

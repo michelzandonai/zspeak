@@ -67,6 +67,19 @@ final class ZSpeakAppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
+struct StartupWindowPresenter {
+    private let showSettings: (SettingsPage) -> Void
+
+    init(showSettings: @escaping (SettingsPage) -> Void) {
+        self.showSettings = showSettings
+    }
+
+    func showInitialWindow() {
+        showSettings(.overview)
+    }
+}
+
+@MainActor
 struct SettingsWindowPresenter {
     private let setInitialPage: (String) -> Void
     private let showDockIcon: () -> Void

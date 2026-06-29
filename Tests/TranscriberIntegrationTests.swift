@@ -1,4 +1,5 @@
 import Foundation
+import FluidAudio
 import Testing
 @testable import zspeak
 
@@ -18,7 +19,7 @@ import Testing
 /// Por que não um `.tags(.slow)`? Swift Testing aceita tags customizadas, mas
 /// filtrar via CLI ainda é instável entre versões do Xcode. A env var é portátil
 /// e funciona em `swift test`, Xcode, e CI sem configuração extra.
-@Suite("Transcriber Integration - Real Audio Fixtures")
+@Suite("Transcriber Integration - Real Audio Fixtures", .serialized)
 @MainActor
 struct TranscriberIntegrationTests {
 
@@ -45,18 +46,31 @@ struct TranscriberIntegrationTests {
 
     private actor SharedTranscriber {
         private var transcriber: Transcriber?
+        private var initTask: Task<Transcriber, Error>?
         private var initError: Error?
 
         func get() async throws -> Transcriber {
             if let t = transcriber { return t }
             if let e = initError { throw e }
-            let t = Transcriber()
-            do {
+            if let task = initTask {
+                return try await task.value
+            }
+
+            let task = Task {
+                let t = Transcriber()
                 try await t.initialize()
+                return t
+            }
+            initTask = task
+
+            do {
+                let t = try await task.value
                 transcriber = t
+                initTask = nil
                 return t
             } catch {
                 initError = error
+                initTask = nil
                 throw error
             }
         }
@@ -82,7 +96,7 @@ struct TranscriberIntegrationTests {
 
         let fileTranscriber = AudioFileTranscriber(
             transcribe: { samples in
-                try await transcriber.transcribe(samples)
+                try await transcriber.transcribe(samples, source: .system)
             },
             diarizer: nil
         )
@@ -181,5 +195,69 @@ struct TranscriberIntegrationTests {
             Esperava <= 5 chars (vazio ou pontuação residual).
             """
         )
+    }
+
+    @Test(
+        "benchmark ASR real calcula WER/CER das fixtures PT-BR",
+        .timeLimit(.minutes(10))
+    )
+    func realFixturesBenchmarkWERAndCER() async throws {
+        guard !Self.shouldSkip else { return }
+
+        let cases: [(file: String, expected: String, maxWER: Double, maxCER: Double)] = [
+            (
+                "pt-short.wav",
+                "Olá mundo, teste de transcrição local.",
+                0.60,
+                0.45
+            ),
+            (
+                "pt-long.wav",
+                "Hoje preciso ajustar o pipeline de deploy no Kubernetes. Também vou revisar o banco de dados PostgreSQL e conferir o cache do Redis. Depois abro um pull request com as alterações.",
+                0.65,
+                0.50
+            ),
+        ]
+
+        var wers: [Double] = []
+        var cers: [Double] = []
+        for item in cases {
+            let started = Date()
+            let result = try await transcribeFixture(item.file)
+            let latency = Date().timeIntervalSince(started)
+            let wer = BenchmarkMetrics.wordErrorRate(
+                expected: item.expected,
+                actual: result.text
+            )
+            let cer = BenchmarkMetrics.characterErrorRate(
+                expected: item.expected,
+                actual: result.text
+            )
+            wers.append(wer)
+            cers.append(cer)
+
+            print(String(
+                format: "[ASR BENCH] %@ WER=%.1f%% CER=%.1f%% latency=%.2fs text=\"%@\"",
+                item.file,
+                wer * 100,
+                cer * 100,
+                latency,
+                result.text
+            ))
+
+            #expect(wer <= item.maxWER)
+            #expect(cer <= item.maxCER)
+        }
+
+        let averageWER = wers.reduce(0, +) / Double(wers.count)
+        let averageCER = cers.reduce(0, +) / Double(cers.count)
+        print(String(
+            format: "[ASR BENCH] media WER=%.1f%% CER=%.1f%%",
+            averageWER * 100,
+            averageCER * 100
+        ))
+
+        #expect(averageWER <= 0.60)
+        #expect(averageCER <= 0.45)
     }
 }

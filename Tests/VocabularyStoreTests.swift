@@ -80,6 +80,11 @@ struct VocabularyStoreTests {
         #expect(store.entries.contains { $0.term == "Prompt Mode" })
         #expect(store.entries.contains { $0.term == "benchmark" })
         #expect(store.entries.contains { $0.term == "Cmd+V" })
+        #expect(store.entries.contains { $0.term == "context biasing" })
+        #expect(store.entries.contains { $0.term == "rescoring" })
+        #expect(store.entries.contains { $0.term == "RTFx" })
+        #expect(store.entries.contains { $0.term == "WER" })
+        #expect(store.entries.contains { $0.term == "assertividade" })
     }
 
     @Test("addEntry adiciona ao final")
@@ -234,6 +239,21 @@ struct VocabularyStoreTests {
         #expect(term.weight == 25.0)
     }
 
+    @Test("buildVocabularyContext usa perfil de assertividade")
+    func testBuildContextUsesAccuracyProfile() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let store = makeStore(in: tmpDir)
+        let context = store.buildVocabularyContext()
+
+        #expect(context.alpha == VocabularyBiasingProfile.alpha)
+        #expect(context.minCtcScore == VocabularyBiasingProfile.minCtcScore)
+        #expect(context.minSimilarity == VocabularyBiasingProfile.minSimilarity)
+        #expect(context.minCombinedConfidence == VocabularyBiasingProfile.minCombinedConfidence)
+        #expect(context.minTermLength == VocabularyBiasingProfile.minTermLength)
+    }
+
     @Test("Entrada desabilitada não aparece no context")
     func testDisabledEntryNotInContext() throws {
         let tmpDir = try makeTmpDir()
@@ -338,6 +358,7 @@ struct VocabularyStoreTests {
         #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".vocab_defaults_seeded_v3").path))
         #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".vocab_aliases_seeded_v3").path))
         #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".vocab_defaults_seeded_v4").path))
+        #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".vocab_defaults_seeded_v5").path))
     }
 
     @Test("Upgrade adiciona aliases compactos ao git pull sem duplicar termo")

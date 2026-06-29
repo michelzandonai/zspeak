@@ -294,6 +294,43 @@ struct BenchmarkStoreTests {
         }
     }
 
+    @Test("compareProfiles mede ganho de WER sem sobrescrever lastResult")
+    func testCompareProfilesMeasuresWERDeltaWithoutPersisting() async throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        try placeWAV(in: tmpDir, fileName: "first.wav", samples: [100, 200])
+        try placeWAV(in: tmpDir, fileName: "second.wav", samples: [300, 400])
+
+        let store = makeStore(in: tmpDir)
+        store.addFixture(name: "Primeiro", expectedText: "olá mundo", audioFileName: "first.wav", duration: 1.0)
+        store.addFixture(name: "Segundo", expectedText: "deploy kubernetes", audioFileName: "second.wav", duration: 1.0)
+
+        var baselineCalls = 0
+        var candidateCalls = 0
+
+        let comparison = await store.compareProfiles(
+            baselineName: "baseline",
+            baseline: { _ in
+                baselineCalls += 1
+                return baselineCalls == 1 ? "olá planeta" : "deploy"
+            },
+            candidateName: "candidato",
+            candidate: { _ in
+                candidateCalls += 1
+                return candidateCalls == 1 ? "olá mundo" : "deploy kubernetes"
+            }
+        )
+
+        #expect(comparison.baseline.fixtureCount == 2)
+        #expect(comparison.baseline.successfulCount == 2)
+        #expect(comparison.candidate.successfulCount == 2)
+        #expect(comparison.candidate.averageWordErrorRate == 0)
+        #expect((comparison.wordErrorRateDelta ?? 0) < 0)
+        #expect(comparison.candidateImprovedAccuracy == true)
+        #expect(store.fixtures.allSatisfy { $0.lastResult == nil })
+    }
+
     @Test("Persistência JSON round-trip")
     func testJSONPersistenceRoundTrip() throws {
         let tmpDir = try makeTmpDir()

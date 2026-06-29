@@ -175,6 +175,57 @@ final class BenchmarkStore {
         }
     }
 
+    /// Avalia um perfil sem sobrescrever `lastResult` das fixtures.
+    ///
+    /// Use para comparar tuning de ASR/LLM antes de adotar o candidato como
+    /// padrão. Retorna médias de WER/CER/latência sobre as fixtures que rodaram
+    /// com sucesso e conta falhas separadamente.
+    func evaluateProfile(
+        name: String,
+        transcribe: ([Float]) async throws -> String
+    ) async -> BenchmarkProfileSummary {
+        var wordErrorRates: [Double] = []
+        var characterErrorRates: [Double] = []
+        var latencies: [TimeInterval] = []
+        var failedCount = 0
+
+        for fixture in fixtures {
+            do {
+                let result = try await evaluateFixture(fixture, transcribe: transcribe)
+                wordErrorRates.append(result.wordErrorRate)
+                characterErrorRates.append(result.characterErrorRate)
+                latencies.append(result.latency)
+            } catch {
+                failedCount += 1
+            }
+        }
+
+        return BenchmarkProfileSummary(
+            profileName: name,
+            fixtureCount: fixtures.count,
+            successfulCount: wordErrorRates.count,
+            failedCount: failedCount,
+            averageWordErrorRate: Self.average(wordErrorRates),
+            averageCharacterErrorRate: Self.average(characterErrorRates),
+            averageLatency: Self.average(latencies)
+        )
+    }
+
+    /// Compara dois perfis sobre o mesmo conjunto de fixtures.
+    func compareProfiles(
+        baselineName: String,
+        baseline: ([Float]) async throws -> String,
+        candidateName: String,
+        candidate: ([Float]) async throws -> String
+    ) async -> BenchmarkProfileComparison {
+        let baselineSummary = await evaluateProfile(name: baselineName, transcribe: baseline)
+        let candidateSummary = await evaluateProfile(name: candidateName, transcribe: candidate)
+        return BenchmarkProfileComparison(
+            baseline: baselineSummary,
+            candidate: candidateSummary
+        )
+    }
+
     /// Importa transcrições do histórico como fixtures de benchmark.
     ///
     /// Quando `limit` é informado, pega apenas as transcrições mais recentes.
@@ -225,6 +276,42 @@ final class BenchmarkStore {
     }
 
     // MARK: - Persistência JSON
+
+    private struct BenchmarkFixtureEvaluation {
+        let wordErrorRate: Double
+        let characterErrorRate: Double
+        let latency: TimeInterval
+    }
+
+    private func evaluateFixture(
+        _ fixture: BenchmarkFixture,
+        transcribe: ([Float]) async throws -> String
+    ) async throws -> BenchmarkFixtureEvaluation {
+        let samples = try loadSamples(for: fixture)
+
+        let clock = ContinuousClock()
+        let start = clock.now
+        let transcribedText = try await transcribe(samples)
+        let elapsed = clock.now - start
+        let latency = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+
+        return BenchmarkFixtureEvaluation(
+            wordErrorRate: BenchmarkMetrics.wordErrorRate(
+                expected: fixture.expectedText,
+                actual: transcribedText
+            ),
+            characterErrorRate: BenchmarkMetrics.characterErrorRate(
+                expected: fixture.expectedText,
+                actual: transcribedText
+            ),
+            latency: latency
+        )
+    }
+
+    private static func average(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
+    }
 
     /// Envelope versionado: `{ schemaVersion: 1, fixtures: [...] }`.
     fileprivate struct Envelope: Codable {

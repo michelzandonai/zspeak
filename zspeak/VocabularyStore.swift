@@ -1,6 +1,19 @@
 import Foundation
 import FluidAudio
 
+/// Parâmetros do context biasing nativo.
+///
+/// Com vocabulário técnico grande, o FluidAudio já exige similaridade efetiva
+/// mínima de 0.60. Mantemos esse piso explícito aqui para documentar a escolha:
+/// forte o bastante para termos técnicos, sem baixar guarda contra falso positivo.
+enum VocabularyBiasingProfile {
+    static let alpha: Float = 0.5
+    static let minCtcScore: Float = -12.0
+    static let minSimilarity: Float = 0.60
+    static let minCombinedConfidence: Float = 0.58
+    static let minTermLength = 3
+}
+
 /// Camada de persistência para vocabulário customizado
 @Observable
 @MainActor
@@ -56,7 +69,14 @@ final class VocabularyStore {
                 aliases: entry.aliases.isEmpty ? nil : entry.aliases
             )
         }
-        return CustomVocabularyContext(terms: terms)
+        return CustomVocabularyContext(
+            terms: terms,
+            alpha: VocabularyBiasingProfile.alpha,
+            minCtcScore: VocabularyBiasingProfile.minCtcScore,
+            minSimilarity: VocabularyBiasingProfile.minSimilarity,
+            minCombinedConfidence: VocabularyBiasingProfile.minCombinedConfidence,
+            minTermLength: VocabularyBiasingProfile.minTermLength
+        )
     }
 
     /// Aplica substituições aliases → term no texto transcrito.
@@ -320,6 +340,24 @@ final class VocabularyStore {
         ("notarização", ["notarization"], 8.0)
     ]
 
+    /// Terceiro pacote técnico focado em tuning/benchmark de assertividade.
+    private static let defaultEntriesV5: [(term: String, aliases: [String], weight: Float)] = [
+        ("context biasing", ["context bias"], 10.0),
+        ("rescoring", ["rescore"], 10.0),
+        ("decoder", [], 8.0),
+        ("encoder", [], 8.0),
+        ("token", [], 8.0),
+        ("tokens", [], 8.0),
+        ("temperature", [], 8.0),
+        ("topP", ["top p"], 8.0),
+        ("KV cache", ["k v cache"], 8.0),
+        ("RTFx", ["r t f x"], 8.0),
+        ("WER", ["w e r"], 8.0),
+        ("CER", ["c e r"], 8.0),
+        ("latência", ["latency"], 8.0),
+        ("assertividade", [], 8.0)
+    ]
+
     /// Semeia entradas padrão na primeira inicialização (nova instalação ou upgrade).
     /// Cada batch usa sua própria flag para permitir upgrades incrementais sem
     /// ressuscitar defaults antigos removidos pelo usuário.
@@ -347,6 +385,11 @@ final class VocabularyStore {
         seedDefaults(
             Self.defaultEntriesV4,
             flagName: ".vocab_defaults_seeded_v4",
+            in: directory
+        )
+        seedDefaults(
+            Self.defaultEntriesV5,
+            flagName: ".vocab_defaults_seeded_v5",
             in: directory
         )
     }

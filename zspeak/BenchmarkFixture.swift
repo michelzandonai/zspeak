@@ -72,3 +72,53 @@ struct BenchmarkResult: Codable {
         try container.encodeIfPresent(characterErrorRate, forKey: .characterErrorRate)
     }
 }
+
+/// Resumo agregado de um perfil de transcrição em um conjunto de fixtures.
+struct BenchmarkProfileSummary: Sendable, Equatable {
+    let profileName: String
+    let fixtureCount: Int
+    let successfulCount: Int
+    let failedCount: Int
+    let averageWordErrorRate: Double?
+    let averageCharacterErrorRate: Double?
+    let averageLatency: TimeInterval?
+
+    var averageAccuracyScore: Double? {
+        averageWordErrorRate.map { max(0, 1 - $0) }
+    }
+}
+
+/// Comparação objetiva entre dois perfis de benchmark.
+struct BenchmarkProfileComparison: Sendable, Equatable {
+    let baseline: BenchmarkProfileSummary
+    let candidate: BenchmarkProfileSummary
+
+    /// Negativo = candidato reduziu erro; positivo = piorou.
+    var wordErrorRateDelta: Double? {
+        guard let candidateWER = candidate.averageWordErrorRate,
+              let baselineWER = baseline.averageWordErrorRate
+        else { return nil }
+        return candidateWER - baselineWER
+    }
+
+    /// Negativo = candidato reduziu erro; positivo = piorou.
+    var characterErrorRateDelta: Double? {
+        guard let candidateCER = candidate.averageCharacterErrorRate,
+              let baselineCER = baseline.averageCharacterErrorRate
+        else { return nil }
+        return candidateCER - baselineCER
+    }
+
+    /// Positivo = candidato ficou mais lento; negativo = ficou mais rápido.
+    var latencyDelta: TimeInterval? {
+        guard let candidateLatency = candidate.averageLatency,
+              let baselineLatency = baseline.averageLatency
+        else { return nil }
+        return candidateLatency - baselineLatency
+    }
+
+    var candidateImprovedAccuracy: Bool? {
+        guard let delta = wordErrorRateDelta else { return nil }
+        return delta < 0
+    }
+}

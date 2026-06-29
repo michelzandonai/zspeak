@@ -75,18 +75,23 @@ fi
 
 TS=$(date +%Y%m%d-%H%M%S)
 CSV_PATH="/tmp/zspeak-perf-${TS}.csv"
+RAW_PATH=$(mktemp "${TMPDIR:-/tmp}/zspeak-perf-raw.XXXXXX")
+trap 'rm -f "$RAW_PATH"' EXIT
+printf '%s\n' "$RAW" > "$RAW_PATH"
 
-echo "$RAW" | STYLE="$STYLE" CSV_PATH="$CSV_PATH" python3 - <<'PY'
+STYLE="$STYLE" CSV_PATH="$CSV_PATH" RAW_PATH="$RAW_PATH" python3 - <<'PY'
 import os, sys
 from collections import defaultdict
 
 style = os.environ.get("STYLE", "human")
 csv_path = os.environ.get("CSV_PATH", "/tmp/zspeak-perf.csv")
+raw_path = os.environ["RAW_PATH"]
 
 groups = defaultdict(list)
 mark_counts = defaultdict(int)
 
-for line in sys.stdin:
+with open(raw_path) as source:
+  for line in source:
     line = line.strip()
     if not line.startswith("PERF event="):
         continue

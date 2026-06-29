@@ -37,6 +37,7 @@ final class RecordingController {
     var state: RecordingState = .idle
     var isModelReady: Bool = false
     var lastTranscription: String = ""
+    var liveTranscriptionPreview: String = ""
     var lastTranscriptionRecordID: UUID?
     /// Exposto para leitura direta pelo façade — o setter é compartilhado via
     /// `reportError` (`AppState` observa e espelha no `errorMessage` público).
@@ -77,6 +78,12 @@ final class RecordingController {
     private var recordingTask: Task<Void, Never>?
     private var recordingSessionID: UUID?
     private var isRequestingMicrophonePermission = false
+    private var liveTranscriptionSession: (any LiveTranscriptionSession)?
+    private var liveTranscriptionSessionID: UUID?
+    private var liveAudioPipe: LiveAudioChunkPipe?
+    private var liveTranscriptionStartTask: Task<Void, Never>?
+    private var liveAudioPumpTask: Task<Void, Never>?
+    private var lastLiveText: String = ""
 
     private enum SettingsKey {
         static let playRecordingSounds = "playRecordingSounds"
@@ -105,18 +112,18 @@ final class RecordingController {
 
     // MARK: - Inicialização do modelo ASR
 
-    /// Carrega modelo ASR e pré-prepara o engine de áudio sem abrir o microfone.
+    /// Carrega modelo ASR e deixa o engine em hot window antes de liberar a UI.
     func initialize() async {
         do {
             try await transcriber.initialize()
-            isModelReady = true
             await warmUpAudioCapture()
+            isModelReady = true
         } catch {
             errorMessage = "Erro ao carregar modelos: \(error.localizedDescription)"
         }
     }
 
-    /// Reprepara o engine após inicialização/stop sem abrir o microfone.
+    /// Reprepara o engine após inicialização/stop mantendo o hot window ativo.
     func warmUpAudioCapture() async {
         guard microphoneManager.isPermissionGranted else { return }
         let preferredUID = microphoneManager.connectedMicrophones().first?.id
@@ -177,6 +184,7 @@ final class RecordingController {
             await taskToCancel?.value
             guard recordingSessionID == sessionID else { return }
             _ = await audioCapture.stop()
+            await cancelLiveTranscription()
             recordingSessionID = nil
             // Repreparar engine para economizar cold start na próxima gravação.
             await warmUpAudioCapture()
@@ -203,6 +211,8 @@ final class RecordingController {
         state = .preparing
         errorMessage = nil
         TextInserter.saveFocusedApp()
+        liveTranscriptionPreview = ""
+        lastLiveText = ""
         let sessionID = UUID()
         recordingSessionID = sessionID
         let tStartRec = CFAbsoluteTimeGetCurrent()
@@ -233,6 +243,7 @@ final class RecordingController {
         // iteramos todos os candidatos (cada retry custa 100–300 ms de
         // engine.start()). Caímos direto para o default do sistema.
         recordingTask = Task {
+            let onSamples = prepareLiveTranscriptionIfNeeded(sessionID: sessionID)
             let candidatos = microphoneManager.connectedMicrophones()
             let preferredUID = candidatos.first?.id
 
@@ -240,7 +251,11 @@ final class RecordingController {
             if let uid = preferredUID {
                 microphoneManager.activeMicrophoneID = uid
                 do {
-                    try await audioCapture.start(deviceUID: uid, onFirstSample: onFirstSample)
+                    try await audioCapture.start(
+                        deviceUID: uid,
+                        onFirstSample: onFirstSample,
+                        onSamples: onSamples
+                    )
                     let elapsed = (CFAbsoluteTimeGetCurrent() - tStartRec) * 1000
                     logger.info("t=\(String(format: "%.0f", elapsed), privacy: .public)ms audioCapture.start OK (preferred=\(uid, privacy: .public))")
                     return
@@ -256,12 +271,17 @@ final class RecordingController {
             // Tentativa 2 (última): default do sistema
             microphoneManager.activeMicrophoneID = nil
             do {
-                try await audioCapture.start(deviceUID: nil, onFirstSample: onFirstSample)
+                try await audioCapture.start(
+                    deviceUID: nil,
+                    onFirstSample: onFirstSample,
+                    onSamples: onSamples
+                )
                 let elapsed = (CFAbsoluteTimeGetCurrent() - tStartRec) * 1000
                 logger.info("t=\(String(format: "%.0f", elapsed), privacy: .public)ms audioCapture.start OK (system default)")
             } catch {
                 logger.error("startRecording: default falhou → \(String(describing: error), privacy: .public)")
                 microphoneManager.activeMicrophoneID = nil
+                await cancelLiveTranscription()
                 guard recordingSessionID == sessionID else { return }
                 state = .idle
                 recordingSessionID = nil
@@ -283,6 +303,7 @@ final class RecordingController {
                 }
 
                 let samples = await audioCapture.stop()
+                _ = await finishLiveTranscription()
                 if recordingSessionID == sessionID {
                     recordingSessionID = nil
                 }
@@ -292,17 +313,34 @@ final class RecordingController {
 
                 guard samples.count > 8000 else { // < 0.5s
                     state = .idle
+                    clearLiveTranscriptionState()
                     await warmUpAudioCapture()
                     return
                 }
 
-                let rawText = try await transcriber.transcribe(samples)
+                let trimResult = SpeechSampleTrimmer.trimForASR(samples)
+                guard !trimResult.samples.isEmpty else {
+                    state = .idle
+                    clearLiveTranscriptionState()
+                    await warmUpAudioCapture()
+                    return
+                }
+
+                let rawText = try await PerfSignposter.measure(.asrTranscribe, metadata: [
+                    "source": "microphone",
+                    "samples_in": "\(samples.count)",
+                    "samples_asr": "\(trimResult.samples.count)",
+                    "trimmed_samples": "\(trimResult.removedSampleCount)",
+                ]) {
+                    try await transcriber.transcribe(trimResult.samples)
+                }
 
                 // Aplica vocabulário customizado (substituições alias → term) via hook
                 let text = applyVocabularyReplacements?(rawText) ?? rawText
 
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     state = .idle
+                    clearLiveTranscriptionState()
                     await warmUpAudioCapture()
                     return
                 }
@@ -336,13 +374,116 @@ final class RecordingController {
                 }
 
                 state = .idle
+                clearLiveTranscriptionState()
                 await warmUpAudioCapture()
             } catch {
                 state = .idle
+                await cancelLiveTranscription()
                 errorMessage = "Erro na transcricao: \(error.localizedDescription)"
                 await warmUpAudioCapture()
             }
         }
+    }
+
+    private func prepareLiveTranscriptionIfNeeded(sessionID: UUID) -> (@Sendable ([Float]) -> Void)? {
+        let pipe = LiveAudioChunkPipe()
+        TextInserter.lastPastedCount = 0
+        liveTranscriptionSessionID = sessionID
+        liveAudioPipe = pipe
+
+        liveTranscriptionStartTask = Task { [weak self, pipe, transcriber] in
+            do {
+                let liveSession = try await transcriber.startLiveTranscription { [weak self] update in
+                    Task { @MainActor in
+                        await self?.handleLiveTranscriptionUpdate(update, sessionID: sessionID)
+                    }
+                }
+                let pumpTask = Task { [pipe, liveSession] in
+                    for await samples in pipe.stream {
+                        await liveSession.append(samples)
+                    }
+                }
+
+                await MainActor.run {
+                    guard let self, self.liveTranscriptionSessionID == sessionID else {
+                        pumpTask.cancel()
+                        Task { await liveSession.cancel() }
+                        return
+                    }
+                    self.liveTranscriptionSession = liveSession
+                    self.liveAudioPumpTask = pumpTask
+                }
+            } catch {
+                logger.error("prepareLiveTranscriptionIfNeeded: streaming ASR indisponível (\(error.localizedDescription, privacy: .public))")
+            }
+        }
+
+        return { [pipe] samples in
+            pipe.yield(samples)
+        }
+    }
+
+    private func handleLiveTranscriptionUpdate(_ update: LiveTranscriptionUpdate, sessionID: UUID) async {
+        guard liveTranscriptionSessionID == sessionID else { return }
+        guard state == .recording || state == .processing else { return }
+
+        let text = applyVocabularyReplacements?(update.text) ?? update.text
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != lastLiveText else { return }
+
+        lastLiveText = trimmed
+        liveTranscriptionPreview = trimmed
+    }
+
+    private func finishLiveTranscription() async -> String? {
+        liveAudioPipe?.finish()
+
+        guard liveTranscriptionSession != nil || liveAudioPumpTask != nil else {
+            liveTranscriptionStartTask?.cancel()
+            liveTranscriptionStartTask = nil
+            liveTranscriptionSessionID = nil
+            liveAudioPipe = nil
+            return nil
+        }
+
+        await liveTranscriptionStartTask?.value
+        liveTranscriptionStartTask = nil
+        await liveAudioPumpTask?.value
+        liveAudioPumpTask = nil
+        liveAudioPipe = nil
+
+        guard let liveTranscriptionSession else { return nil }
+        do {
+            return try await liveTranscriptionSession.finish()
+        } catch {
+            logger.error("finishLiveTranscription: falhou (\(error.localizedDescription, privacy: .public))")
+            return nil
+        }
+    }
+
+    private func cancelLiveTranscription() async {
+        liveAudioPipe?.finish()
+        guard liveTranscriptionSession != nil || liveAudioPumpTask != nil else {
+            liveTranscriptionStartTask?.cancel()
+            clearLiveTranscriptionState()
+            return
+        }
+
+        await liveTranscriptionStartTask?.value
+        liveTranscriptionStartTask = nil
+        await liveAudioPumpTask?.value
+        await liveTranscriptionSession?.cancel()
+        clearLiveTranscriptionState()
+    }
+
+    private func clearLiveTranscriptionState() {
+        liveTranscriptionSession = nil
+        liveTranscriptionSessionID = nil
+        liveAudioPipe = nil
+        liveTranscriptionStartTask = nil
+        liveAudioPumpTask = nil
+        liveTranscriptionPreview = ""
+        lastLiveText = ""
     }
 
     private func resolveMicrophonePermission() {

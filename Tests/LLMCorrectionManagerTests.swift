@@ -1,4 +1,5 @@
 import Foundation
+import MLXLMCommon
 import Testing
 @testable import zspeak
 
@@ -19,6 +20,36 @@ struct LLMCorrectionManagerTests {
         #expect(model.displayName == "Qwen 3 8B MLX 4-bit")
         #expect(model.subtitle.contains("Padrao seguro"))
         #expect(model.subtitle.contains("~4.35 GB"))
+    }
+
+    @Test("Perfil LLM de correcao usa Qwen non-thinking quando aplicavel")
+    func testLLMGenerationProfileUsesQwenNonThinkingWhenApplicable() {
+        let parameters = LLMGenerationProfile.accuracyFocused(
+            maxTokens: LLMGenerationProfile.correctionMaxTokens,
+            modelID: LLMModelOption.defaultID
+        )
+
+        #expect(LLMGenerationProfile.correctionMaxTokens == 1024)
+        #expect(parameters.maxTokens == 1024)
+        #expect(parameters.temperature == 0.7)
+        #expect(parameters.topP == 0.8)
+        #expect(parameters.topK == 20)
+        #expect(parameters.minP == 0)
+        #expect(LLMGenerationProfile.nonThinkingPromptSuffix(modelID: LLMModelOption.defaultID).contains("/no_think"))
+    }
+
+    @Test("Perfil LLM preserva modo deterministico para modelos nao-Qwen")
+    func testLLMGenerationProfileKeepsDeterministicForNonQwen() {
+        let parameters = LLMGenerationProfile.accuracyFocused(
+            maxTokens: 128,
+            modelID: "mlx-community/Phi-4-mini-instruct-4bit"
+        )
+
+        #expect(parameters.maxTokens == 128)
+        #expect(parameters.temperature == 0)
+        #expect(parameters.topP == 1.0)
+        #expect(parameters.topK == 0)
+        #expect(LLMGenerationProfile.nonThinkingPromptSuffix(modelID: "mlx-community/Phi-4-mini-instruct-4bit").isEmpty)
     }
 
     @Test("Localizador do MLX encontra metallib junto ao binario")

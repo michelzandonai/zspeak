@@ -54,6 +54,7 @@ final class OverlayController {
             _ = appState.lastLLMResult
             _ = appState.lastLLMPromptName
             _ = appState.lastTranscription
+            _ = appState.liveTranscriptionPreview
             _ = appState.lastTranscriptionRecordID
             _ = appState.errorMessage
             _ = appState.isSelectionTranslationVisible
@@ -89,6 +90,7 @@ final class OverlayController {
         model.lastLLMResult = appState.lastLLMResult
         model.lastLLMPromptName = appState.lastLLMPromptName
         model.lastTranscription = appState.lastTranscription
+        model.liveTranscriptionPreview = appState.liveTranscriptionPreview
         model.errorMessage = appState.errorMessage
         model.translationVisible = appState.isSelectionTranslationVisible
         model.isTranslatingSelection = appState.isTranslatingSelection
@@ -218,14 +220,12 @@ struct ZSpeakApp: App {
     nonisolated(unsafe) private static var statusItemController: StatusItemController?
 
     var body: some Scene {
-        // Janela dedicada para transcrever arquivo de áudio (Cmd+Shift+T).
-        Window("Transcrever arquivo", id: AudioFileWindowID.value) {
-            AudioFileWindowContent()
-                .preferredColorScheme(.dark)
-                .environment(appState)
-                .environment(store)
+        // Mantém um Scene de Settings apenas para o menu do app. As janelas reais
+        // são controladas por NSWindowController em AppLifecycle.swift para evitar
+        // que o macOS abra "Transcrever arquivo" automaticamente no launch.
+        Settings {
+            EmptyView()
         }
-        .defaultSize(width: 720, height: 580)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("Configurações...") {
@@ -336,6 +336,10 @@ struct ZSpeakApp: App {
             Self.settingsWindowController = settingsController
             Self.audioFileWindowController = audioFileController
             Self.statusItemController = statusController
+            StartupWindowPresenter(showSettings: { page in
+                settingsController.show(initialPage: page)
+            })
+            .showInitialWindow()
         }
     }
 }

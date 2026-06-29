@@ -6,7 +6,9 @@ import FluidAudio
 actor Transcriber {
 
     private var asrManager: AsrManager?
+    private var asrModels: AsrModels?
     private var ctcModels: CtcModels?
+    private var activeVocabulary: CustomVocabularyContext?
     private var configuredVocabularySignature: String?
     private(set) var isReady = false
 
@@ -29,7 +31,9 @@ actor Transcriber {
         let manager = AsrManager(config: .default)
         try await manager.initialize(models: models)
         self.asrManager = manager
+        self.asrModels = models
         self.configuredVocabularySignature = nil
+        self.activeVocabulary = nil
         self.isReady = true
     }
 
@@ -49,6 +53,7 @@ actor Transcriber {
         guard let vocabulary, !vocabulary.terms.isEmpty else {
             await manager.disableVocabularyBoosting()
             configuredVocabularySignature = nil
+            activeVocabulary = nil
             return
         }
 
@@ -58,6 +63,7 @@ actor Transcriber {
             ctcModels: ctc
         )
         configuredVocabularySignature = signature
+        activeVocabulary = vocabulary
     }
 
     /// Transcreve amostras de áudio (16kHz mono float32).
@@ -65,12 +71,44 @@ actor Transcriber {
     /// é aplicado nativamente no rescoring do decoder; o pipeline ainda mantém
     /// um fallback em Swift no texto final para aliases exatos.
     func transcribe(_ samples: [Float]) async throws -> String {
+        try await transcribe(samples, source: .microphone)
+    }
+
+    func transcribe(_ samples: [Float], source: AudioSource) async throws -> String {
         guard let manager = asrManager else {
             throw TranscriberError.notInitialized
         }
 
-        let result = try await manager.transcribe(samples, source: .microphone)
+        let result = try await manager.transcribe(samples, source: source)
         return result.text
+    }
+
+    func startLiveTranscription(
+        onUpdate: @escaping @Sendable (LiveTranscriptionUpdate) -> Void
+    ) async throws -> any LiveTranscriptionSession {
+        guard let models = asrModels else {
+            throw TranscriberError.notInitialized
+        }
+
+        let manager = AsrManager(config: .default)
+        try await manager.initialize(models: models)
+
+        // Evita download/carregamento pesado no clique: se o CTC já foi carregado
+        // durante applyVocabulary(), o preview ao vivo herda o mesmo rescoring.
+        if let activeVocabulary, let ctcModels {
+            try? await manager.configureVocabularyBoosting(
+                vocabulary: activeVocabulary,
+                ctcModels: ctcModels
+            )
+        }
+
+        return CumulativeLiveTranscriptionSession(
+            transcribePreview: { samples in
+                let result = try await manager.transcribe(samples, source: .microphone)
+                return result.text
+            },
+            onUpdate: onUpdate
+        )
     }
 
     enum TranscriberError: LocalizedError {

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import FluidAudio
 
 /// Façade do estado global do app.
 ///
@@ -78,6 +79,11 @@ final class AppState {
             recordingController.lastTranscription = newValue
             llmCoordinator.lastTranscription = newValue
         }
+    }
+
+    var liveTranscriptionPreview: String {
+        get { recordingController.liveTranscriptionPreview }
+        set { recordingController.liveTranscriptionPreview = newValue }
     }
 
     var lastTranscriptionRecordID: UUID? {
@@ -181,7 +187,7 @@ final class AppState {
         )
         self.fileCoordinator = FileTranscriptionCoordinator(
             transcribe: { [asr] samples in
-                try await asr.transcribe(samples)
+                try await asr.transcribe(samples, source: .system)
             },
             textInserter: inserter
         )

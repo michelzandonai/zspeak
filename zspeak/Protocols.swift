@@ -21,13 +21,18 @@ protocol AudioCapturing: Actor {
     /// `onFirstSample` é invocado uma única vez quando a gravação começa a
     /// persistir samples — usado para transicionar `.preparing → .recording`.
     /// Em modo quente, é disparado síncrono (pre-roll já presente).
-    func start(deviceUID: String?, onFirstSample: (@Sendable () -> Void)?) async throws
+    func start(
+        deviceUID: String?,
+        onFirstSample: (@Sendable () -> Void)?,
+        onSamples: (@Sendable ([Float]) -> Void)?
+    ) async throws
 
     /// Para a captura, drena buffers em voo e devolve os samples acumulados
     /// (16 kHz mono float32). Preserva o hot window quando ativo.
     func stop() async -> [Float]
 
-    /// Prepara o engine para o próximo start sem abrir o HAL/microfone.
+    /// Mantém o engine em hot window para o próximo start. O HAL/microfone
+    /// fica aberto, mas o buffer principal só recebe áudio após `start`.
     func warmUp(deviceUID: String?) async throws
 
     /// Fecha o hot window: desliga o engine, apaga o indicador do mic e
@@ -39,6 +44,9 @@ protocol AudioCapturing: Actor {
 protocol Transcribing: Actor {
     func initialize() async throws
     func transcribe(_ samples: [Float]) async throws -> String
+    func startLiveTranscription(
+        onUpdate: @escaping @Sendable (LiveTranscriptionUpdate) -> Void
+    ) async throws -> any LiveTranscriptionSession
 }
 
 /// Inserção de texto no app em foco (Cmd+V simulado) e operações de clipboard.

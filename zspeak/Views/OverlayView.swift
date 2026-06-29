@@ -43,6 +43,9 @@ final class OverlayModel {
     /// Texto da última transcrição — exibido no overlay no estado idle do modo prompt
     /// para o usuário ver o que foi capturado antes de decidir aplicar um prompt.
     var lastTranscription: String = ""
+    /// Texto parcial exibido enquanto a gravação está ativa. Não é colado no app
+    /// em foco; a inserção automática continua acontecendo só no texto final.
+    var liveTranscriptionPreview: String = ""
 
     /// Último resultado gerado pela LLM (para exibir no overlay)
     var lastLLMResult: String?
@@ -206,7 +209,14 @@ struct OverlayView: View {
                     .accessibilityLabel("Processando transcrição")
             }
 
-            if model.promptModeEnabled {
+            if state == .recording || state == .processing {
+                TranscriptionPreviewBlock(
+                    text: model.liveTranscriptionPreview,
+                    state: state
+                )
+            }
+
+            if model.promptModeEnabled && state != .recording && state != .processing {
                 if !model.lastTranscription.isEmpty || state != .idle {
                     TranscriptionPreviewBlock(text: model.lastTranscription, state: state)
                 } else if state == .idle {
@@ -271,6 +281,7 @@ struct OverlayView: View {
             return 230
         }
         if model.translationVisible { return 500 }
+        if state == .recording || state == .processing { return 520 }
         return model.promptModeEnabled ? 520 : 320
     }
 }
@@ -439,7 +450,7 @@ private struct TranscriptionPreviewBlock: View {
         case .preparing:
             return "Preparando microfone..."
         case .recording:
-            return "Gravando... a transcrição aparecerá aqui ao finalizar."
+            return "Falando... a transcrição aparece aqui em instantes."
         case .processing:
             return "Processando transcrição..."
         case .idle:
@@ -447,9 +458,18 @@ private struct TranscriptionPreviewBlock: View {
         }
     }
 
+    private var title: String {
+        switch state {
+        case .recording, .processing:
+            return "Transcrição ao vivo"
+        case .preparing, .idle:
+            return "Transcrição capturada"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Transcrição capturada", systemImage: "quote.bubble")
+            Label(title, systemImage: "quote.bubble")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.82))
 
@@ -460,7 +480,7 @@ private struct TranscriptionPreviewBlock: View {
                     .italic(isWaitingForText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
-                    .accessibilityLabel("Transcrição capturada")
+                    .accessibilityLabel(title)
                     .accessibilityValue(isWaitingForText ? waitingMessage : text)
             }
             .frame(maxHeight: 96)
@@ -1469,12 +1489,6 @@ struct WaveformView: View {
     @State private var history: [Float] = Array(repeating: 0, count: 30)
     @State private var smoothedLevel: Float = 0
 
-    /// Fator de suavização EMA — 0.35 = transição visual natural.
-    /// Com sample a 60 Hz, um fator alto tornaria a resposta errática
-    /// (picos de RMS entre buffers). 0.35 dá rise/decay perceptível
-    /// sem eco e sem gelatinosidade.
-    private let smoothingFactor: Float = 0.35
-
     var body: some View {
         TimelineView(.animation(minimumInterval: samplePeriod)) { context in
             HStack(spacing: barSpacing) {
@@ -1493,13 +1507,11 @@ struct WaveformView: View {
             // de travamento.
             .task(id: context.date) {
                 let level = await model.getAudioLevel?() ?? 0
-                let amplified = min(level * 2.5, 1.0)
-                let newSmoothed = smoothingFactor * amplified + (1 - smoothingFactor) * smoothedLevel
-                smoothedLevel = newSmoothed
-                history.append(newSmoothed)
-                if history.count > barCount {
-                    history.removeFirst(history.count - barCount)
-                }
+                smoothedLevel = WaveformDynamics.nextDisplayLevel(
+                    rawLevel: level,
+                    previousLevel: smoothedLevel
+                )
+                history = WaveformDynamics.appending(smoothedLevel, to: history, capacity: barCount)
             }
         }
     }

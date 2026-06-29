@@ -153,6 +153,27 @@ struct DiarizationManagerTests {
         #expect(result.count == 24000)
     }
 
+    @Test("slice aplica padding e clampa nas bordas")
+    func sliceAppliesPaddingAndClamps() {
+        let samples = Array(repeating: Float(0.0), count: 16000) // 1s
+
+        let middle = DiarizationManager.slice(
+            samples: samples,
+            from: 0.4,
+            to: 0.6,
+            paddingSeconds: 0.1
+        )
+        #expect(middle.count == 6400) // 0.3s..0.7s
+
+        let start = DiarizationManager.slice(
+            samples: samples,
+            from: 0.0,
+            to: 0.2,
+            paddingSeconds: 0.2
+        )
+        #expect(start.count == 6400) // clamp em 0.0s..0.4s
+    }
+
     // MARK: - SpeakerSegment
 
     @Test("SpeakerSegment durationSeconds calcula corretamente")

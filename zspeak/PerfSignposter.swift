@@ -54,6 +54,10 @@ enum PerfSignposter {
         case firstSampleCallback = "first_sample_callback"
         /// Sessão completa: `start_called` → `first_sample_callback` (intervalo macro).
         case startToFirstSample = "start_to_first_sample"
+        /// Janela de drain no stop, mantendo a escrita ativa para capturar o fim.
+        case stopDrain = "stop_drain"
+        /// Tempo gasto dentro do ASR Parakeet.
+        case asrTranscribe = "asr_transcribe"
     }
 
     /// Handle de um intervalo aberto. Sendable para atravessar actor boundaries
@@ -91,14 +95,14 @@ enum PerfSignposter {
     }
 
     /// Mede um bloco síncrono.
-    static func measure<T>(_ event: Event, metadata: [String: String] = [:], _ block: () throws -> T) rethrows -> T {
+    static func measure<T>(_ event: Event, metadata: [String: String] = [:], _ block: @Sendable () throws -> T) rethrows -> T {
         let i = begin(event, metadata: metadata)
         defer { end(i) }
         return try block()
     }
 
     /// Mede um bloco assíncrono.
-    static func measure<T>(_ event: Event, metadata: [String: String] = [:], _ block: () async throws -> T) async rethrows -> T {
+    static func measure<T>(_ event: Event, metadata: [String: String] = [:], _ block: @Sendable () async throws -> T) async rethrows -> T {
         let i = begin(event, metadata: metadata)
         defer { end(i) }
         return try await block()
@@ -129,6 +133,8 @@ enum PerfSignposter {
         case .firstResample: return signposter.beginInterval("first_resample", id: id)
         case .firstSampleCallback: return signposter.beginInterval("first_sample_callback", id: id)
         case .startToFirstSample: return signposter.beginInterval("start_to_first_sample", id: id)
+        case .stopDrain: return signposter.beginInterval("stop_drain", id: id)
+        case .asrTranscribe: return signposter.beginInterval("asr_transcribe", id: id)
         }
     }
 
@@ -144,6 +150,8 @@ enum PerfSignposter {
         case .firstResample: signposter.endInterval("first_resample", state)
         case .firstSampleCallback: signposter.endInterval("first_sample_callback", state)
         case .startToFirstSample: signposter.endInterval("start_to_first_sample", state)
+        case .stopDrain: signposter.endInterval("stop_drain", state)
+        case .asrTranscribe: signposter.endInterval("asr_transcribe", state)
         }
     }
 
@@ -159,6 +167,8 @@ enum PerfSignposter {
         case .firstResample: signposter.emitEvent("first_resample")
         case .firstSampleCallback: signposter.emitEvent("first_sample_callback")
         case .startToFirstSample: signposter.emitEvent("start_to_first_sample")
+        case .stopDrain: signposter.emitEvent("stop_drain")
+        case .asrTranscribe: signposter.emitEvent("asr_transcribe")
         }
     }
 }

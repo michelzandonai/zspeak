@@ -131,34 +131,77 @@ struct AudioFileTranscriberTests {
         #expect(chunks[0].count == 480000)
     }
 
-    @Test("makeChunks divide áudio longo em chunks de 30s")
+    @Test("makeChunks divide áudio longo com overlap de fallback")
     func chunksLongAudio() {
-        // 90s a 16kHz = 1440000 samples → deve dar 3 chunks de 30s
+        // 90s a 16kHz = 1440000 samples -> 45s com 1s de overlap
         let samples = Array(repeating: Float(0.5), count: 1440000)
         let chunks = AudioFileTranscriber.makeChunks(samples: samples)
         #expect(chunks.count == 3)
-        #expect(chunks[0].count == 480000) // 30s
-        #expect(chunks[1].count == 480000) // 30s
-        #expect(chunks[2].count == 480000) // 30s
+        #expect(chunks[0].count == 720000) // 45s
+        #expect(chunks[1].count == 720000) // 45s
+        #expect(chunks[2].count == 32000)  // overlap final + restante
     }
 
     @Test("makeChunks último chunk pode ser parcial")
     func chunksLastPartial() {
-        // 70s a 16kHz = 1120000 samples → 2 chunks (30s + 30s + 10s sobrando como chunk 3)
+        // 70s a 16kHz = 1120000 samples -> 45s + overlap + restante
         let samples = Array(repeating: Float(0.0), count: 1120000)
         let chunks = AudioFileTranscriber.makeChunks(samples: samples)
-        #expect(chunks.count == 3)
-        #expect(chunks[0].count == 480000) // 30s
-        #expect(chunks[1].count == 480000) // 30s
-        #expect(chunks[2].count == 160000) // 10s parcial
+        #expect(chunks.count == 2)
+        #expect(chunks[0].count == 720000) // 45s
+        #expect(chunks[1].count == 416000) // 26s incluindo 1s de overlap
     }
 
-    @Test("makeChunks total samples preservado")
-    func chunksPreserveSamples() {
+    @Test("makeChunkRanges cobre todo áudio e inclui overlap")
+    func chunkRangesCoverAudioWithOverlap() {
         let samples = (0..<1500000).map { Float($0) }
-        let chunks = AudioFileTranscriber.makeChunks(samples: samples)
-        let total = chunks.reduce(0) { $0 + $1.count }
-        #expect(total == samples.count)
+        let ranges = AudioFileTranscriber.makeChunkRanges(sampleCount: samples.count)
+
+        #expect(ranges.first?.lowerBound == 0)
+        #expect(ranges.last?.upperBound == samples.count)
+        #expect(ranges[1].lowerBound < ranges[0].upperBound)
+    }
+
+    @Test("sanitizeSamples remove NaN/infinito e clampa amplitude")
+    func sanitizeSamplesClampsInvalidValues() {
+        let result = AudioFileTranscriber.sanitizeSamples([
+            -2,
+            -0.5,
+            .nan,
+            .infinity,
+            0.5,
+            2,
+        ])
+
+        #expect(result == [-1, -0.5, 0, 0, 0.5, 1])
+    }
+
+    @Test("padSamplesForASRIfNeeded completa áudio curto até 1s")
+    func padSamplesForASRIfNeededPadsShortAudio() {
+        let samples = Array(repeating: Float(0.1), count: 12000)
+        let padded = AudioFileTranscriber.padSamplesForASRIfNeeded(samples)
+
+        #expect(padded.count == 16000)
+        #expect(padded.prefix(12000).allSatisfy { $0 == 0.1 })
+        #expect(padded.suffix(4000).allSatisfy { $0 == 0 })
+    }
+
+    @Test("prepareSamplesForASR adiciona silêncio nas bordas")
+    func prepareSamplesForASRAddsBoundaryPadding() {
+        let samples = Array(repeating: Float(0.2), count: 16000)
+        let prepared = AudioFileTranscriber.prepareSamplesForASR(samples)
+        let padding = Int(AudioFileTranscriber.asrBoundaryPaddingSeconds * 16000)
+
+        #expect(prepared.count == 16000 + padding * 2)
+        #expect(prepared.prefix(padding).allSatisfy { $0 == 0 })
+        #expect(prepared[padding] == 0.2)
+        #expect(prepared.suffix(padding).allSatisfy { $0 == 0 })
+    }
+
+    @Test("shouldApplyPlainBoundaryPadding limita padding plain a arquivos curtos")
+    func shouldApplyPlainBoundaryPaddingLimitsToShortPlainAudio() {
+        #expect(AudioFileTranscriber.shouldApplyPlainBoundaryPadding(sampleCount: 16000 * 4))
+        #expect(!AudioFileTranscriber.shouldApplyPlainBoundaryPadding(sampleCount: 16000 * 12))
     }
 
     // MARK: - formatTimestamp
@@ -283,12 +326,16 @@ struct AudioFileTranscriberTests {
         let phasesObserved = phasesBox.values
 
         #expect(transcribeCalled)
-        #expect(receivedSamples.count > 8000)  // pelo menos 0.5s a 16kHz
         #expect(result.text == "mocked transcription")
         #expect(result.segments == nil)
         #expect(result.sourceFileName == "voice.wav")
         #expect(result.durationSeconds > 0.5)
-        #expect(result.samples.count == receivedSamples.count)
+        #expect(result.samples.count > 8000)  // pelo menos 0.5s a 16kHz
+        #expect(receivedSamples.count > result.samples.count)
+
+        let boundaryPaddingSamples = Int(AudioFileTranscriber.asrBoundaryPaddingSeconds * 16000)
+        #expect(receivedSamples.prefix(boundaryPaddingSamples).allSatisfy { $0 == 0 })
+        #expect(receivedSamples.suffix(boundaryPaddingSamples).allSatisfy { $0 == 0 })
         #expect(phasesObserved.contains("loading"))
         #expect(phasesObserved.contains("transcribing"))
         // WAV é nativo, não deve ter transcoded

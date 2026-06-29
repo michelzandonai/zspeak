@@ -38,6 +38,7 @@
 - Respostas e comunicação em português
 - No sandbox (necessário para inserção de texto via CGEvent)
 - Permissões: Microphone + Accessibility
+- Versionamento: a cada alteração implementada, incrementar por padrão o último nível da versão (`1.0.3` → `1.0.4` → `1.0.5`). Só incrementar o segundo nível quando o usuário pedir explicitamente.
 
 ## Build Commands
 

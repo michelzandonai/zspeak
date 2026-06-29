@@ -104,6 +104,48 @@ struct AudioCaptureTests {
         #expect(result.isEmpty)
     }
 
+    @Test("Benchmark: stop preserva chunk final entregue durante drain")
+    func benchmarkStopPreservaChunkFinalDuranteDrain() async {
+        let capture = AudioCapture()
+        let iterations = 200
+
+        let result = await capture.benchmarkStopDrainPreservesTrailingSamples(iterations: iterations)
+        let p50 = percentile(result.elapsedMilliseconds, 0.50)
+        let p95 = percentile(result.elapsedMilliseconds, 0.95)
+
+        print("[BENCH STOP POST-ROLL] chunks finais preservados: \(result.preservedIterations)/\(iterations); p50=\(String(format: "%.3f", p50))ms; p95=\(String(format: "%.3f", p95))ms")
+
+        #expect(result.preservedIterations == iterations)
+    }
+
+    @Test("Fixture real termina com fala ativa no tail")
+    func trailingSomFixtureTerminaComFalaAtiva() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures", isDirectory: true)
+            .appendingPathComponent("trailing-som.wav")
+        let file = try AVAudioFile(forReading: fixtureURL)
+        let format = file.processingFormat
+        let buffer = try #require(AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(file.length)
+        ))
+        try file.read(into: buffer)
+        let channel = try #require(buffer.floatChannelData?[0])
+        let frameLength = Int(buffer.frameLength)
+        let tailCount = min(Int(format.sampleRate * 0.025), frameLength)
+        let tailStart = frameLength - tailCount
+
+        var sumOfSquares: Float = 0
+        for index in tailStart..<frameLength {
+            let sample = channel[index]
+            sumOfSquares += sample * sample
+        }
+        let rms = sqrt(sumOfSquares / Float(tailCount))
+
+        #expect(rms > 0.006, "O fixture precisa terminar com fala ativa para cobrir o bug de pós-roll. RMS tail=\(rms)")
+    }
+
     // MARK: - Regressão: crash SIGABRT em installTap após config change (#8)
 
     @Test("simulateConfigurationChange múltiplas vezes sem engine rodando não crasheia")
@@ -205,6 +247,18 @@ struct AudioCaptureTests {
 
 }
 
+private func percentile(_ values: [Double], _ p: Double) -> Double {
+    guard !values.isEmpty else { return 0 }
+    let sorted = values.sorted()
+    let position = (Double(sorted.count - 1) * p)
+    let lower = Int(position)
+    let upper = min(lower + 1, sorted.count - 1)
+    if lower == upper {
+        return sorted[lower]
+    }
+    return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - Double(lower))
+}
+
 // Sub-suite serializada: testes que tocam o HAL real ou mexem no default input
 // device. Rodar em paralelo causa interferência entre si (engine.start() falha
 // com -10868 porque outro teste trocou o default no meio).
@@ -250,6 +304,8 @@ struct AudioCaptureHardwareTests {
         }
 
         _ = await capture.stop()
+        #expect(await capture.isHot == true)
+        await capture.coolDown()
         #expect(await capture.isCapturing == false)
     }
 
@@ -273,6 +329,7 @@ struct AudioCaptureHardwareTests {
 
         let firstSample = await capture.firstSampleTimestamp
         _ = await capture.stop()
+        await capture.coolDown()
 
         guard let firstSample,
               let engineStart = await capture.engineStartTimestamp else {
@@ -291,10 +348,9 @@ struct AudioCaptureHardwareTests {
     /// em que o áudio é perdido se o usuário começar a falar imediatamente.
     ///
     /// Sem warmUp: ~380ms (AVAudioEngine construção + installTap + prepare + start + HAL).
-    /// Com warmUp (fast path): ~170ms — `engine.start()` (~66ms) + HAL primeiro
-    /// sample (~106ms). Zero é impossível sem manter o engine em IO ativo
-    /// (indicador de privacidade do macOS aceso), o que o usuário rejeitou.
-    @Test("Fast path com warmUp: start() → primeiro sample < 250ms")
+    /// Com warmUp hot window: o engine já está em IO ativo e `start()` só liga
+    /// a escrita no buffer principal, usando o pre-roll acumulado.
+    @Test("Fast path com warmUp: start() → primeiro sample < 50ms")
     func latencia_total_comWarmUp_fastPath() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
@@ -314,6 +370,7 @@ struct AudioCaptureHardwareTests {
         let firstSample = await capture.firstSampleTimestamp
         let startCalled = await capture.startCalledTimestamp
         _ = await capture.stop()
+        await capture.coolDown()
 
         guard let firstSample, let startCalled else {
             Issue.record("Nenhum sample chegou em 2s")
@@ -323,8 +380,8 @@ struct AudioCaptureHardwareTests {
         let totalMs = (firstSample - startCalled) * 1000
         print("[LATENCIA TOTAL fast path] start() → primeiro sample: \(String(format: "%.1f", totalMs))ms")
 
-        #expect(totalMs < 250,
-                "Latência total de \(String(format: "%.1f", totalMs))ms é alta — warmUp não está reduzindo cold setup")
+        #expect(totalMs < 50,
+                "Latência total de \(String(format: "%.1f", totalMs))ms é alta — hot window não está zerando o start")
     }
 
     /// Documenta a latência TOTAL sem warmUp (cold path). Mostra o ganho do fix.
@@ -343,6 +400,7 @@ struct AudioCaptureHardwareTests {
         let firstSample = await capture.firstSampleTimestamp
         let startCalled = await capture.startCalledTimestamp
         _ = await capture.stop()
+        await capture.coolDown()
 
         guard let firstSample, let startCalled else {
             Issue.record("Nenhum sample chegou em 2s")
@@ -353,20 +411,19 @@ struct AudioCaptureHardwareTests {
         print("[LATENCIA TOTAL cold path] start() → primeiro sample: \(String(format: "%.1f", totalMs))ms")
     }
 
-    /// warmUp prepara o engine SEM acender o mic (prepare-only). Valida que
-    /// o HAL permanece fechado (isCapturing false) mas o engine está pronto
-    /// para fast path no próximo start().
-    @Test("warmUp pré-prepara engine sem acender mic")
-    func warmUp_naoAbreHAL() async throws {
+    /// warmUp mantém o engine em IO ativo para que o próximo start seja imediato.
+    /// O tap fica rodando, mas ainda sem gravar no buffer principal.
+    @Test("warmUp abre hot window para start imediato")
+    func warmUp_abreHotWindow() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
         let capture = AudioCapture()
 
         try await capture.warmUp(deviceUID: nil)
         #expect(await capture.isHot == true,
-                "isHot deveria refletir 'engine preparado'")
-        #expect(await capture.isCapturing == false,
-                "isCapturing deveria ser false — warmUp não abre HAL")
+                "isHot deveria refletir hot window ativo")
+        #expect(await capture.isCapturing == true,
+                "isCapturing deveria ser true — hot window mantém o HAL aberto")
 
         await capture.coolDown()
         #expect(await capture.isHot == false)
@@ -402,19 +459,20 @@ struct AudioCaptureHardwareTests {
         await capture.coolDown()
     }
 
-    /// Start após warmUp deve ser mais rápido que cold: o engine já tem tap
-    /// instalado e prepare feito. Só falta engine.start() (~50-100 ms HAL).
+    /// Start após warmUp deve ser quase imediato: o engine já tem tap,
+    /// prepare e IO ativo; só liga a escrita no buffer principal.
     @Test("start após warmUp (fast path) é mais rápido que cold path")
     func start_aposWarmUp_fastPathMenor() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
-        // Warm — tempo apenas do engine.start()
+        // Warm — tempo apenas de promover hot window para gravação ativa.
         let warm = AudioCapture()
         try await warm.warmUp(deviceUID: nil)
         let t0warm = CFAbsoluteTimeGetCurrent()
         try await warm.start(deviceUID: nil)
         let t1warm = CFAbsoluteTimeGetCurrent()
         _ = await warm.stop()
+        await warm.coolDown()
         let warmMs = (t1warm - t0warm) * 1000
 
         // Cold — engine criado do zero + installTap + prepare + start
@@ -423,6 +481,7 @@ struct AudioCaptureHardwareTests {
         try await cold.start(deviceUID: nil)
         let t1cold = CFAbsoluteTimeGetCurrent()
         _ = await cold.stop()
+        await cold.coolDown()
         let coldMs = (t1cold - t0cold) * 1000
 
         print("[LATENCIA] warm start: \(String(format: "%.1f", warmMs))ms vs cold start: \(String(format: "%.1f", coldMs))ms")
@@ -445,6 +504,8 @@ struct AudioCaptureHardwareTests {
             let samples = await capture.stop()
             // Samples podem estar vazios; o importante e que start nao lancou e stop nao crashou
             _ = samples
+            #expect(await capture.isHot == true)
+            await capture.coolDown()
             #expect(await capture.isCapturing == false)
         } catch {
             // Em ambiente sem mic disponivel (ex: VM sem driver), tolerar falha
