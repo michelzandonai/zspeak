@@ -501,7 +501,7 @@ private struct TranscriptionPreviewBlock: View {
                 }
             }
             .defaultScrollAnchor(.bottom)
-            .frame(maxHeight: 96)
+            .frame(minHeight: shouldAnimateText ? 52 : nil, maxHeight: 96)
         }
         .padding(8)
         .background(
@@ -520,14 +520,14 @@ private struct ProgressiveTranscriptText: View {
     let animate: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var renderedText: String = ""
+    @State private var stableText: String = ""
+    @State private var displayedRevision: ProgressiveTextReveal.Revision = .plain("")
     @State private var targetText: String = ""
     @State private var revealTask: Task<Void, Never>?
 
     var body: some View {
-        Text(renderedText)
+        Text(attributedDisplayedText)
             .font(.body)
-            .foregroundStyle(.white.opacity(0.95))
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
             .onAppear {
@@ -548,6 +548,22 @@ private struct ProgressiveTranscriptText: View {
             }
     }
 
+    private var attributedDisplayedText: AttributedString {
+        var result = AttributedString()
+        append(displayedRevision.prefix, color: .white.opacity(0.95), to: &result)
+        append(displayedRevision.removed, color: .red.opacity(0.84), to: &result)
+        append(displayedRevision.inserted, color: .green.opacity(0.86), to: &result)
+        append(displayedRevision.suffix, color: .white.opacity(0.95), to: &result)
+        return result
+    }
+
+    private func append(_ text: String, color: Color, to result: inout AttributedString) {
+        guard !text.isEmpty else { return }
+        var part = AttributedString(text)
+        part.foregroundColor = color
+        result += part
+    }
+
     @MainActor
     private func updateRevealTarget(_ target: String) {
         targetText = target
@@ -555,15 +571,9 @@ private struct ProgressiveTranscriptText: View {
         guard animate, !reduceMotion else {
             revealTask?.cancel()
             revealTask = nil
-            renderedText = target
+            stableText = target
+            displayedRevision = .plain(target)
             return
-        }
-
-        if renderedText.isEmpty {
-            renderedText = ProgressiveTextReveal.startText(
-                current: renderedText,
-                target: target
-            )
         }
 
         guard revealTask == nil else { return }
@@ -575,27 +585,135 @@ private struct ProgressiveTranscriptText: View {
     @MainActor
     private func revealCurrentTarget() async {
         defer {
-            let shouldContinue = !Task.isCancelled && renderedText != targetText && animate && !reduceMotion
+            let shouldContinue = !Task.isCancelled && stableText != targetText && animate && !reduceMotion
             revealTask = nil
             if shouldContinue {
                 updateRevealTarget(targetText)
             }
         }
 
-        while renderedText != targetText, !Task.isCancelled {
-            var current = ProgressiveTextReveal.startText(
-                current: renderedText,
-                target: targetText
+        revealLoop: while stableText != targetText, !Task.isCancelled {
+            let nextTarget = targetText
+            var revision = ProgressiveTextReveal.revision(
+                current: stableText,
+                target: nextTarget
             )
 
-            if current != renderedText {
-                withAnimation(.smooth(duration: 0.055)) {
-                    renderedText = current
+            if !revision.removed.isEmpty {
+                let stabilizationDelay = ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(
+                    for: revision
+                )
+                if stabilizationDelay > 0 {
+                    try? await Task.sleep(for: .milliseconds(Int64(stabilizationDelay)))
+                    guard !Task.isCancelled else { break }
+                    guard targetText == nextTarget else { continue revealLoop }
                 }
-            } else {
+
+                let insertedTarget = revision.inserted
+                revision.inserted = ""
+
+                withAnimation(.easeOut(duration: 0.10)) {
+                    displayedRevision = revision
+                }
+
+                while !revision.removed.isEmpty, !Task.isCancelled {
+                    let batchSize = ProgressiveTextReveal.deletionBatchSize(
+                        remainingCharacterCount: revision.removed.count
+                    )
+                    revision.removed = ProgressiveTextReveal.deletingText(
+                        revision.removed,
+                        maxCharacters: batchSize
+                    )
+
+                    withAnimation(.easeOut(duration: 0.16)) {
+                        displayedRevision = revision
+                    }
+
+                    let delay = ProgressiveTextReveal.deletionFrameDelayMilliseconds(
+                        remainingCharacterCount: revision.removed.count
+                    )
+                    if delay > 0 {
+                        try? await Task.sleep(for: .milliseconds(Int64(delay)))
+                    } else {
+                        await Task.yield()
+                    }
+
+                    if targetText != nextTarget {
+                        continue revealLoop
+                    }
+                }
+
+                while revision.inserted != insertedTarget, !Task.isCancelled {
+                    let remaining = max(0, insertedTarget.count - revision.inserted.count)
+                    let batchSize = ProgressiveTextReveal.batchSize(
+                        remainingCharacterCount: remaining
+                    )
+                    revision.inserted = ProgressiveTextReveal.nextText(
+                        current: revision.inserted,
+                        target: insertedTarget,
+                        maxCharacters: batchSize
+                    )
+                    let duration = ProgressiveTextReveal.animationDuration(
+                        remainingCharacterCount: remaining
+                    )
+
+                    withAnimation(.smooth(duration: duration)) {
+                        displayedRevision = revision
+                    }
+
+                    let delay = ProgressiveTextReveal.frameDelayMilliseconds(
+                        remainingCharacterCount: max(0, insertedTarget.count - revision.inserted.count)
+                    )
+                    if delay > 0 {
+                        try? await Task.sleep(for: .milliseconds(Int64(delay)))
+                    } else {
+                        await Task.yield()
+                    }
+
+                    if targetText != nextTarget {
+                        continue revealLoop
+                    }
+                }
+            } else if !revision.inserted.isEmpty {
+                let insertedTarget = revision.inserted
+                revision.inserted = ""
+                displayedRevision = revision
+
+                while revision.inserted != insertedTarget, !Task.isCancelled {
+                    let remaining = max(0, insertedTarget.count - revision.inserted.count)
+                    let batchSize = ProgressiveTextReveal.batchSize(
+                        remainingCharacterCount: remaining
+                    )
+                    revision.inserted = ProgressiveTextReveal.nextText(
+                        current: revision.inserted,
+                        target: insertedTarget,
+                        maxCharacters: batchSize
+                    )
+                    let duration = ProgressiveTextReveal.animationDuration(
+                        remainingCharacterCount: remaining
+                    )
+
+                    withAnimation(.smooth(duration: duration)) {
+                        displayedRevision = revision
+                    }
+
+                    let delay = ProgressiveTextReveal.frameDelayMilliseconds(
+                        remainingCharacterCount: max(0, insertedTarget.count - revision.inserted.count)
+                    )
+                    if delay > 0 {
+                        try? await Task.sleep(for: .milliseconds(Int64(delay)))
+                    } else {
+                        await Task.yield()
+                    }
+
+                    if targetText != nextTarget {
+                        continue revealLoop
+                    }
+                }
+            } else if revision.targetText != stableText {
                 let remaining = ProgressiveTextReveal.remainingCharacterCount(
-                    current: current,
-                    target: targetText
+                    current: stableText,
+                    target: nextTarget
                 )
                 let batchSize = ProgressiveTextReveal.batchSize(
                     remainingCharacterCount: remaining
@@ -603,30 +721,42 @@ private struct ProgressiveTranscriptText: View {
                 let duration = ProgressiveTextReveal.animationDuration(
                     remainingCharacterCount: remaining
                 )
-                current = ProgressiveTextReveal.nextText(
-                    current: current,
-                    target: targetText,
+                let current = ProgressiveTextReveal.nextText(
+                    current: stableText,
+                    target: nextTarget,
                     maxCharacters: batchSize
                 )
 
                 withAnimation(.smooth(duration: duration)) {
-                    renderedText = current
+                    stableText = current
+                    displayedRevision = .plain(current)
                 }
+
+                let remainingAfterStep = ProgressiveTextReveal.remainingCharacterCount(
+                    current: current,
+                    target: nextTarget
+                )
+                let delay = ProgressiveTextReveal.frameDelayMilliseconds(
+                    remainingCharacterCount: remainingAfterStep
+                )
+                if delay > 0 {
+                    try? await Task.sleep(for: .milliseconds(Int64(delay)))
+                } else {
+                    await Task.yield()
+                }
+                continue revealLoop
             }
 
-            let remainingAfterStep = ProgressiveTextReveal.remainingCharacterCount(
-                current: current,
-                target: targetText
-            )
-            let delay = ProgressiveTextReveal.frameDelayMilliseconds(
-                remainingCharacterCount: remainingAfterStep
-            )
-
-            if delay > 0 {
-                try? await Task.sleep(for: .milliseconds(Int64(delay)))
-            } else {
-                renderedText = current
-                await Task.yield()
+            if !Task.isCancelled {
+                guard targetText == nextTarget else { continue revealLoop }
+                if !revision.inserted.isEmpty {
+                    try? await Task.sleep(for: .milliseconds(260))
+                    guard targetText == nextTarget else { continue revealLoop }
+                }
+                stableText = nextTarget
+                withAnimation(.easeOut(duration: 0.18)) {
+                    displayedRevision = .plain(nextTarget)
+                }
             }
         }
     }

@@ -51,4 +51,54 @@ struct ProgressiveTextRevealTests {
         #expect(ProgressiveTextReveal.animationDuration(remainingCharacterCount: 12) == 0.065)
         #expect(ProgressiveTextReveal.animationDuration(remainingCharacterCount: 140) == 0.040)
     }
+
+    @Test("Separa apenas o trecho editado preservando sufixo comum")
+    func revisionKeepsStableSuffix() {
+        let revision = ProgressiveTextReveal.revision(
+            current: "Eu quero fazer o comit dela",
+            target: "Eu quero fazer o commit dela"
+        )
+
+        #expect(revision.prefix == "Eu quero fazer o com")
+        #expect(revision.removed == "")
+        #expect(revision.inserted == "m")
+        #expect(revision.suffix == "it dela")
+        #expect(revision.targetText == "Eu quero fazer o commit dela")
+    }
+
+    @Test("Mantem trecho removido visivel para apagar em passos")
+    func revisionKeepsRemovedTextForSlowDeletion() {
+        let revision = ProgressiveTextReveal.revision(
+            current: "Hoje preciso ajustar o cub",
+            target: "Hoje preciso ajustar o Kubernetes"
+        )
+        let firstStep = ProgressiveTextReveal.deletingText(revision.removed, maxCharacters: 1)
+        let batch = ProgressiveTextReveal.deletionBatchSize(remainingCharacterCount: revision.removed.count)
+
+        #expect(revision.prefix == "Hoje preciso ajustar o ")
+        #expect(revision.removed == "cub")
+        #expect(revision.inserted == "Kubernetes")
+        #expect(firstStep == "cu")
+        #expect(batch == 1)
+        #expect(ProgressiveTextReveal.deletionFrameDelayMilliseconds(remainingCharacterCount: 3) == 28)
+    }
+
+    @Test("Espera estabilizacao antes de apagar blocos grandes")
+    func delaysLargeDeletionUntilTargetStabilizes() {
+        let smallRevision = ProgressiveTextReveal.Revision(
+            prefix: "Hoje ",
+            removed: "abc",
+            inserted: "xyz",
+            suffix: ""
+        )
+        let largeRevision = ProgressiveTextReveal.Revision(
+            prefix: "Hoje ",
+            removed: String(repeating: "a", count: 42),
+            inserted: "",
+            suffix: ""
+        )
+
+        #expect(ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(for: smallRevision) == 0)
+        #expect(ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(for: largeRevision) == 160)
+    }
 }
