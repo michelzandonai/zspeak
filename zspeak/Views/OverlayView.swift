@@ -467,6 +467,10 @@ private struct TranscriptionPreviewBlock: View {
         }
     }
 
+    private var shouldAnimateText: Bool {
+        state == .recording || state == .processing
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label(title, systemImage: "quote.bubble")
@@ -474,15 +478,25 @@ private struct TranscriptionPreviewBlock: View {
                 .foregroundStyle(.white.opacity(0.82))
 
             ScrollView {
-                Text(isWaitingForText ? waitingMessage : text)
-                    .font(.body)
-                    .foregroundStyle(isWaitingForText ? .white.opacity(0.62) : .white.opacity(0.95))
-                    .italic(isWaitingForText)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                if isWaitingForText {
+                    Text(waitingMessage)
+                        .font(.body)
+                        .foregroundStyle(.white.opacity(0.62))
+                        .italic()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .accessibilityLabel(title)
+                        .accessibilityValue(waitingMessage)
+                } else {
+                    ProgressiveTranscriptText(
+                        text: text,
+                        animate: shouldAnimateText
+                    )
                     .accessibilityLabel(title)
-                    .accessibilityValue(isWaitingForText ? waitingMessage : text)
+                        .accessibilityValue(text)
+                }
             }
+            .defaultScrollAnchor(.bottom)
             .frame(maxHeight: 96)
         }
         .padding(8)
@@ -494,6 +508,70 @@ private struct TranscriptionPreviewBlock: View {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(.white.opacity(0.2), lineWidth: 0.5)
         )
+    }
+}
+
+private struct ProgressiveTranscriptText: View {
+    let text: String
+    let animate: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var renderedText: String = ""
+
+    var body: some View {
+        Text(renderedText)
+            .font(.body)
+            .foregroundStyle(.white.opacity(0.95))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+            .task(id: text) {
+                await reveal(text)
+            }
+            .onAppear {
+                if renderedText.isEmpty, (!animate || reduceMotion) {
+                    renderedText = text
+                }
+            }
+    }
+
+    @MainActor
+    private func reveal(_ target: String) async {
+        guard animate, !reduceMotion else {
+            renderedText = target
+            return
+        }
+
+        var current = ProgressiveTextReveal.startText(
+            current: renderedText,
+            target: target
+        )
+
+        if current != renderedText {
+            withAnimation(.easeOut(duration: 0.10)) {
+                renderedText = current
+            }
+        }
+
+        while current != target, !Task.isCancelled {
+            let remaining = ProgressiveTextReveal.remainingCharacterCount(
+                current: current,
+                target: target
+            )
+            let batchSize = ProgressiveTextReveal.batchSize(
+                remainingCharacterCount: remaining
+            )
+            current = ProgressiveTextReveal.nextText(
+                current: current,
+                target: target,
+                maxCharacters: batchSize
+            )
+
+            withAnimation(.easeOut(duration: 0.075)) {
+                renderedText = current
+            }
+
+            try? await Task.sleep(for: .milliseconds(18))
+        }
     }
 }
 
