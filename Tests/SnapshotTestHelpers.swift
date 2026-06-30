@@ -5,6 +5,7 @@ import Testing
 @MainActor
 enum SnapshotTestHelpers {
     private static let recordKey = "ZSPEAK_RECORD_SNAPSHOTS"
+    private static let recordSentinelName = ".record-snapshots"
 
     static func assertSnapshot<V: View>(
         named name: String,
@@ -15,7 +16,7 @@ enum SnapshotTestHelpers {
         let image = try render(view: view, size: size)
         let baselineURL = snapshotURL(named: name, filePath: filePath)
 
-        if ProcessInfo.processInfo.environment[recordKey] == "1" {
+        if shouldRecord(filePath: filePath) {
             try FileManager.default.createDirectory(
                 at: baselineURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
@@ -45,6 +46,16 @@ enum SnapshotTestHelpers {
             .appendingPathComponent("__Snapshots__", isDirectory: true)
             .appendingPathComponent(fileURL.deletingPathExtension().lastPathComponent, isDirectory: true)
         return directory.appendingPathComponent("\(name).png")
+    }
+
+    private static func shouldRecord(filePath: String) -> Bool {
+        if ProcessInfo.processInfo.environment[recordKey] == "1" {
+            return true
+        }
+
+        let testsDirectory = URL(fileURLWithPath: filePath).deletingLastPathComponent()
+        let sentinelURL = testsDirectory.appendingPathComponent(recordSentinelName)
+        return FileManager.default.fileExists(atPath: sentinelURL.path)
     }
 
     private static func render<V: View>(view: V, size: CGSize) throws -> NSImage {

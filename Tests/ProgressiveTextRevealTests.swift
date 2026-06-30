@@ -42,4 +42,13 @@ struct ProgressiveTextRevealTests {
         #expect(ProgressiveTextReveal.batchSize(remainingCharacterCount: 72) == 2)
         #expect(ProgressiveTextReveal.batchSize(remainingCharacterCount: 0) == 0)
     }
+
+    @Test("Ajusta a cadencia conforme o tamanho do salto")
+    func adaptsFrameCadence() {
+        #expect(ProgressiveTextReveal.frameDelayMilliseconds(remainingCharacterCount: 12) == 13)
+        #expect(ProgressiveTextReveal.frameDelayMilliseconds(remainingCharacterCount: 72) == 10)
+        #expect(ProgressiveTextReveal.frameDelayMilliseconds(remainingCharacterCount: 140) == 8)
+        #expect(ProgressiveTextReveal.animationDuration(remainingCharacterCount: 12) == 0.065)
+        #expect(ProgressiveTextReveal.animationDuration(remainingCharacterCount: 140) == 0.040)
+    }
 }

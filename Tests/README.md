@@ -91,6 +91,15 @@ ZSPEAK_RECORD_SNAPSHOTS=1 swift test --filter "VisualSnapshot"
 
 Isso sobrescreve os PNGs de referência. Revise o `git diff` antes de commitar.
 
+Quando rodar via `xcodebuild` e a variável não for repassada para o processo de
+teste, use o sentinela local:
+
+```bash
+touch Tests/.record-snapshots
+xcodebuild test -scheme zspeak -destination 'platform=macOS' -only-testing:zspeakTests/VisualSnapshotTests
+rm Tests/.record-snapshots
+```
+
 ### Rodar comparando (modo padrão)
 
 ```bash

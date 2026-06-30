@@ -20,11 +20,13 @@ struct VisualSnapshotTests {
         model.focusedAppName = "Cursor"
         model.microphoneName = "MacBook Pro Microphone"
         model.getAudioLevel = { 0.42 }
+        model.waveformAnimationPhaseOverride = 0.42
+        model.waveformLevelOverride = 0.56
 
         try SnapshotTestHelpers.assertSnapshot(
             named: "overlay-recording",
             of: OverlayView(model: model),
-            size: CGSize(width: 320, height: 88)
+            size: CGSize(width: 520, height: 264)
         )
     }
 
@@ -147,7 +149,7 @@ struct VisualSnapshotTests {
         try SnapshotTestHelpers.assertSnapshot(
             named: "overlay-transcribing",
             of: OverlayView(model: model),
-            size: CGSize(width: 320, height: 88)
+            size: CGSize(width: 520, height: 196)
         )
     }
 

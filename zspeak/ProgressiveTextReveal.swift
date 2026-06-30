@@ -42,6 +42,36 @@ enum ProgressiveTextReveal {
         return max(1, Int(ceil(Double(remainingCharacterCount) / Double(targetFrameBudget))))
     }
 
+    /// Intervalo entre frames da revelacao. Saltos longos usam uma cadencia mais
+    /// rapida para o overlay alcancar o ASR sem parecer atrasado.
+    static func frameDelayMilliseconds(remainingCharacterCount: Int) -> UInt64 {
+        switch remainingCharacterCount {
+        case ...0:
+            return 0
+        case ...24:
+            return 13
+        case ...96:
+            return 10
+        default:
+            return 8
+        }
+    }
+
+    /// Duracao da animacao visual de cada passo. Mantem letras curtas suaves e
+    /// reduz o peso visual quando chega um trecho maior de uma vez.
+    static func animationDuration(remainingCharacterCount: Int) -> Double {
+        switch remainingCharacterCount {
+        case ...0:
+            return 0
+        case ...24:
+            return 0.065
+        case ...96:
+            return 0.052
+        default:
+            return 0.040
+        }
+    }
+
     static func nextText(current: String, target: String, maxCharacters: Int) -> String {
         let start = startText(current: current, target: target)
         guard start == current else { return start }

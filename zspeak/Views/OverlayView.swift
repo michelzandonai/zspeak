@@ -27,6 +27,10 @@ final class OverlayModel {
     }
     /// Closure para ler audioLevel direto do AudioCapture (evita pipeline redundante)
     var getAudioLevel: (@Sendable () async -> Float)?
+    /// Usado apenas por snapshots para congelar a fase da animacao.
+    var waveformAnimationPhaseOverride: TimeInterval?
+    /// Usado apenas por snapshots para renderizar a waveform em estado ativo.
+    var waveformLevelOverride: Float?
 
     // Modo Prompt
     var promptModeEnabled: Bool = false
@@ -176,7 +180,7 @@ struct OverlayView: View {
                 .accessibilityLabel("Preparando microfone")
             } else if state == .recording {
                 WaveformView(model: model)
-                    .frame(height: 20)
+                    .frame(height: 48)
                     .accessibilityLabel("Forma de onda do áudio capturado")
 
                 // Nome do mic ativo durante gravação — reativo via MicrophoneManager.
@@ -517,6 +521,8 @@ private struct ProgressiveTranscriptText: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var renderedText: String = ""
+    @State private var targetText: String = ""
+    @State private var revealTask: Task<Void, Never>?
 
     var body: some View {
         Text(renderedText)
@@ -524,53 +530,104 @@ private struct ProgressiveTranscriptText: View {
             .foregroundStyle(.white.opacity(0.95))
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
-            .task(id: text) {
-                await reveal(text)
-            }
             .onAppear {
-                if renderedText.isEmpty, (!animate || reduceMotion) {
-                    renderedText = text
-                }
+                updateRevealTarget(text)
+            }
+            .onChange(of: text) { _, newValue in
+                updateRevealTarget(newValue)
+            }
+            .onChange(of: animate) {
+                updateRevealTarget(text)
+            }
+            .onChange(of: reduceMotion) {
+                updateRevealTarget(text)
+            }
+            .onDisappear {
+                revealTask?.cancel()
+                revealTask = nil
             }
     }
 
     @MainActor
-    private func reveal(_ target: String) async {
+    private func updateRevealTarget(_ target: String) {
+        targetText = target
+
         guard animate, !reduceMotion else {
+            revealTask?.cancel()
+            revealTask = nil
             renderedText = target
             return
         }
 
-        var current = ProgressiveTextReveal.startText(
-            current: renderedText,
-            target: target
-        )
+        if renderedText.isEmpty {
+            renderedText = ProgressiveTextReveal.startText(
+                current: renderedText,
+                target: target
+            )
+        }
 
-        if current != renderedText {
-            withAnimation(.easeOut(duration: 0.10)) {
-                renderedText = current
+        guard revealTask == nil else { return }
+        revealTask = Task { @MainActor in
+            await revealCurrentTarget()
+        }
+    }
+
+    @MainActor
+    private func revealCurrentTarget() async {
+        defer {
+            let shouldContinue = !Task.isCancelled && renderedText != targetText && animate && !reduceMotion
+            revealTask = nil
+            if shouldContinue {
+                updateRevealTarget(targetText)
             }
         }
 
-        while current != target, !Task.isCancelled {
-            let remaining = ProgressiveTextReveal.remainingCharacterCount(
-                current: current,
-                target: target
-            )
-            let batchSize = ProgressiveTextReveal.batchSize(
-                remainingCharacterCount: remaining
-            )
-            current = ProgressiveTextReveal.nextText(
-                current: current,
-                target: target,
-                maxCharacters: batchSize
+        while renderedText != targetText, !Task.isCancelled {
+            var current = ProgressiveTextReveal.startText(
+                current: renderedText,
+                target: targetText
             )
 
-            withAnimation(.easeOut(duration: 0.075)) {
-                renderedText = current
+            if current != renderedText {
+                withAnimation(.smooth(duration: 0.055)) {
+                    renderedText = current
+                }
+            } else {
+                let remaining = ProgressiveTextReveal.remainingCharacterCount(
+                    current: current,
+                    target: targetText
+                )
+                let batchSize = ProgressiveTextReveal.batchSize(
+                    remainingCharacterCount: remaining
+                )
+                let duration = ProgressiveTextReveal.animationDuration(
+                    remainingCharacterCount: remaining
+                )
+                current = ProgressiveTextReveal.nextText(
+                    current: current,
+                    target: targetText,
+                    maxCharacters: batchSize
+                )
+
+                withAnimation(.smooth(duration: duration)) {
+                    renderedText = current
+                }
             }
 
-            try? await Task.sleep(for: .milliseconds(18))
+            let remainingAfterStep = ProgressiveTextReveal.remainingCharacterCount(
+                current: current,
+                target: targetText
+            )
+            let delay = ProgressiveTextReveal.frameDelayMilliseconds(
+                remainingCharacterCount: remainingAfterStep
+            )
+
+            if delay > 0 {
+                try? await Task.sleep(for: .milliseconds(Int64(delay)))
+            } else {
+                renderedText = current
+                await Task.yield()
+            }
         }
     }
 }
@@ -1535,75 +1592,146 @@ struct TextInputBlock: View {
     }
 }
 
-/// Waveform estilo Spokenly — barras que rolam da direita pra esquerda como áudio gravando.
-///
-/// Pipeline anterior (removido): `Timer.scheduledTimer(0.033)` por WaveformView +
-/// `Task { @MainActor }` em cada tick + `.animation(value: barHeight(for:))`
-/// reavaliando a função a cada frame, acoplado a um tap em 94 Hz que também
-/// enfileirava `Task { @MainActor }` por callback. Três caminhos concorrentes
-/// passando o mesmo `Float`.
-///
-/// Agora: `TimelineView(.periodic)` acoplada ao compositor (CoreAnimation), não
-/// ao MainActor. O SwiftUI agenda 30 ticks/s sem criar `Task` unstructured. O
-/// valor é puxado do closure `model.getAudioLevel` (read sync sob `os_unfair_lock`
-/// no `AudioLevelMonitor`) via `.task(id:)` do context date, e a altura é
-/// calculada a partir do `history` local.
-///
-/// A animação foi movida para dentro de `withAnimation` quando atualizamos o
-/// histórico — não fica mais em `.animation(value:)` reavaliando `barHeight(for:)`
-/// a cada render.
+/// HUD de voz inspirado no padrão mobile do ChatGPT: barras discretas,
+/// preview ao vivo separado e relógio visual desacoplado do volume.
 struct WaveformView: View {
     let model: OverlayModel
 
-    private let barCount = 30
-    private let barWidth: CGFloat = 4.5
-    private let barSpacing: CGFloat = 2.5
-    private let minHeight: CGFloat = 3
-    private let maxHeight: CGFloat = 24
-    /// Período de amostragem — 0.016 s ≈ 60 fps, acompanha display a 60/120 Hz.
-    /// Em monitor ProMotion (120 Hz) o TimelineView interpola visualmente.
-    private let samplePeriod: TimeInterval = 0.016
+    private let barCount = 32
+    private let sampleCount = 32
+    private let barWidth: CGFloat = 4
+    private let barSpacing: CGFloat = 3
+    private let minimumBarHeight: CGFloat = 4
+    private let maximumBarHeight: CGFloat = 30
+    private let waveformHeight: CGFloat = 40
+    private let recordingColor = Color.white
+    private let renderPeriod: TimeInterval = 1.0 / 60.0
 
-    @State private var history: [Float] = Array(repeating: 0, count: 30)
+    @State private var history: [Float] = Array(repeating: 0, count: 32)
     @State private var smoothedLevel: Float = 0
+    @State private var sampleTask: Task<Void, Never>?
+    @State private var animationStartTime: TimeInterval = Date.timeIntervalSinceReferenceDate
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: samplePeriod)) { context in
-            HStack(spacing: barSpacing) {
-                ForEach(0..<barCount, id: \.self) { index in
-                    RoundedRectangle(cornerRadius: barWidth / 2)
-                        .fill(.white.opacity(barOpacity(for: index)))
-                        .frame(width: barWidth, height: barHeight(for: index))
+        TimelineView(.animation(minimumInterval: renderPeriod)) { context in
+            let phase = model.waveformAnimationPhaseOverride ?? max(
+                0,
+                context.date.timeIntervalSinceReferenceDate - animationStartTime
+            )
+            HStack(spacing: 10) {
+                Canvas { canvas, size in
+                    drawWaveform(
+                        in: &canvas,
+                        size: size,
+                        phase: phase
+                    )
                 }
+                .frame(width: waveformWidth, height: waveformHeight)
+
+                Text(formattedElapsedTime(phase))
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.58))
+                    .frame(width: 34, alignment: .leading)
+                    .accessibilityHidden(true)
             }
-            // `.task(id: context.date)` re-executa a cada tick do TimelineView.
-            // Atualização SEM `withAnimation`: o redraw periódico do
-            // TimelineView já pinta cada frame com os valores atuais de
-            // `history`, resultando em movimento fluido. `withAnimation` +
-            // spring por tick fazia 30 springs concorrentes se cancelarem
-            // entre si (duração 80 ms > intervalo 16-33 ms), dando sensação
-            // de travamento.
-            .task(id: context.date) {
-                let level = await model.getAudioLevel?() ?? 0
-                smoothedLevel = WaveformDynamics.nextDisplayLevel(
-                    rawLevel: level,
-                    previousLevel: smoothedLevel
-                )
-                history = WaveformDynamics.appending(smoothedLevel, to: history, capacity: barCount)
+            .frame(height: waveformHeight)
+            .shadow(
+                color: recordingColor.opacity(0.10 + Double(smoothedLevel) * 0.18),
+                radius: 5 + CGFloat(smoothedLevel) * 8,
+                x: 0,
+                y: 0
+            )
+        }
+        .onAppear {
+            animationStartTime = Date.timeIntervalSinceReferenceDate
+            startSampling()
+        }
+        .onDisappear {
+            stopSampling()
+        }
+    }
+
+    private var waveformWidth: CGFloat {
+        CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barSpacing
+    }
+
+    @MainActor
+    private func startSampling() {
+        guard sampleTask == nil else { return }
+        sampleTask = Task { @MainActor in
+            while !Task.isCancelled {
+                await updateAudioLevel()
+                try? await Task.sleep(for: .milliseconds(33))
             }
         }
     }
 
-    private func barHeight(for index: Int) -> CGFloat {
-        guard index < history.count else { return minHeight }
-        let value = CGFloat(history[index])
-        return minHeight + value * (maxHeight - minHeight)
+    @MainActor
+    private func stopSampling() {
+        sampleTask?.cancel()
+        sampleTask = nil
     }
 
-    private func barOpacity(for index: Int) -> Double {
-        guard index < history.count else { return 0.2 }
-        let recency = Double(index) / Double(max(barCount - 1, 1))
-        let value = Double(history[index])
-        return 0.25 + recency * 0.3 + value * 0.45
+    @MainActor
+    private func updateAudioLevel() async {
+        let level = await model.getAudioLevel?() ?? 0
+        smoothedLevel = WaveformDynamics.nextDisplayLevel(
+            rawLevel: level,
+            previousLevel: smoothedLevel
+        )
+        history = WaveformDynamics.appending(smoothedLevel, to: history, capacity: sampleCount)
     }
+
+    private func drawWaveform(in context: inout GraphicsContext, size: CGSize, phase: TimeInterval) {
+        let level = model.waveformLevelOverride ?? smoothedLevel
+        let centerY = size.height / 2
+
+        for index in 0..<barCount {
+            let energy = WaveformDynamics.chatGPTWaveformBarEnergy(
+                index: index,
+                count: barCount,
+                level: level,
+                history: history,
+                phase: phase
+            )
+            let height = WaveformDynamics.chatGPTWaveformBarHeight(
+                index: index,
+                count: barCount,
+                level: level,
+                history: history,
+                phase: phase,
+                minimumHeight: minimumBarHeight,
+                maximumHeight: maximumBarHeight
+            )
+            let opacity = WaveformDynamics.chatGPTWaveformBarOpacity(
+                index: index,
+                count: barCount,
+                energy: energy
+            )
+            let x = CGFloat(index) * (barWidth + barSpacing)
+            let rect = CGRect(
+                x: x,
+                y: centerY - height / 2,
+                width: barWidth,
+                height: height
+            )
+            var bar = Path()
+            bar.addRoundedRect(
+                in: rect,
+                cornerSize: CGSize(width: barWidth / 2, height: barWidth / 2)
+            )
+            context.fill(
+                bar,
+                with: .color(recordingColor.opacity(opacity))
+            )
+        }
+    }
+
+    private func formattedElapsedTime(_ elapsed: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(elapsed.rounded(.down)))
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return "\(minutes):\(String(format: "%02d", seconds))"
+    }
+
 }
