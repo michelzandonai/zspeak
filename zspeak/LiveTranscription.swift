@@ -1,5 +1,3 @@
-import AVFoundation
-import FluidAudio
 import Foundation
 
 struct LiveTranscriptionUpdate: Sendable, Equatable {
@@ -21,11 +19,24 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
     private static let minimumPreviewSamples = sampleRate
     private static let previewStrideSamples = 12_000
     private static let trailingPaddingSamples = 3_200
+    /// Janela máxima re-transcrita por preview. Acima disso, o trecho mais
+    /// antigo é "commitado" (transcrito uma última vez e congelado como texto
+    /// confirmado) e sai da janela. Sem o commit, cada preview re-transcrevia
+    /// a sessão INTEIRA desde t=0 — custo quadrático que, em ditados longos,
+    /// fazia o preview atrasar segundos e competir com o batch final no ANE.
+    private static let commitWindowSamples = 12 * sampleRate
+    /// Início da região onde procuramos o ponto de corte (mais silencioso).
+    private static let commitSearchStartSamples = 8 * sampleRate
+    /// Tamanho da janela de energia usada para achar o corte (240 ms).
+    private static let commitCutWindowSamples = Int(0.240 * Double(sampleRate))
 
     private let transcribePreview: PreviewTranscriber
     private let onUpdate: @Sendable (LiveTranscriptionUpdate) -> Void
 
+    /// Janela corrente de áudio (o prefixo já commitado é descartado).
     private var samples: [Float] = []
+    /// Texto dos trechos já commitados — prefixo estável do preview.
+    private var confirmedText = ""
     private var lastRequestedSampleCount = 0
     private var lastPublishedText = ""
     private var isProcessing = false
@@ -75,6 +86,26 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
         }
 
         isProcessing = true
+
+        // Janela estourou: commita o trecho mais antigo (até o ponto mais
+        // silencioso, para não cortar palavra ao meio) e o remove da janela.
+        // O preview seguinte cobre o restante via `pendingPreview`.
+        if samples.count >= Self.commitWindowSamples {
+            let cut = Self.commitCutIndex(
+                samples: samples,
+                searchStart: Self.commitSearchStartSamples,
+                windowSize: Self.commitCutWindowSamples
+            )
+            let commitChunk = Array(samples[0..<cut])
+            samples.removeFirst(cut)
+            lastRequestedSampleCount = samples.count
+            pendingPreview = true
+            processingTask = Task { [weak self] in
+                await self?.processCommit(commitChunk)
+            }
+            return
+        }
+
         lastRequestedSampleCount = samples.count
         let snapshot = samples
         processingTask = Task { [weak self] in
@@ -87,7 +118,7 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
             let text = try await transcribePreview(Self.prepareForPreview(snapshot))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !Task.isCancelled {
-                publish(text)
+                publish(windowText: text)
             }
         } catch is CancellationError {
             // Cancelamento esperado ao parar a gravação; o batch final assume.
@@ -98,7 +129,26 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
         completePreview()
     }
 
-    private func publish(_ text: String) {
+    /// Transcreve o trecho que saiu da janela e o congela em `confirmedText`.
+    private func processCommit(_ chunk: [Float]) async {
+        do {
+            let text = try await transcribePreview(Self.prepareForPreview(chunk))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !Task.isCancelled, !text.isEmpty {
+                confirmedText = Self.joined(confirmedText, text)
+                publish(windowText: "")
+            }
+        } catch is CancellationError {
+            // Sem problema: o batch final cobre o áudio completo.
+        } catch {
+            // Best-effort — o trecho some do preview mas não da transcrição final.
+        }
+
+        completePreview()
+    }
+
+    private func publish(windowText: String) {
+        let text = Self.joined(confirmedText, windowText)
         guard !isClosed, !text.isEmpty, text != lastPublishedText else { return }
         lastPublishedText = text
         onUpdate(LiveTranscriptionUpdate(
@@ -121,6 +171,10 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
         requestPreviewIfNeeded(force: true)
     }
 
+    private static func joined(_ lhs: String, _ rhs: String) -> String {
+        [lhs, rhs].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
     private static func prepareForPreview(_ samples: [Float]) -> [Float] {
         var prepared = samples
         prepared.append(contentsOf: repeatElement(Float.zero, count: trailingPaddingSamples))
@@ -129,107 +183,40 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
         }
         return prepared
     }
-}
 
-actor FluidLiveTranscriptionSession: LiveTranscriptionSession {
-    private let manager: StreamingAsrManager
-    private let onUpdate: @Sendable (LiveTranscriptionUpdate) -> Void
-    private var updateTask: Task<Void, Never>?
-    private var isClosed = false
+    /// Encontra o índice de corte para o commit: o centro da janela de menor
+    /// energia RMS entre `searchStart` e o fim do buffer. Cortar no trecho
+    /// mais silencioso minimiza a chance de dividir uma palavra entre o texto
+    /// confirmado e a janela seguinte.
+    static func commitCutIndex(samples: [Float], searchStart: Int, windowSize: Int) -> Int {
+        let start = max(0, min(searchStart, samples.count - 1))
+        let window = max(1, windowSize)
+        guard samples.count - start > window else {
+            return max(1, min(searchStart, samples.count))
+        }
 
-    init(
-        manager: StreamingAsrManager,
-        onUpdate: @escaping @Sendable (LiveTranscriptionUpdate) -> Void
-    ) {
-        self.manager = manager
-        self.onUpdate = onUpdate
-        self.updateTask = Task { [manager, onUpdate] in
-            for await update in await manager.transcriptionUpdates {
-                let fullText = await Self.fullTranscript(from: manager)
-                guard !fullText.isEmpty else { continue }
-                onUpdate(LiveTranscriptionUpdate(
-                    text: fullText,
-                    isConfirmed: update.isConfirmed,
-                    confidence: update.confidence
-                ))
+        let hop = max(1, window / 3)
+        var quietestStart = start
+        var quietestEnergy = Float.greatestFiniteMagnitude
+        var index = start
+
+        while index + window <= samples.count {
+            var sum: Float = 0
+            for sample in samples[index..<(index + window)] {
+                sum += sample * sample
             }
-        }
-    }
-
-    func append(_ samples: [Float]) async {
-        guard !isClosed, !samples.isEmpty else { return }
-        guard let buffer = Self.makePCMBuffer(samples: samples) else { return }
-        await manager.streamAudio(buffer)
-    }
-
-    func finish() async throws -> String {
-        guard !isClosed else {
-            return await Self.fullTranscript(from: manager)
+            if sum < quietestEnergy {
+                quietestEnergy = sum
+                quietestStart = index
+            }
+            index += hop
         }
 
-        isClosed = true
-        let finalText = try await manager.finish()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        updateTask?.cancel()
-        updateTask = nil
-
-        if !finalText.isEmpty {
-            onUpdate(LiveTranscriptionUpdate(
-                text: finalText,
-                isConfirmed: true,
-                confidence: 1
-            ))
-        }
-        return finalText
-    }
-
-    func cancel() async {
-        guard !isClosed else { return }
-        isClosed = true
-        await manager.cancel()
-        updateTask?.cancel()
-        updateTask = nil
-    }
-
-    private static func fullTranscript(from manager: StreamingAsrManager) async -> String {
-        let confirmed = await manager.confirmedTranscript
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let volatile = await manager.volatileTranscript
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return [confirmed, volatile]
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-    }
-
-    private static func makePCMBuffer(samples: [Float]) -> AVAudioPCMBuffer? {
-        guard let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000,
-            channels: 1,
-            interleaved: false
-        ), let buffer = AVAudioPCMBuffer(
-            pcmFormat: format,
-            frameCapacity: AVAudioFrameCount(samples.count)
-        ), let channel = buffer.floatChannelData?[0] else {
-            return nil
-        }
-
-        samples.withUnsafeBufferPointer { pointer in
-            channel.update(from: pointer.baseAddress!, count: samples.count)
-        }
-        buffer.frameLength = AVAudioFrameCount(samples.count)
-        return buffer
+        return quietestStart + window / 2
     }
 }
 
-extension StreamingAsrConfig {
-    /// Configuração voltada para ditado ao vivo: prioriza feedback rápido.
-    static let zspeakLive = StreamingAsrConfig(
-        chunkSeconds: 1.25,
-        hypothesisChunkSeconds: 0.6,
-        leftContextSeconds: 1.0,
-        rightContextSeconds: 0.25,
-        minContextForConfirmation: 1.25,
-        confirmationThreshold: 0.62
-    )
-}
+// Nota: a implementação alternativa `FluidLiveTranscriptionSession` (baseada no
+// StreamingAsrManager do FluidAudio) foi removida por nunca ter sido adotada —
+// o caminho em produção é o CumulativeLiveTranscriptionSession acima. Histórico
+// completo no git, caso a abordagem de streaming nativo volte à mesa.

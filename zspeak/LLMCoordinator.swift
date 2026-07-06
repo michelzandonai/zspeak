@@ -79,6 +79,20 @@ final class LLMCoordinator {
     /// usuário dispara uma nova aplicação.
     private var llmCorrectionTask: Task<Void, Never>?
     private var llmCorrectionRunID: UUID?
+    private var llmWatchdogTask: Task<Void, Never>?
+
+    /// Tempo máximo de uma correção antes do watchdog cancelar. Sem ele, um
+    /// travamento do MLX deixava `isApplyingPrompt` true para sempre (spinner
+    /// eterno + auto-apply do Modo Prompt bloqueado).
+    private nonisolated static let correctionTimeoutSeconds: Int = 120
+
+    /// Timeout proporcional ao output esperado: texto longo tem `maxTokens`
+    /// escalado e, a ~20 tok/s no MLX local, uma correção legítima de 6k
+    /// tokens leva vários minutos — o timeout fixo cancelaria exatamente o
+    /// caso que o `maxTokens` escalado passou a suportar.
+    nonisolated static func correctionTimeout(forMaxTokens maxTokens: Int) -> Int {
+        max(correctionTimeoutSeconds, maxTokens / 20)
+    }
 
     // MARK: - Init
 
@@ -138,6 +152,7 @@ final class LLMCoordinator {
         }
 
         llmCorrectionTask?.cancel()
+        llmWatchdogTask?.cancel()
         let runID = UUID()
         llmCorrectionRunID = runID
 
@@ -151,12 +166,32 @@ final class LLMCoordinator {
         let originalID = lastTranscriptionRecordID
         let originalText = lastTranscription
 
+        // maxTokens fixo em 1024 truncava silenciosamente textos longos
+        // (arquivo de 10 min): o LLM parava no meio da frase e o replace
+        // apagava o texto completo, colando só o truncado. Escala com o
+        // tamanho do input (~1 token ≈ 3 chars em PT-BR, com folga de 2×).
+        let maxTokens = max(
+            LLMGenerationProfile.correctionMaxTokens,
+            (originalText.count * 2) / 3
+        )
+
+        // Watchdog: cancela a correção travada e libera o estado da UI.
+        let timeoutSeconds = Self.correctionTimeout(forMaxTokens: maxTokens)
+        llmWatchdogTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(timeoutSeconds))
+            guard !Task.isCancelled else { return }
+            guard let self, self.llmCorrectionRunID == runID else { return }
+            self.llmCorrectionTask?.cancel()
+            self.errorMessage = "A correção demorou mais de \(timeoutSeconds)s e foi cancelada. O texto original foi mantido."
+            logger.error("applyPromptToLast: watchdog disparou após \(timeoutSeconds)s")
+        }
+
         llmCorrectionTask = Task {
             do {
                 let corrected = try await llmManager.correct(
                     text: originalText,
                     systemPrompt: prompt.systemPrompt,
-                    maxTokens: LLMGenerationProfile.correctionMaxTokens,
+                    maxTokens: maxTokens,
                     onPartial: { [weak self] partial in
                         Task { @MainActor in
                             guard let self else { return }
@@ -203,8 +238,27 @@ final class LLMCoordinator {
                 isApplyingPrompt = false
                 llmCorrectionRunID = nil
                 llmCorrectionTask = nil
+                llmWatchdogTask?.cancel()
+                llmWatchdogTask = nil
             }
         }
+    }
+
+    /// Cancela a correção em andamento sem aplicar o resultado.
+    ///
+    /// Chamado quando uma nova gravação começa: a correção antiga não pode
+    /// mais substituir o paste — o `lastPastedCount` já aponta para o texto da
+    /// NOVA gravação, e o replace tardio apagaria esse texto para colar a
+    /// correção do anterior.
+    func cancelActiveCorrection() {
+        guard llmCorrectionTask != nil || llmCorrectionRunID != nil else { return }
+        llmCorrectionTask?.cancel()
+        llmWatchdogTask?.cancel()
+        llmCorrectionTask = nil
+        llmWatchdogTask = nil
+        llmCorrectionRunID = nil
+        isApplyingPrompt = false
+        logger.info("cancelActiveCorrection: correção descartada por nova gravação")
     }
 
     // MARK: - Gerenciamento do modelo

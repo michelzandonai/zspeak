@@ -107,13 +107,42 @@ enum ProgressiveTextReveal {
 
         switch removedCount {
         case ...36:
-            return 110
+            return 999
         case ...80:
-            return 160
+            return 1_400
         default:
-            return 220
+            return 1_800
         }
     }
+
+    /// Detecta quando um preview parcial parece ter descartado quase todo o
+    /// texto ja capturado. Nesses casos o overlay deve esperar a proxima
+    /// revisao completa em vez de animar um apagao visual.
+    static func isWholeTextDiscontinuity(_ revision: Revision) -> Bool {
+        let sourceCount = revision.sourceText.count
+        guard sourceCount >= 48, revision.removed.count >= 36 else { return false }
+
+        let removedRatio = Double(revision.removed.count) / Double(sourceCount)
+        let targetRatio = Double(revision.targetText.count) / Double(sourceCount)
+        let insertedRatio = Double(revision.inserted.count) / Double(max(1, revision.removed.count))
+
+        return removedRatio >= 0.72 && targetRatio <= 0.58 && insertedRatio <= 0.58
+    }
+
+    static func wholeTextDiscontinuityDelayMilliseconds(for revision: Revision) -> UInt64 {
+        guard isWholeTextDiscontinuity(revision) else { return 0 }
+
+        switch revision.sourceText.count {
+        case ...120:
+            return 2_000
+        case ...260:
+            return 2_800
+        default:
+            return 3_600
+        }
+    }
+
+    static let wholeTextDiscontinuityRetryDelayMilliseconds: UInt64 = 1_000
 
     /// Intervalo entre frames da revelacao. Saltos longos usam uma cadencia mais
     /// rapida para o overlay alcancar o ASR sem parecer atrasado.

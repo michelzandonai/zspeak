@@ -261,7 +261,10 @@ private func percentile(_ values: [Double], _ p: Double) -> Double {
 
 // Sub-suite serializada: testes que tocam o HAL real ou mexem no default input
 // device. Rodar em paralelo causa interferência entre si (engine.start() falha
-// com -10868 porque outro teste trocou o default no meio).
+// com -10868 porque outro teste trocou o default no meio). Além do .serialized
+// (que só vale dentro da suíte), cada teste segura o mutex global
+// `withRealAudioDevice` para não disputar o device com OUTRAS suítes
+// (IntegrationTests etc.) rodando em paralelo.
 @Suite(
     "AudioCapture - Hardware real",
     .serialized,
@@ -293,20 +296,22 @@ struct AudioCaptureHardwareTests {
         let realDevices = session.devices.filter { !$0.uniqueID.hasPrefix("CADefaultDeviceAggregate") }
         guard let mic = realDevices.first else { return }
 
-        let capture = AudioCapture()
+        try await withRealAudioDevice {
+            let capture = AudioCapture()
 
-        do {
-            try await capture.start(deviceUID: mic.uniqueID)
-            #expect(await capture.isCapturing == true,
-                    "start com uid '\(mic.uniqueID)' deveria ter ligado o engine")
-        } catch {
-            Issue.record("start(deviceUID:) lançou \(error) — provável -10868 do AUGraphParser. Mic usado: \(mic.localizedName) (\(mic.uniqueID))")
+            do {
+                try await capture.start(deviceUID: mic.uniqueID)
+                #expect(await capture.isCapturing == true,
+                        "start com uid '\(mic.uniqueID)' deveria ter ligado o engine")
+            } catch {
+                Issue.record("start(deviceUID:) lançou \(error) — provável -10868 do AUGraphParser. Mic usado: \(mic.localizedName) (\(mic.uniqueID))")
+            }
+
+            _ = await capture.stop()
+            #expect(await capture.isHot == true)
+            await capture.coolDown()
+            #expect(await capture.isCapturing == false)
         }
-
-        _ = await capture.stop()
-        #expect(await capture.isHot == true)
-        await capture.coolDown()
-        #expect(await capture.isCapturing == false)
     }
 
     // MARK: - Regressão: latência entre engine.start() e primeiro sample (#primeiras-palavras-perdidas)
@@ -319,28 +324,30 @@ struct AudioCaptureHardwareTests {
     func latencia_primeiroSample_apos_engineStart() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
-        let capture = AudioCapture()
-        try await capture.start(deviceUID: nil)
+        try await withRealAudioDevice {
+            let capture = AudioCapture()
+            try await capture.start(deviceUID: nil)
 
-        let deadline = CFAbsoluteTimeGetCurrent() + 2.0
-        while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
-            try await Task.sleep(nanoseconds: 10_000_000)
+            let deadline = CFAbsoluteTimeGetCurrent() + 2.0
+            while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+
+            let firstSample = await capture.firstSampleTimestamp
+            _ = await capture.stop()
+            await capture.coolDown()
+
+            guard let firstSample,
+                  let engineStart = await capture.engineStartTimestamp else {
+                Issue.record("Nenhum sample chegou em 2s — engine não produziu áudio")
+                return
+            }
+
+            let delayMs = (firstSample - engineStart) * 1000
+            print("[LATENCIA HAL] primeiro sample \(String(format: "%.1f", delayMs))ms após engine.start()")
+            #expect(delayMs < 300,
+                    "Latência HAL de \(String(format: "%.1f", delayMs))ms é alta — verifique buffer frame size")
         }
-
-        let firstSample = await capture.firstSampleTimestamp
-        _ = await capture.stop()
-        await capture.coolDown()
-
-        guard let firstSample,
-              let engineStart = await capture.engineStartTimestamp else {
-            Issue.record("Nenhum sample chegou em 2s — engine não produziu áudio")
-            return
-        }
-
-        let delayMs = (firstSample - engineStart) * 1000
-        print("[LATENCIA HAL] primeiro sample \(String(format: "%.1f", delayMs))ms após engine.start()")
-        #expect(delayMs < 300,
-                "Latência HAL de \(String(format: "%.1f", delayMs))ms é alta — verifique buffer frame size")
     }
 
     /// Latência TOTAL do que o usuário percebe: de `start()` ser chamada (logo
@@ -354,34 +361,36 @@ struct AudioCaptureHardwareTests {
     func latencia_total_comWarmUp_fastPath() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
-        let capture = AudioCapture()
+        try await withRealAudioDevice {
+            let capture = AudioCapture()
 
-        // Pré-aquece com o mesmo deviceUID que usaremos no start
-        try await capture.warmUp(deviceUID: nil)
+            // Pré-aquece com o mesmo deviceUID que usaremos no start
+            try await capture.warmUp(deviceUID: nil)
 
-        // Agora mede start() até first sample
-        try await capture.start(deviceUID: nil)
+            // Agora mede start() até first sample
+            try await capture.start(deviceUID: nil)
 
-        let deadline = CFAbsoluteTimeGetCurrent() + 2.0
-        while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
-            try await Task.sleep(nanoseconds: 10_000_000)
+            let deadline = CFAbsoluteTimeGetCurrent() + 2.0
+            while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+
+            let firstSample = await capture.firstSampleTimestamp
+            let startCalled = await capture.startCalledTimestamp
+            _ = await capture.stop()
+            await capture.coolDown()
+
+            guard let firstSample, let startCalled else {
+                Issue.record("Nenhum sample chegou em 2s")
+                return
+            }
+
+            let totalMs = (firstSample - startCalled) * 1000
+            print("[LATENCIA TOTAL fast path] start() → primeiro sample: \(String(format: "%.1f", totalMs))ms")
+
+            #expect(totalMs < 50,
+                    "Latência total de \(String(format: "%.1f", totalMs))ms é alta — hot window não está zerando o start")
         }
-
-        let firstSample = await capture.firstSampleTimestamp
-        let startCalled = await capture.startCalledTimestamp
-        _ = await capture.stop()
-        await capture.coolDown()
-
-        guard let firstSample, let startCalled else {
-            Issue.record("Nenhum sample chegou em 2s")
-            return
-        }
-
-        let totalMs = (firstSample - startCalled) * 1000
-        print("[LATENCIA TOTAL fast path] start() → primeiro sample: \(String(format: "%.1f", totalMs))ms")
-
-        #expect(totalMs < 50,
-                "Latência total de \(String(format: "%.1f", totalMs))ms é alta — hot window não está zerando o start")
     }
 
     /// Documenta a latência TOTAL sem warmUp (cold path). Mostra o ganho do fix.
@@ -389,26 +398,28 @@ struct AudioCaptureHardwareTests {
     func latencia_total_semWarmUp_coldPath() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
-        let capture = AudioCapture()
-        try await capture.start(deviceUID: nil)
+        try await withRealAudioDevice {
+            let capture = AudioCapture()
+            try await capture.start(deviceUID: nil)
 
-        let deadline = CFAbsoluteTimeGetCurrent() + 2.0
-        while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
-            try await Task.sleep(nanoseconds: 10_000_000)
+            let deadline = CFAbsoluteTimeGetCurrent() + 2.0
+            while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+
+            let firstSample = await capture.firstSampleTimestamp
+            let startCalled = await capture.startCalledTimestamp
+            _ = await capture.stop()
+            await capture.coolDown()
+
+            guard let firstSample, let startCalled else {
+                Issue.record("Nenhum sample chegou em 2s")
+                return
+            }
+
+            let totalMs = (firstSample - startCalled) * 1000
+            print("[LATENCIA TOTAL cold path] start() → primeiro sample: \(String(format: "%.1f", totalMs))ms")
         }
-
-        let firstSample = await capture.firstSampleTimestamp
-        let startCalled = await capture.startCalledTimestamp
-        _ = await capture.stop()
-        await capture.coolDown()
-
-        guard let firstSample, let startCalled else {
-            Issue.record("Nenhum sample chegou em 2s")
-            return
-        }
-
-        let totalMs = (firstSample - startCalled) * 1000
-        print("[LATENCIA TOTAL cold path] start() → primeiro sample: \(String(format: "%.1f", totalMs))ms")
     }
 
     /// warmUp mantém o engine em IO ativo para que o próximo start seja imediato.
@@ -417,46 +428,52 @@ struct AudioCaptureHardwareTests {
     func warmUp_abreHotWindow() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
-        let capture = AudioCapture()
+        try await withRealAudioDevice {
+            let capture = AudioCapture()
 
-        try await capture.warmUp(deviceUID: nil)
-        #expect(await capture.isHot == true,
-                "isHot deveria refletir hot window ativo")
-        #expect(await capture.isCapturing == true,
-                "isCapturing deveria ser true — hot window mantém o HAL aberto")
+            try await capture.warmUp(deviceUID: nil)
+            #expect(await capture.isHot == true,
+                    "isHot deveria refletir hot window ativo")
+            #expect(await capture.isCapturing == true,
+                    "isCapturing deveria ser true — hot window mantém o HAL aberto")
 
-        await capture.coolDown()
-        #expect(await capture.isHot == false)
+            await capture.coolDown()
+            #expect(await capture.isHot == false)
+        }
     }
 
     @Test("coolDown descarta o prepare sem efeitos colaterais")
     func coolDown_descartaPrepare() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
-        let capture = AudioCapture()
+        try await withRealAudioDevice {
+            let capture = AudioCapture()
 
-        try await capture.warmUp(deviceUID: nil)
-        #expect(await capture.isHot == true)
+            try await capture.warmUp(deviceUID: nil)
+            #expect(await capture.isHot == true)
 
-        await capture.coolDown()
-        #expect(await capture.isHot == false)
-        #expect(await capture.isCapturing == false)
+            await capture.coolDown()
+            #expect(await capture.isHot == false)
+            #expect(await capture.isCapturing == false)
+        }
     }
 
     @Test("warmUp é idempotente para o mesmo device")
     func warmUp_idempotente() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
-        let capture = AudioCapture()
+        try await withRealAudioDevice {
+            let capture = AudioCapture()
 
-        try await capture.warmUp(deviceUID: nil)
-        #expect(await capture.isHot == true)
+            try await capture.warmUp(deviceUID: nil)
+            #expect(await capture.isHot == true)
 
-        // Segunda chamada com mesmo deviceUID não deve lançar.
-        try await capture.warmUp(deviceUID: nil)
-        #expect(await capture.isHot == true)
+            // Segunda chamada com mesmo deviceUID não deve lançar.
+            try await capture.warmUp(deviceUID: nil)
+            #expect(await capture.isHot == true)
 
-        await capture.coolDown()
+            await capture.coolDown()
+        }
     }
 
     /// Start após warmUp deve ser quase imediato: o engine já tem tap,
@@ -465,30 +482,32 @@ struct AudioCaptureHardwareTests {
     func start_aposWarmUp_fastPathMenor() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
-        // Warm — tempo apenas de promover hot window para gravação ativa.
-        let warm = AudioCapture()
-        try await warm.warmUp(deviceUID: nil)
-        let t0warm = CFAbsoluteTimeGetCurrent()
-        try await warm.start(deviceUID: nil)
-        let t1warm = CFAbsoluteTimeGetCurrent()
-        _ = await warm.stop()
-        await warm.coolDown()
-        let warmMs = (t1warm - t0warm) * 1000
+        try await withRealAudioDevice {
+            // Warm — tempo apenas de promover hot window para gravação ativa.
+            let warm = AudioCapture()
+            try await warm.warmUp(deviceUID: nil)
+            let t0warm = CFAbsoluteTimeGetCurrent()
+            try await warm.start(deviceUID: nil)
+            let t1warm = CFAbsoluteTimeGetCurrent()
+            _ = await warm.stop()
+            await warm.coolDown()
+            let warmMs = (t1warm - t0warm) * 1000
 
-        // Cold — engine criado do zero + installTap + prepare + start
-        let cold = AudioCapture()
-        let t0cold = CFAbsoluteTimeGetCurrent()
-        try await cold.start(deviceUID: nil)
-        let t1cold = CFAbsoluteTimeGetCurrent()
-        _ = await cold.stop()
-        await cold.coolDown()
-        let coldMs = (t1cold - t0cold) * 1000
+            // Cold — engine criado do zero + installTap + prepare + start
+            let cold = AudioCapture()
+            let t0cold = CFAbsoluteTimeGetCurrent()
+            try await cold.start(deviceUID: nil)
+            let t1cold = CFAbsoluteTimeGetCurrent()
+            _ = await cold.stop()
+            await cold.coolDown()
+            let coldMs = (t1cold - t0cold) * 1000
 
-        print("[LATENCIA] warm start: \(String(format: "%.1f", warmMs))ms vs cold start: \(String(format: "%.1f", coldMs))ms")
+            print("[LATENCIA] warm start: \(String(format: "%.1f", warmMs))ms vs cold start: \(String(format: "%.1f", coldMs))ms")
 
-        // Warm deve ser estritamente menor. Tolerância para jitter: ao menos 10 ms de ganho.
-        #expect(warmMs < coldMs,
-                "warm (\(warmMs)ms) deveria ser < cold (\(coldMs)ms)")
+            // Warm deve ser estritamente menor. Tolerância para jitter: ao menos 10 ms de ganho.
+            #expect(warmMs < coldMs,
+                    "warm (\(warmMs)ms) deveria ser < cold (\(coldMs)ms)")
+        }
     }
 
     @Test("start com deviceUID nil usa default e inicia sem erro")
@@ -496,21 +515,23 @@ struct AudioCaptureHardwareTests {
         // Depende de hardware real de microfone — skip em CI
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
-        let capture = AudioCapture()
+        await withRealAudioDevice {
+            let capture = AudioCapture()
 
-        do {
-            try await capture.start(deviceUID: nil)
-            #expect(await capture.isCapturing == true)
-            let samples = await capture.stop()
-            // Samples podem estar vazios; o importante e que start nao lancou e stop nao crashou
-            _ = samples
-            #expect(await capture.isHot == true)
-            await capture.coolDown()
-            #expect(await capture.isCapturing == false)
-        } catch {
-            // Em ambiente sem mic disponivel (ex: VM sem driver), tolerar falha
-            // apenas validando que o erro e do tipo esperado
-            #expect(error is AudioCaptureError)
+            do {
+                try await capture.start(deviceUID: nil)
+                #expect(await capture.isCapturing == true)
+                let samples = await capture.stop()
+                // Samples podem estar vazios; o importante e que start nao lancou e stop nao crashou
+                _ = samples
+                #expect(await capture.isHot == true)
+                await capture.coolDown()
+                #expect(await capture.isCapturing == false)
+            } catch {
+                // Em ambiente sem mic disponivel (ex: VM sem driver), tolerar falha
+                // apenas validando que o erro e do tipo esperado
+                #expect(error is AudioCaptureError)
+            }
         }
     }
 }

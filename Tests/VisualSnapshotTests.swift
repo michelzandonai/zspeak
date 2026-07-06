@@ -295,6 +295,32 @@ struct VisualSnapshotTests {
         )
     }
 
+    @Test("Settings vocabulary edição de termo permanece estável")
+    func testSettingsVocabularyEditingSnapshot() throws {
+        let context = makeSettingsContext()
+        while let entry = context.vocabularyStore.entries.first {
+            context.vocabularyStore.deleteEntry(entry)
+        }
+
+        context.vocabularyStore.addEntry(
+            term: "branch stage",
+            aliases: ["brent stage", "brand stage", "brain stage"],
+            weight: 15
+        )
+
+        let entryID = try #require(context.vocabularyStore.entries.first?.id)
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-vocabulary-editing",
+            of: VocabularyView(
+                appState: context.appState,
+                store: context.vocabularyStore,
+                initialExpandedIDs: [entryID]
+            ),
+            size: CGSize(width: 980, height: 760)
+        )
+    }
+
     @Test("Settings correction permanece estável")
     func testSettingsCorrectionSnapshot() throws {
         let context = makeSettingsContext()

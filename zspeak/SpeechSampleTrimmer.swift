@@ -38,7 +38,10 @@ enum SpeechSampleTrimmer {
         }
 
         let frames = rmsFrames(samples: samples, windowSize: windowSize, hopSize: hopSize)
-        guard let maxRMS = frames.map(\.rms).max(), maxRMS >= 0.006 else {
+        // Gate absoluto de -54 dBFS (~0.002). O valor anterior (0.006, -44 dB)
+        // descartava fala real de mics com ganho baixo (webcam, mic distante)
+        // enquanto a waveform da UI — com floor de -58 dB — mostrava atividade.
+        guard let maxRMS = frames.map(\.rms).max(), maxRMS >= 0.002 else {
             return SpeechTrimResult(
                 samples: [],
                 originalSampleCount: samples.count,
@@ -117,7 +120,7 @@ enum SpeechSampleTrimmer {
         let sorted = rmsValues.sorted()
         let noiseIndex = min(sorted.count - 1, max(0, Int(Double(sorted.count) * 0.20)))
         let noiseFloor = sorted[noiseIndex]
-        return min(max(0.006, noiseFloor * 3.5), maxRMS * 0.35)
+        return min(max(0.002, noiseFloor * 3.5), maxRMS * 0.35)
     }
 
     private static func firstSustainedActiveFrame(_ frames: [RMSFrame], threshold: Float) -> Int? {

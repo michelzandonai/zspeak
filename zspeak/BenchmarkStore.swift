@@ -99,26 +99,98 @@ final class BenchmarkStore {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    /// Lê WAV PCM 16-bit LE mono 16kHz, retorna samples Float normalizados
+    /// Lê WAV PCM 16-bit LE 16 kHz, retorna samples Float normalizados (mono;
+    /// múltiplos canais são mixados por média).
+    ///
+    /// Parseia os chunks RIFF de verdade em vez de pular 44 bytes fixos: WAVs
+    /// do CoreAudio (`say`, `afconvert`, `AVAudioFile`) frequentemente inserem
+    /// chunk `FLLR` de padding antes do `data` — o skip fixo interpretava
+    /// header+padding como PCM e alimentava lixo silencioso ao ASR (WER ~100%
+    /// sem nenhum erro reportado). Também valida o `fmt `: WAV importado com
+    /// 44,1 kHz/float32/estéreo agora falha com mensagem clara em vez de
+    /// corromper o benchmark.
     func loadSamples(for fixture: BenchmarkFixture) throws -> [Float] {
         let url = audioDir.appendingPathComponent(fixture.audioFileName)
         let data = try Data(contentsOf: url)
+        return try Self.decodeWAV(data)
+    }
 
-        // Pular 44 bytes do header RIFF/WAV
-        let headerSize = 44
-        guard data.count > headerSize else {
+    // Função pura — nonisolated para poder decodificar fora da main thread.
+    nonisolated static func decodeWAV(_ data: Data) throws -> [Float] {
+        guard data.count >= 44,
+              data[0..<4].elementsEqual("RIFF".utf8),
+              data[8..<12].elementsEqual("WAVE".utf8) else {
             throw BenchmarkError.invalidWAV
         }
 
-        let pcmData = data.dropFirst(headerSize)
-        let sampleCount = pcmData.count / 2 // Int16 = 2 bytes
+        func readUInt32(_ offset: Int) -> UInt32 {
+            UInt32(data[offset]) | UInt32(data[offset + 1]) << 8
+                | UInt32(data[offset + 2]) << 16 | UInt32(data[offset + 3]) << 24
+        }
+        func readUInt16(_ offset: Int) -> UInt16 {
+            UInt16(data[offset]) | UInt16(data[offset + 1]) << 8
+        }
 
-        var samples = [Float](repeating: 0, count: sampleCount)
+        var audioFormat: UInt16 = 0
+        var channels: Int = 0
+        var sampleRate: Int = 0
+        var bitsPerSample: Int = 0
+        var pcmRange: Range<Int>?
+
+        // Varre os chunks: "fmt " descreve o formato; "data" contém o PCM.
+        var offset = 12
+        while offset + 8 <= data.count {
+            let chunkID = data[offset..<(offset + 4)]
+            let chunkSize = Int(readUInt32(offset + 4))
+            let body = offset + 8
+            guard chunkSize >= 0, body <= data.count else { break }
+            let bodyEnd = min(body + chunkSize, data.count)
+
+            // `bodyEnd - body >= 16` (e não só chunkSize): um arquivo truncado
+            // no meio do fmt declararia 16 bytes sem contê-los — crash no read.
+            if chunkID.elementsEqual("fmt ".utf8), bodyEnd - body >= 16 {
+                audioFormat = readUInt16(body)
+                channels = Int(readUInt16(body + 2))
+                sampleRate = Int(readUInt32(body + 4))
+                bitsPerSample = Int(readUInt16(body + 14))
+            } else if chunkID.elementsEqual("data".utf8) {
+                pcmRange = body..<bodyEnd
+            }
+
+            // Chunks RIFF são alinhados em 2 bytes.
+            offset = body + chunkSize + (chunkSize % 2)
+        }
+
+        guard let pcmRange, channels > 0 else {
+            throw BenchmarkError.invalidWAV
+        }
+        // 1 = PCM linear; 0xFFFE = WAVE_FORMAT_EXTENSIBLE (aceito se 16-bit).
+        guard audioFormat == 1 || audioFormat == 0xFFFE, bitsPerSample == 16 else {
+            throw BenchmarkError.unsupportedFormat(
+                detail: "formato \(audioFormat), \(bitsPerSample)-bit — o benchmark aceita PCM 16-bit"
+            )
+        }
+        guard sampleRate == 16_000 else {
+            throw BenchmarkError.unsupportedFormat(
+                detail: "\(sampleRate) Hz — converta para 16 kHz (ex.: afconvert -d LEI16@16000 -c 1)"
+            )
+        }
+
+        let pcmData = data[pcmRange]
+        let frameCount = pcmData.count / (2 * channels)
+        var samples = [Float](repeating: 0, count: frameCount)
+        // Leitura byte a byte: WAV malformado pode deixar o PCM em offset
+        // ímpar, e `bindMemory(to: Int16.self)` desalinhado é UB.
         pcmData.withUnsafeBytes { rawBuffer in
-            let int16Buffer = rawBuffer.bindMemory(to: Int16.self)
-            for i in 0..<sampleCount {
-                // Int16 little-endian → Float normalizado [-1.0, 1.0]
-                samples[i] = Float(Int16(littleEndian: int16Buffer[i])) / 32767.0
+            let scale = Float(1.0 / 32767.0)
+            for frame in 0..<frameCount {
+                var sum: Float = 0
+                for channel in 0..<channels {
+                    let byteIndex = (frame * channels + channel) * 2
+                    let raw = UInt16(rawBuffer[byteIndex]) | (UInt16(rawBuffer[byteIndex + 1]) << 8)
+                    sum += Float(Int16(bitPattern: raw))
+                }
+                samples[frame] = (sum / Float(channels)) * scale
             }
         }
 
@@ -168,11 +240,20 @@ final class BenchmarkStore {
         }
     }
 
-    /// Executa todos os benchmarks sequencialmente
+    /// Executa todos os benchmarks sequencialmente.
+    /// A primeira inferência após o load do modelo CoreML inclui a
+    /// especialização do grafo para o ANE — sem warm-up, esse custo contamina
+    /// a latência da primeira fixture (e o max/p95 do agregado).
     func runAll(transcribe: ([Float]) async throws -> String) async {
+        await warmUpTranscriber(transcribe)
         for fixture in fixtures {
             try? await runBenchmark(fixture: fixture, transcribe: transcribe)
         }
+    }
+
+    /// Inferência descartada de 1 s de silêncio para aquecer o grafo CoreML.
+    private func warmUpTranscriber(_ transcribe: ([Float]) async throws -> String) async {
+        _ = try? await transcribe([Float](repeating: 0, count: 16_000))
     }
 
     /// Avalia um perfil sem sobrescrever `lastResult` das fixtures.
@@ -184,6 +265,10 @@ final class BenchmarkStore {
         name: String,
         transcribe: ([Float]) async throws -> String
     ) async -> BenchmarkProfileSummary {
+        // Warm-up também aqui: em `compareProfiles`, o baseline rodava frio e
+        // o candidato herdava caches quentes — viés sistemático de ordem.
+        await warmUpTranscriber(transcribe)
+
         var wordErrorRates: [Double] = []
         var characterErrorRates: [Double] = []
         var latencies: [TimeInterval] = []
@@ -391,13 +476,16 @@ fileprivate func decodeFixturesFile(at file: URL) -> [BenchmarkFixture] {
 
 // MARK: - Erros
 
-enum BenchmarkError: Error, LocalizedError {
+enum BenchmarkError: Error, LocalizedError, Equatable {
     case invalidWAV
+    case unsupportedFormat(detail: String)
 
     var errorDescription: String? {
         switch self {
         case .invalidWAV:
             return "Arquivo WAV inválido ou muito pequeno"
+        case .unsupportedFormat(let detail):
+            return "Formato de WAV não suportado: \(detail)"
         }
     }
 }

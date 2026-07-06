@@ -39,6 +39,53 @@ struct LLMModelBenchmarkTests {
         #expect(evaluation.guardrailScore == 1)
     }
 
+    // MARK: - Fidelidade de conteudo
+
+    @Test("Fidelidade nao penaliza limpeza de vicios e pontuacao")
+    func fidelityIgnoresLegitimateCleanup() {
+        let evaluation = evaluate(
+            raw: "tipo assim eu preciso basicamente subir o deploy hoje ne",
+            output: "Eu preciso subir o deploy hoje.",
+            expected: "Eu preciso subir o deploy hoje."
+        )
+
+        // Todos os tokens de conteudo preservados; vicios removidos de graca.
+        #expect(evaluation.fidelityScore == 1)
+    }
+
+    @Test("Fidelidade penaliza resumo que perde conteudo real")
+    func fidelityPenalizesContentLoss() {
+        let evaluation = evaluate(
+            raw: "preciso revisar o modulo de pagamentos e depois atualizar a documentacao da api de cobranca",
+            output: "Preciso revisar o modulo.",
+            expected: "Preciso revisar o modulo de pagamentos e depois atualizar a documentacao da API de cobranca."
+        )
+
+        #expect(evaluation.fidelityScore < 0.5)
+    }
+
+    @Test("Fidelidade penaliza conteudo inventado que nao estava na fala")
+    func fidelityPenalizesHallucinatedContent() {
+        let evaluation = evaluate(
+            raw: "sobe o servidor de homologacao",
+            output: "Sobe o servidor de homologacao usando docker compose na porta oito mil e oitenta.",
+            expected: "Sobe o servidor de homologacao."
+        )
+
+        #expect(evaluation.fidelityScore < 0.7)
+    }
+
+    @Test("Fidelidade maxima quando modelo devolve o conteudo intacto")
+    func fidelityFullWhenContentIntact() {
+        let evaluation = evaluate(
+            raw: "cria uma branch nova a partir da main",
+            output: "Cria uma branch nova a partir da main.",
+            expected: "Cria uma branch nova a partir da main."
+        )
+
+        #expect(evaluation.fidelityScore == 1)
+    }
+
     @Test("Seleciona ultimas 20 transcricoes brutas para benchmark LLM")
     func selectsRecentHistoryForLLMBenchmark() {
         let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
@@ -332,7 +379,8 @@ struct LLMModelBenchmarkTests {
             Candidate(name: $0.displayName, modelID: $0.id, note: $0.note)
         }
 
-        let historyStore = TranscriptionStore()
+        // Somente leitura do histórico de produção — sem manutenção destrutiva
+        let historyStore = TranscriptionStore(applyMaintenanceOnLoad: false)
         let sourceCases = recentHistoryBenchmarkCases(from: historyStore.records, limit: 20)
         guard !sourceCases.isEmpty else {
             print("SKIP: nao ha transcricoes locais recentes para benchmark de LLM")
@@ -700,6 +748,41 @@ private enum LLMLatencyPolicy {
     }
 }
 
+/// Vícios de linguagem que o prompt de limpeza manda remover — não contam
+/// como conteúdo na métrica de fidelidade.
+private let fillerTokens: Set<String> = [
+    "tipo", "basicamente", "enfim", "ne", "assim", "ah", "eh", "hum", "hm",
+    "ta", "tal", "cara", "entao", "sabe", "olha", "bem", "ai",
+]
+
+/// Tokens de conteúdo: normaliza (minúsculas, sem acento, sem pontuação) e
+/// descarta vícios de linguagem. É sobre esses tokens que a fidelidade é medida.
+private func contentTokens(_ text: String) -> [String] {
+    text
+        .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "pt-BR"))
+        .lowercased()
+        .components(separatedBy: CharacterSet.alphanumerics.inverted)
+        .filter { !$0.isEmpty && !fillerTokens.contains($0) }
+}
+
+/// Fidelidade de conteúdo: 1 − WER entre os tokens de conteúdo do raw e do
+/// output. Ao filtrar vícios/pontuação dos DOIS lados, a limpeza legítima sai
+/// de graça; o que pontua contra é perder conteúdo real (resumo agressivo) ou
+/// inventar conteúdo novo (alucinação/resposta de assistente).
+///
+/// Substitui a métrica antiga `1 − WER(raw, output)`, que punia a própria
+/// edição que o LLM deve fazer e premiava o modelo que devolvia o texto intacto.
+private func contentFidelity(raw: String, output: String) -> Double {
+    let rawTokens = contentTokens(raw)
+    let outputTokens = contentTokens(output)
+    if rawTokens.isEmpty && outputTokens.isEmpty { return 1 }
+    let wer = BenchmarkMetrics.wordErrorRate(
+        expected: rawTokens.joined(separator: " "),
+        actual: outputTokens.joined(separator: " ")
+    )
+    return max(0, 1 - wer)
+}
+
 private func evaluate(raw: String, output: String, expected: String) -> Evaluation {
     let wordErrorRate = BenchmarkMetrics.wordErrorRate(expected: expected, actual: output)
     let characterErrorRate = BenchmarkMetrics.characterErrorRate(expected: expected, actual: output)
@@ -746,7 +829,7 @@ private func evaluate(raw: String, output: String, expected: String) -> Evaluati
         issues.append("manteve vicios de linguagem")
     }
 
-    let fidelityScore = max(0, 1 - wordErrorRate)
+    let fidelityScore = contentFidelity(raw: raw, output: output)
     let guardrailScore: Double = responseRisk || reasoningLeak || (rawIsCommand && !outputPreservesCommand) ? 0 : 1
     let cleanupScore = max(0, 1 - Double(remainingFillers) * 0.25)
     var score = fidelityScore * 0.45 + guardrailScore * 0.40 + cleanupScore * 0.15
@@ -830,12 +913,12 @@ private func renderMarkdown(_ run: BenchmarkRun) -> String {
     let sortedReports = run.reports.sorted {
         $0.summary.latencyAdjustedScore > $1.summary.latencyAdjustedScore
     }
-    lines.append("| Modelo | Score util | Score texto | Guardrail | WER | CER | Riscos resposta | Vazou raciocinio | Lat media LLM | P95 | Pior | Lentos | Erro |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+    lines.append("| Modelo | Score util | Score texto | Fidelidade | Guardrail | WER | CER | Riscos resposta | Vazou raciocinio | Lat media LLM | P95 | Pior | Lentos | Erro |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
     for report in sortedReports {
         let summary = report.summary
         lines.append(
-            "| \(report.candidate.name) | \(format(summary.latencyAdjustedScore)) | \(format(summary.averageScore)) | \(format(summary.averageGuardrailScore)) | \(format(summary.averageWordErrorRate)) | \(format(summary.averageCharacterErrorRate)) | \(summary.responseRiskCount) | \(summary.reasoningLeakCount) | \(formatSeconds(summary.averageLatency)) | \(formatSeconds(summary.p95Latency)) | \(formatSeconds(summary.maxLatency)) | \(summary.slowCount) | \(report.error ?? "-") |"
+            "| \(report.candidate.name) | \(format(summary.latencyAdjustedScore)) | \(format(summary.averageScore)) | \(format(summary.averageFidelityScore)) | \(format(summary.averageGuardrailScore)) | \(format(summary.averageWordErrorRate)) | \(format(summary.averageCharacterErrorRate)) | \(summary.responseRiskCount) | \(summary.reasoningLeakCount) | \(formatSeconds(summary.averageLatency)) | \(formatSeconds(summary.p95Latency)) | \(formatSeconds(summary.maxLatency)) | \(summary.slowCount) | \(report.error ?? "-") |"
         )
     }
 

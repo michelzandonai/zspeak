@@ -35,6 +35,10 @@ final class RecordingController {
     }
 
     var state: RecordingState = .idle
+    /// Instante do 1º sample capturado na sessão atual. Âncora do timer do
+    /// chip de gravação no overlay — vive aqui (e não na view) para o timer
+    /// não zerar quando o overlay é fechado/reaberto no meio da gravação.
+    var recordingStartedAt: Date?
     var isModelReady: Bool = false
     var lastTranscription: String = ""
     var liveTranscriptionPreview: String = ""
@@ -72,6 +76,10 @@ final class RecordingController {
     var applyVocabularyReplacements: (@MainActor (String) -> String)?
     var shouldDeferInsertionAfterTranscription: (@MainActor () -> Bool)?
     var persistTranscription: (@MainActor (_ text: String, _ modelName: String, _ duration: Double, _ targetAppName: String?, _ samples: [Float]?) -> UUID?)?
+    /// Chamado no início de cada gravação. O `AppState` usa para cancelar uma
+    /// correção LLM em andamento — o replace tardio dela apagaria o texto da
+    /// gravação nova (o alvo do backspace mudou).
+    var onRecordingWillStart: (@MainActor () -> Void)?
 
     // MARK: - Tasks internas
 
@@ -88,6 +96,11 @@ final class RecordingController {
     private enum SettingsKey {
         static let playRecordingSounds = "playRecordingSounds"
     }
+
+    /// Mínimo de fala real (pós-trim) para valer uma transcrição: 0,15 s a
+    /// 16 kHz. Abaixo disso é ruído/clique — o padding tornaria o áudio válido
+    /// para o ASR, mas o resultado seria alucinação sobre quase-silêncio.
+    private static let minimumSpeechSampleCount = 2_400
 
     /// Sons de feedback emitidos no início e fim da captura. Compensam o cold
     /// path: o usuário ouve o chime e sabe que pode falar — não precisa esperar
@@ -208,7 +221,10 @@ final class RecordingController {
             return
         }
 
+        onRecordingWillStart?()
+
         state = .preparing
+        recordingStartedAt = nil
         errorMessage = nil
         TextInserter.saveFocusedApp()
         liveTranscriptionPreview = ""
@@ -230,6 +246,7 @@ final class RecordingController {
                 guard let self else { return }
                 guard self.state == .preparing else { return }
                 guard self.recordingSessionID == sessionID else { return }
+                self.recordingStartedAt = Date()
                 self.state = .recording
                 if self.playRecordingSounds {
                     self.startChime?.play()
@@ -311,28 +328,47 @@ final class RecordingController {
                     stopChime?.play()
                 }
 
-                guard samples.count > 8000 else { // < 0.5s
+                guard !samples.isEmpty else {
                     state = .idle
                     clearLiveTranscriptionState()
                     await warmUpAudioCapture()
                     return
                 }
 
+                // Gate de duração sobre a FALA aparada, não sobre o raw: o
+                // pre-roll de 0,5 s de silêncio não deve contar como "áudio
+                // suficiente", nem um "ok" real de 0,4 s ser descartado.
                 let trimResult = SpeechSampleTrimmer.trimForASR(samples)
-                guard !trimResult.samples.isEmpty else {
+                guard trimResult.samples.count >= Self.minimumSpeechSampleCount else {
                     state = .idle
                     clearLiveTranscriptionState()
+                    // Feedback explícito: antes o descarte era silencioso e o
+                    // usuário via a waveform mexer sem receber texto nenhum.
+                    if samples.count > 16_000 {
+                        errorMessage = "Nenhuma fala detectada na gravação."
+                    }
                     await warmUpAudioCapture()
                     return
                 }
+
+                // O ASR do FluidAudio exige >= 1 s de áudio e se beneficia de
+                // silêncio genuíno nas bordas em falas curtas. Sem o padding,
+                // qualquer fala contínua entre 0,2 e 1,0 s falhava com
+                // `invalidAudioData` e o texto era perdido.
+                let asrSamples = AudioFileTranscriber.prepareSamplesForASR(
+                    trimResult.samples,
+                    addBoundaryPadding: AudioFileTranscriber.shouldApplyPlainBoundaryPadding(
+                        sampleCount: trimResult.samples.count
+                    )
+                )
 
                 let rawText = try await PerfSignposter.measure(.asrTranscribe, metadata: [
                     "source": "microphone",
                     "samples_in": "\(samples.count)",
-                    "samples_asr": "\(trimResult.samples.count)",
+                    "samples_asr": "\(asrSamples.count)",
                     "trimmed_samples": "\(trimResult.removedSampleCount)",
                 ]) {
-                    try await transcriber.transcribe(trimResult.samples)
+                    try await transcriber.transcribe(asrSamples)
                 }
 
                 // Aplica vocabulário customizado (substituições alias → term) via hook

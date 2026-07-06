@@ -101,6 +101,58 @@ struct PreRollBufferTests {
         #expect(snapshot.last == 15_999)
     }
 
+    // Regressão: o fast path do start() usava snapshot() + clear() em duas
+    // aquisições de lock — samples chegando entre as duas eram perdidos ou
+    // duplicados. drainOrdered() faz as duas coisas em uma aquisição só.
+    @Test("drainOrdered devolve o conteúdo em ordem e esvazia o buffer")
+    func drainOrderedDevolveEEsvazia() {
+        let buffer = PreRollBuffer(capacity: 4)
+        buffer.append([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+
+        let drained = buffer.drainOrdered()
+        #expect(drained == [3.0, 4.0, 5.0, 6.0])
+        #expect(buffer.snapshot().isEmpty)
+
+        // Buffer continua utilizável após o drain
+        buffer.append([7.0, 8.0])
+        #expect(buffer.snapshot() == [7.0, 8.0])
+    }
+
+    @Test("drainOrdered em buffer vazio devolve vazio")
+    func drainOrderedVazio() {
+        let buffer = PreRollBuffer(capacity: 8)
+        #expect(buffer.drainOrdered().isEmpty)
+    }
+
+    @Test("drainOrdered concorrente com appends não perde nem duplica samples")
+    func drainOrderedConcorrente() async {
+        let buffer = PreRollBuffer(capacity: 100_000)
+        let totalChunks = 200
+        let chunkSize = 64
+
+        // Escritores concorrentes + um drenador: a soma de (drenado + restante)
+        // deve bater exatamente com o total escrito.
+        let drainedCollector = DrainCollector()
+        await withTaskGroup(of: Void.self) { group in
+            for writer in 0..<4 {
+                group.addTask {
+                    let chunk = [Float](repeating: Float(writer + 1), count: chunkSize)
+                    for _ in 0..<(totalChunks / 4) {
+                        buffer.append(chunk)
+                    }
+                }
+            }
+            group.addTask {
+                for _ in 0..<10 {
+                    drainedCollector.add(buffer.drainOrdered().count)
+                }
+            }
+        }
+
+        let remaining = buffer.snapshot().count
+        #expect(drainedCollector.total + remaining == totalChunks * chunkSize)
+    }
+
     @Test("Escritas concorrentes não corrompem o buffer")
     func escritasConcorrentes() async {
         let buffer = PreRollBuffer(capacity: 1_000)
@@ -121,6 +173,24 @@ struct PreRollBufferTests {
         // e que nenhum sample é NaN/valor lixo.
         #expect(snapshot.count == 1_000)
         #expect(snapshot.allSatisfy { $0 == 1.0 })
+    }
+}
+
+/// Acumulador thread-safe para o teste de drain concorrente.
+private final class DrainCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [Int] = []
+
+    var total: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return counts.reduce(0, +)
+    }
+
+    func add(_ count: Int) {
+        lock.lock()
+        counts.append(count)
+        lock.unlock()
     }
 }
 

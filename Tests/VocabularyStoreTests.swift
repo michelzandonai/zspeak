@@ -85,6 +85,9 @@ struct VocabularyStoreTests {
         #expect(store.entries.contains { $0.term == "RTFx" })
         #expect(store.entries.contains { $0.term == "WER" })
         #expect(store.entries.contains { $0.term == "assertividade" })
+
+        #expect(store.entries.contains { $0.term == "merge request" } == false)
+        #expect(store.entries.contains { $0.term == "branch stage" } == false)
     }
 
     @Test("addEntry adiciona ao final")
@@ -439,6 +442,37 @@ struct VocabularyStoreTests {
         #expect(store.applyReplacements(to: "rodar x c test") == "rodar XCTest")
     }
 
+    @Test("applyReplacements aplica vocabulário cadastrado pelo usuário")
+    func testApplyReplacementsUserVocabularyFromHistory() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let store = makeStore(in: tmpDir)
+        store.addEntry(
+            term: "merge request",
+            aliases: ["mag request", "médio request"],
+            weight: 15.0
+        )
+        store.addEntry(
+            term: "merge requests",
+            aliases: ["meg requests"],
+            weight: 15.0
+        )
+        store.addEntry(
+            term: "branch stage",
+            aliases: ["brent stage", "brand stage", "brain stage", "brand state"],
+            weight: 15.0
+        )
+
+        #expect(store.applyReplacements(to: "faça um mag request para main") == "faça um merge request para main")
+        #expect(store.applyReplacements(to: "faça o médio request para stage") == "faça o merge request para stage")
+        #expect(store.applyReplacements(to: "revisar três MEG Requests") == "revisar três merge requests")
+        #expect(store.applyReplacements(to: "faça o commit para Brent Stage") == "faça o commit para branch stage")
+        #expect(store.applyReplacements(to: "crie uma brand stage com base na main") == "crie uma branch stage com base na main")
+        #expect(store.applyReplacements(to: "ajuste essa parte na Brain Stage") == "ajuste essa parte na branch stage")
+        #expect(store.applyReplacements(to: "faz o commit para Brand State") == "faz o commit para branch stage")
+    }
+
     @Test("applyReplacements preserva casing do term cadastrado")
     func testApplyReplacementsPreservesTermCasing() throws {
         let tmpDir = try makeTmpDir()
@@ -571,5 +605,114 @@ struct VocabularyStoreTests {
         #expect(store.applyReplacements(to: "instalar nodejs") == "instalar Node")
         // "nodejs" dentro de outra palavra não deve ser substituído
         #expect(store.applyReplacements(to: "nodejsx") == "nodejsx")
+    }
+
+    // Regressão: o pattern antigo usava `\b`, que exige transição word/non-word.
+    // Alias começando ou terminando em símbolo (".net", "c++") nunca casava —
+    // `\b` entre espaço e "." não existe. O lookaround corrige isso.
+    @Test("applyReplacements casa alias com símbolo nas bordas")
+    func testApplyReplacementsAliasWithEdgeSymbols() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let store = makeStore(in: tmpDir)
+        store.addEntry(term: ".NET", aliases: [".net"])
+        store.addEntry(term: "C++", aliases: ["c++"])
+
+        #expect(store.applyReplacements(to: "programar em .net agora") == "programar em .NET agora")
+        #expect(store.applyReplacements(to: "usar c++ no projeto") == "usar C++ no projeto")
+        // Bordas com letra/número continuam bloqueando o match
+        #expect(store.applyReplacements(to: "usar c++x no projeto") == "usar c++x no projeto")
+    }
+
+    // Regressão: o cache de regex compilados precisa ser invalidado em toda
+    // mutação de entries — senão um alias novo só funcionava após reiniciar.
+    @Test("Cache de replacements é invalidado após addEntry e deleteEntry")
+    func testReplacementCacheInvalidatedOnMutation() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let store = makeStore(in: tmpDir)
+        // Primeira chamada compila e cacheia as regras
+        _ = store.applyReplacements(to: "aquecer o cache")
+
+        // Termo inexistente nos seeds — evita colidir com defaults como "Docker"
+        store.addEntry(term: "Terraform", aliases: ["terra forme"])
+        #expect(store.applyReplacements(to: "rodar terra forme agora") == "rodar Terraform agora")
+
+        let added = try #require(store.entries.first { $0.term == "Terraform" })
+        store.deleteEntry(added)
+        #expect(store.applyReplacements(to: "rodar terra forme agora") == "rodar terra forme agora")
+    }
+
+    // Regressão: os seeds antigos tinham aliases perigosos — "wave" (palavra
+    // real em inglês) virava "WAV", "head"/"opus" idem. Só "uav" (erro fonético
+    // real do ASR) deve permanecer como alias de WAV.
+    @Test("Seeds não sequestram palavras comuns: wave/head/opus intactos")
+    func testSeedsDoNotHijackCommonWords() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let store = makeStore(in: tmpDir)
+
+        let wav = try #require(store.entries.first { $0.term == "WAV" })
+        #expect(wav.aliases == ["uav"])
+        let head = try #require(store.entries.first { $0.term == "HEAD" })
+        #expect(head.aliases.isEmpty)
+        let opus = try #require(store.entries.first { $0.term == "OPUS" })
+        #expect(opus.aliases.isEmpty)
+
+        // Palavras comuns não são reescritas
+        #expect(store.applyReplacements(to: "a sound wave passed") == "a sound wave passed")
+        #expect(store.applyReplacements(to: "the head of the file") == "the head of the file")
+        #expect(store.applyReplacements(to: "modelo opus da anthropic") == "modelo opus da anthropic")
+
+        // O erro fonético real continua corrigido
+        #expect(store.applyReplacements(to: "exportar como uav") == "exportar como WAV")
+    }
+
+    // Regressão: instalações existentes tinham "wave"/"head"/"opus" persistidos
+    // no vocabulary.json — corrigir só os seeds novos não as alcançava.
+    @Test("Migração v6 remove aliases perigosos de instalação existente")
+    func testV6MigrationStripsDangerousAliasesFromExistingInstall() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        // Simula vocabulary.json de instalação antiga, com todos os flags de
+        // seed já gravados (só a migração v6 deve rodar)
+        let legacyEntries = [
+            VocabularyEntry(term: "WAV", aliases: ["uav", "wave"], weight: 8.0),
+            VocabularyEntry(term: "HEAD", aliases: ["head"], weight: 8.0),
+            VocabularyEntry(term: "OPUS", aliases: ["opus"], weight: 8.0),
+            VocabularyEntry(term: "git pull", aliases: ["git pool"], weight: 10.0)
+        ]
+        let data = try JSONEncoder().encode(legacyEntries)
+        try data.write(to: tmpDir.appendingPathComponent("vocabulary.json"))
+        for flag in [".vocab_defaults_seeded", ".vocab_defaults_seeded_v2", ".vocab_defaults_seeded_v3",
+                     ".vocab_aliases_seeded_v3", ".vocab_defaults_seeded_v4", ".vocab_defaults_seeded_v5"] {
+            try Data().write(to: tmpDir.appendingPathComponent(flag))
+        }
+
+        let store = makeStore(in: tmpDir)
+
+        let wav = try #require(store.entries.first { $0.term == "WAV" })
+        #expect(wav.aliases == ["uav"])
+        let head = try #require(store.entries.first { $0.term == "HEAD" })
+        #expect(head.aliases.isEmpty)
+        let opus = try #require(store.entries.first { $0.term == "OPUS" })
+        #expect(opus.aliases.isEmpty)
+
+        // Aliases legítimos de outras entradas ficam intactos
+        let gitPull = try #require(store.entries.first { $0.term == "git pull" })
+        #expect(gitPull.aliases.contains("git pool"))
+
+        // Palavras comuns deixam de ser reescritas imediatamente
+        #expect(store.applyReplacements(to: "a sound wave passed") == "a sound wave passed")
+
+        // Flag gravado: migração não roda de novo (usuário pode re-adicionar o alias)
+        #expect(FileManager.default.fileExists(atPath: tmpDir.appendingPathComponent(".vocab_alias_cleanup_v6").path))
+        let store2 = makeStore(in: tmpDir)
+        store2.addEntry(term: "Wave", aliases: [])
+        #expect(store2.entries.contains { $0.term == "Wave" })
     }
 }

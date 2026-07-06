@@ -248,6 +248,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         super.init()
 
         menu.delegate = self
+        // Sem isto, o AppKit re-habilita itens com action+target e ignora o
+        // `isEnabled = false` de "Iniciar Gravação"/"Transcrever arquivo..."
+        // enquanto o modelo ainda carrega.
+        menu.autoenablesItems = false
         statusItem.menu = menu
         statusItem.length = 42
         updateButton()

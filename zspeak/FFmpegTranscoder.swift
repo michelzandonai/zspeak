@@ -76,15 +76,18 @@ actor FFmpegTranscoder {
     /// - Parameters:
     ///   - inputURL: arquivo de entrada
     ///   - timeout: tempo máximo em segundos (default 300s / 5min)
+    ///   - executableOverride: substitui o binário ffmpeg — apenas para testes
+    ///                         (permite simular transcodificação lenta sem ffmpeg real)
     ///   - onProgress: callback chamado a cada update de progresso (0.0-1.0).
     ///                 Recebe `nil` quando a duração total é desconhecida (raro).
     /// - Returns: URL do WAV temporário gerado
     func transcodeToWAV(
         inputURL: URL,
         timeout: TimeInterval = 300,
+        executableOverride: URL? = nil,
         onProgress: (@Sendable (Double?) -> Void)? = nil
     ) async throws -> URL {
-        guard let ffmpegURL = Self.bundledFFmpegURL else {
+        guard let ffmpegURL = executableOverride ?? Self.bundledFFmpegURL else {
             throw FFmpegError.binaryNotFound
         }
 
@@ -140,34 +143,60 @@ actor FFmpegTranscoder {
             throw FFmpegError.launchFailed(error.localizedDescription)
         }
 
-        // Aguarda o process com timeout usando TaskGroup
-        let exitStatus = try await withThrowingTaskGroup(of: Int32.self) { group in
-            group.addTask {
-                await withCheckedContinuation { (cont: CheckedContinuation<Int32, Never>) in
-                    process.terminationHandler = { proc in
-                        cont.resume(returning: proc.terminationStatus)
+        // Aguarda o process com timeout. Cancelamento da Task envolvente mata o
+        // ffmpeg imediatamente — sem isso, o TaskGroup ficava preso aguardando a
+        // continuation do terminationHandler até o ffmpeg terminar sozinho.
+        let exitStatus: Int32
+        do {
+            exitStatus = try await withTaskCancellationHandler {
+                try await withThrowingTaskGroup(of: Int32.self) { group in
+                    group.addTask {
+                        await withCheckedContinuation { (cont: CheckedContinuation<Int32, Never>) in
+                            process.terminationHandler = { proc in
+                                cont.resume(returning: proc.terminationStatus)
+                            }
+                        }
                     }
-                }
-            }
 
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                        if process.isRunning {
+                            process.terminate()
+                        }
+                        throw FFmpegError.timeout
+                    }
+
+                    // Pega o primeiro que completar (sucesso do process) e cancela o timer
+                    guard let result = try await group.next() else {
+                        throw FFmpegError.transcodeFailed("Nenhum resultado do processo")
+                    }
+                    group.cancelAll()
+                    return result
+                }
+            } onCancel: {
+                // Roda fora do actor; Process é thread-safe para terminate()
                 if process.isRunning {
                     process.terminate()
                 }
-                throw FFmpegError.timeout
             }
-
-            // Pega o primeiro que completar (sucesso do process) e cancela o timer
-            guard let result = try await group.next() else {
-                throw FFmpegError.transcodeFailed("Nenhum resultado do processo")
-            }
-            group.cancelAll()
-            return result
+        } catch {
+            // Timeout ou cancelamento: não deixa WAV parcial órfão no tmp
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            try? FileManager.default.removeItem(at: outputURL)
+            throw error
         }
 
         // Limpa o handler antes de ler restante
         stderrPipe.fileHandleForReading.readabilityHandler = nil
+
+        // Task cancelada: o terminate acima encerrou o ffmpeg (ou ele completou
+        // na corrida) — o output é descartado e o cancelamento propagado, em vez
+        // de mascarar como transcodeFailed.
+        if Task.isCancelled {
+            try? FileManager.default.removeItem(at: outputURL)
+            Self.logger.info("ffmpeg cancelado: \(inputURL.lastPathComponent, privacy: .public)")
+            throw CancellationError()
+        }
 
         guard exitStatus == 0 else {
             let errorText = stderrBuffer.lastNonProgressLines() ?? "exit code \(exitStatus)"

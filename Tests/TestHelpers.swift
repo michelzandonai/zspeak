@@ -71,3 +71,46 @@ struct TimeoutError: Error, CustomStringConvertible {
         "Operação não completou dentro de \(duration)"
     }
 }
+
+// MARK: - Exclusão mútua do dispositivo de áudio real
+
+/// Mutex global dos testes que abrem o HAL de áudio real (engine.start/warmUp
+/// ou override do default input). `.serialized` só serializa DENTRO de uma
+/// suíte; suítes diferentes ainda rodam em paralelo e disputam o device global
+/// da máquina — a causa do -10868 e da flakiness intermitente em paralelo.
+private actor RealAudioDeviceLock {
+    static let shared = RealAudioDeviceLock()
+    private var isHeld = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !isHeld {
+            isHeld = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            isHeld = false
+        } else {
+            // O lock passa direto para o próximo da fila (permanece held)
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
+/// Executa `body` com acesso exclusivo ao dispositivo de áudio real.
+/// Todo teste que dispara captura real (direta ou via AppState.toggleRecording
+/// com modelo pronto) deve envolver o corpo inteiro com este helper.
+func withRealAudioDevice<T>(
+    isolation: isolated (any Actor)? = #isolation,
+    _ body: () async throws -> T
+) async rethrows -> T {
+    await RealAudioDeviceLock.shared.acquire()
+    defer {
+        Task { await RealAudioDeviceLock.shared.release() }
+    }
+    return try await body()
+}

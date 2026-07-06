@@ -97,8 +97,37 @@ struct ProgressiveTextRevealTests {
             inserted: "",
             suffix: ""
         )
+        let smallDeletionRevision = ProgressiveTextReveal.Revision(
+            prefix: "Hoje ",
+            removed: String(repeating: "a", count: 30),
+            inserted: "",
+            suffix: ""
+        )
 
         #expect(ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(for: smallRevision) == 0)
-        #expect(ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(for: largeRevision) == 160)
+        #expect(ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(for: smallDeletionRevision) == 999)
+        #expect(ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(for: largeRevision) == 1_400)
+    }
+
+    @Test("Segura apagao de texto inteiro ate chegar revisao completa")
+    func holdsWholeTextDiscontinuityUntilCompleteRevision() {
+        let collapsedPreview = ProgressiveTextReveal.Revision(
+            prefix: "",
+            removed: String(repeating: "a", count: 160),
+            inserted: "ok",
+            suffix: ""
+        )
+        let completeReplacement = ProgressiveTextReveal.Revision(
+            prefix: "",
+            removed: String(repeating: "a", count: 160),
+            inserted: String(repeating: "b", count: 150),
+            suffix: ""
+        )
+
+        #expect(ProgressiveTextReveal.isWholeTextDiscontinuity(collapsedPreview))
+        #expect(ProgressiveTextReveal.wholeTextDiscontinuityDelayMilliseconds(for: collapsedPreview) == 2_800)
+        #expect(ProgressiveTextReveal.wholeTextDiscontinuityRetryDelayMilliseconds == 1_000)
+        #expect(!ProgressiveTextReveal.isWholeTextDiscontinuity(completeReplacement))
+        #expect(ProgressiveTextReveal.wholeTextDiscontinuityDelayMilliseconds(for: completeReplacement) == 0)
     }
 }

@@ -159,6 +159,24 @@ final class PreRollBuffer: @unchecked Sendable {
         guard capacity > 0 else { return [] }
         lock.lock()
         defer { lock.unlock() }
+        return orderedSamplesLocked()
+    }
+
+    /// Snapshot + clear em UMA aquisição de lock. Usado na promoção
+    /// hot window → gravação: garante que nenhum callback do tap consiga
+    /// gravar no ring entre a leitura e a limpeza (janela que perdia até
+    /// ~11 ms do primeiro fonema).
+    func drainOrdered() -> [Float] {
+        guard capacity > 0 else { return [] }
+        lock.lock()
+        defer { lock.unlock() }
+        let result = orderedSamplesLocked()
+        writeIndex = 0
+        hasWrapped = false
+        return result
+    }
+
+    private func orderedSamplesLocked() -> [Float] {
         if !hasWrapped {
             return Array(storage[0..<writeIndex])
         }
@@ -256,11 +274,11 @@ actor AudioCapture {
     /// principal da gravação. Quando false, o tap apenas alimenta o pre-roll
     /// e NÃO publica nível de áudio — estado "hot window" sem UI de gravação.
     private let isRecordingToMain = AtomicBool()
-    /// Converter fica fora do actor para ser chamado direto no tap (render thread).
-    /// `AudioConverter` do FluidAudio é thread-safe internamente (confirmado pelo
-    /// uso em `AudioFileTranscriber` sem serialização adicional); mantemos a anotação
-    /// `nonisolated(unsafe)` até o upstream adicionar `Sendable` ao tipo.
-    nonisolated(unsafe) private let converter = AudioConverter()
+    /// Resampler streaming persistente (48/44,1 kHz → 16 kHz) chamado direto no
+    /// tap (render thread). Mantém o estado do filtro entre callbacks — ver
+    /// doc de `StreamingResampler` para o porquê de não usar o `AudioConverter`
+    /// stateless do FluidAudio aqui.
+    private let streamResampler = StreamingResampler()
     /// Contador atômico de erros de resample — incrementado no tap.
     private let resampleErrors = AtomicInt()
     /// Latch atômico usado pelo tap para agendar UMA única `Task` no actor
@@ -371,8 +389,6 @@ actor AudioCapture {
             tearDownHotWindow()
         }
 
-        let hotPreRoll = canReusePrewarm ? preRollBuffer.snapshot() : []
-
         samplesBuffer.clear()
         samplesBuffer.reserveCapacity(Self.expectedMaxCaptureDurationSeconds * Self.targetSampleRate)
         resampleErrors.reset()
@@ -388,18 +404,32 @@ actor AudioCapture {
         engineStartTimestamp = nil
         firstSampleTimestamp = nil
         onFirstSampleCallback = onFirstSample
-        isRecordingToMain.set(true)
         isRunning = true
 
         do {
             if canReusePrewarm {
                 // Fast path real: HAL já está aberto desde o warmUp. O clique só
                 // promove o hot window para gravação ativa.
+                //
+                // Ordem importa: drena o pre-roll (snapshot+clear atômico) e o
+                // insere no buffer principal ANTES de ligar a flag de gravação.
+                // Com a flag ainda desligada, o tap não escreve no buffer
+                // principal — garantindo que o pre-roll (mais antigo) preceda
+                // os samples ao vivo. A ordem antiga (flag primeiro, append
+                // depois) permitia samples novos entrarem antes do pre-roll,
+                // embaralhando o início da fala.
+                //
+                // Trade-off consciente: um callback do tap que rode ENTRE o
+                // drain e o set(true) escreve só no ring e se perde (~11 ms,
+                // um bloco). Drenar de novo depois da flag reintroduziria o
+                // risco de ordem embaralhada — perda de 1 bloco no limiar do
+                // clique é preferível a corromper o início da fala.
+                let hotPreRoll = preRollBuffer.drainOrdered()
                 if !hotPreRoll.isEmpty {
                     samplesBuffer.append(hotPreRoll)
                     liveSampleEmitter.append(hotPreRoll)
                 }
-                preRollBuffer.clear()
+                isRecordingToMain.set(true)
                 _ = firstSampleScheduled.setIfZero()
                 engineStartTimestamp = callTime
                 isHotWindowActive = false
@@ -407,6 +437,7 @@ actor AudioCapture {
                 markFirstSampleIfNeeded(at: callTime)
                 logger.info("start: fast path hot window \(String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - callTime) * 1000), privacy: .public)ms preRollSamples=\(hotPreRoll.count, privacy: .public)")
             } else {
+                isRecordingToMain.set(true)
                 engine = AVAudioEngine()
                 try startEngine(deviceUID: deviceUID, baseMeta: baseMeta)
                 let tEngineStart = engineStartTimestamp ?? CFAbsoluteTimeGetCurrent()
@@ -524,6 +555,7 @@ actor AudioCapture {
         restoreSystemDefaultInput()
         preRollBuffer.clear()
         liveSampleEmitter.deactivate()
+        streamResampler.reset()
         isHotWindowActive = false
         hotWindowDeviceUID = nil
         isRunning = false
@@ -588,7 +620,7 @@ actor AudioCapture {
         let ringBuffer = preRollBuffer
         let recordingFlag = isRecordingToMain
         let levelMonitor = audioLevelMonitor
-        let converter = self.converter
+        let resampler = streamResampler
         let errors = resampleErrors
         let firstSampleLatch = firstSampleScheduled
         let firstResampleLatch = firstResampleLogged
@@ -619,16 +651,16 @@ actor AudioCapture {
                 }
             }
 
-            // Mede custo do PRIMEIRO resampleBuffer (1× por sessão).
+            // Mede custo do PRIMEIRO resample (1× por sessão).
             let measureFirstResample = isFirstSampleOfSession && firstResampleLatch.setIfZero()
             do {
                 let resampled: [Float]
                 if measureFirstResample {
                     let i = PerfSignposter.begin(.firstResample)
-                    resampled = try converter.resampleBuffer(avBuffer)
+                    resampled = try resampler.process(avBuffer)
                     PerfSignposter.end(i)
                 } else {
-                    resampled = try converter.resampleBuffer(avBuffer)
+                    resampled = try resampler.process(avBuffer)
                 }
                 // Ring de pre-roll é alimentado SEMPRE que o tap roda — serve
                 // tanto para cobrir o gap de abertura quanto para o gap entre
@@ -697,8 +729,18 @@ actor AudioCapture {
     func stop() async -> [Float] {
         guard isRunning else {
             restoreSystemDefaultInput()
+            liveSampleEmitter.flush()
             liveSampleEmitter.deactivate()
-            return []
+            audioLevelMonitor.reset()
+            // O engine pode ter sido derrubado no meio da gravação (config
+            // change: AirPods auto-switch, device desconectado). O que já foi
+            // capturado permanece no buffer principal — devolve em vez de
+            // descartar a fala do usuário silenciosamente.
+            let orphaned = samplesBuffer.drain()
+            if !orphaned.isEmpty {
+                logger.info("stop: engine caiu durante a gravação; recuperando \(orphaned.count, privacy: .public) samples do buffer")
+            }
+            return orphaned
         }
 
         guard isRecordingToMain.current else {
@@ -710,6 +752,11 @@ actor AudioCapture {
         await drainPendingStopBuffers(metadata: ["scope": "recording"])
 
         audioLevelMonitor.reset()
+
+        let errorCount = resampleErrors.current
+        if errorCount > 0 {
+            logger.error("stop: \(errorCount, privacy: .public) buffers descartados por erro de resample nesta sessão")
+        }
 
         let result = samplesBuffer.drain()
         liveSampleEmitter.flush()
@@ -824,6 +871,7 @@ actor AudioCapture {
         isRunning = false
         isRecordingToMain.set(false)
         audioLevelMonitor.reset()
+        streamResampler.reset()
         if isHotWindowActive {
             isHotWindowActive = false
             hotWindowDeviceUID = nil

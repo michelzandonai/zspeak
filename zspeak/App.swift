@@ -7,13 +7,19 @@ final class OverlayController {
     private let panel = OverlayPanel()
     private let appState: AppState
     private let promptModeManager: PromptModeManager
+    private let activationKeyManager: ActivationKeyManager?
     private let model = OverlayModel()
     private var isShowing = false
     private var lastAutoAppliedPromptKey: String?
 
-    init(appState: AppState, promptModeManager: PromptModeManager) {
+    init(
+        appState: AppState,
+        promptModeManager: PromptModeManager,
+        activationKeyManager: ActivationKeyManager? = nil
+    ) {
         self.appState = appState
         self.promptModeManager = promptModeManager
+        self.activationKeyManager = activationKeyManager
 
         // Closure direta: WaveformView lê audioLevel do AudioCapture sem intermediários
         model.getAudioLevel = { [weak appState] in
@@ -50,6 +56,7 @@ final class OverlayController {
     private func startObserving() {
         withObservationTracking {
             _ = appState.state
+            _ = appState.recordingStartedAt
             _ = appState.isApplyingPrompt
             _ = appState.lastLLMResult
             _ = appState.lastLLMPromptName
@@ -71,6 +78,7 @@ final class OverlayController {
             _ = appState.isSelectionLookupModeEnabled
             _ = promptModeManager.isEnabled
             _ = appState.correctionPromptStore?.prompts
+            _ = activationKeyManager?.escapeToCancel
         } onChange: { [weak self] in
             Task { @MainActor in
                 self?.update()
@@ -84,6 +92,7 @@ final class OverlayController {
     private func update() {
         // Sincroniza modelo in-place — SwiftUI reage via @Observable sem recriar views
         model.state = appState.state
+        model.recordingStartedAt = appState.recordingStartedAt
         model.isModelReady = appState.isModelReady
         model.isApplyingPrompt = appState.isApplyingPrompt
         model.promptModeEnabled = promptModeManager.isEnabled
@@ -137,6 +146,7 @@ final class OverlayController {
         }
         model.microphoneName = appState.microphoneManager.activeMicrophoneName
         model.microphoneManager = appState.microphoneManager
+        model.escHintEnabled = activationKeyManager?.escapeToCancel ?? true
 
         // Nota: o tamanho do panel é auto-ajustado via KVO em OverlayPanel
         // (NSHostingController.preferredContentSize → adjustToPreferredSize)
@@ -308,7 +318,11 @@ struct ZSpeakApp: App {
         }
 
         // Cria overlay controller e retém referência estática para evitar desalocação por ARC
-        Self.overlayController = OverlayController(appState: state, promptModeManager: promptMode)
+        Self.overlayController = OverlayController(
+            appState: state,
+            promptModeManager: promptMode,
+            activationKeyManager: activation
+        )
 
         // Cria o status item somente depois do AppKit finalizar o launch.
         // Isso evita crash/intermitência ao tocar em NSApplication ou NSStatusBar no init do SwiftUI App.

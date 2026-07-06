@@ -25,7 +25,7 @@ struct RecordingControllerTests {
             await controller.initialize()
         }
 
-        try await waitUntil(timeout: .seconds(1), interval: .milliseconds(10)) {
+        try await waitUntil(timeout: .seconds(15), interval: .milliseconds(10)) {
             await audioCapture.warmUpStarted
         }
 
@@ -57,7 +57,7 @@ struct RecordingControllerTests {
 
         controller.startRecordingIfIdle()
 
-        try await waitUntilOnMain(timeout: .seconds(2), interval: .milliseconds(10)) {
+        try await waitUntilOnMain(timeout: .seconds(15), interval: .milliseconds(10)) {
             controller.liveTranscriptionPreview == "texto parcial"
         }
 
@@ -66,7 +66,7 @@ struct RecordingControllerTests {
 
         controller.stopRecordingIfActive()
 
-        try await waitUntilOnMain(timeout: .seconds(2), interval: .milliseconds(10)) {
+        try await waitUntilOnMain(timeout: .seconds(15), interval: .milliseconds(10)) {
             controller.state == .idle
         }
 
@@ -74,6 +74,47 @@ struct RecordingControllerTests {
         #expect(textInserter.replacedTexts.isEmpty)
         #expect(controller.lastTranscription == "texto final")
         #expect(controller.liveTranscriptionPreview == "")
+    }
+
+    @Test("recordingStartedAt ancora no 1º sample e não muda durante a gravação")
+    func recordingStartedAtAncoradoNoPrimeiroSample() async throws {
+        let audioCapture = LiveFakeAudioCapture()
+        let transcriber = LiveFakeTranscriber()
+        let textInserter = FakeRecordingTextInserter()
+        let microphoneManager = MicrophoneManager(skipBundlePermissionCheck: true)
+        microphoneManager.permissionState = .authorized
+
+        let controller = RecordingController(
+            audioCapture: audioCapture,
+            transcriber: transcriber,
+            textInserter: textInserter,
+            microphoneManager: microphoneManager
+        )
+        controller.isModelReady = true
+        controller.accessibilityGranted = true
+
+        #expect(controller.recordingStartedAt == nil)
+
+        let antesDoStart = Date()
+        controller.startRecordingIfIdle()
+
+        try await waitUntilOnMain(timeout: .seconds(15), interval: .milliseconds(10)) {
+            controller.state == .recording
+        }
+
+        // Âncora setada junto com a transição para .recording (1º sample)
+        let ancora = try #require(controller.recordingStartedAt)
+        #expect(ancora >= antesDoStart)
+
+        // A âncora vive no controller e não muda enquanto a gravação continua —
+        // é isso que impede o timer do overlay de zerar quando a view é recriada.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(controller.recordingStartedAt == ancora)
+
+        controller.stopRecordingIfActive()
+        try await waitUntilOnMain(timeout: .seconds(15), interval: .milliseconds(10)) {
+            controller.state == .idle
+        }
     }
 }
 

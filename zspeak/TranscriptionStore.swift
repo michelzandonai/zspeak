@@ -29,32 +29,49 @@ final class TranscriptionStore {
     private let audioDir: URL
     private let historyFile: URL
 
+    /// Defaults de onde o limite de retenção é lido (injetável para testes).
+    @ObservationIgnored
+    private let userDefaults: UserDefaults
+
     /// Fila serial dedicada a encode + I/O. Fora da main thread.
     /// Saves são enfileirados (ordem preservada); nunca corrompem por concorrência.
     @ObservationIgnored
     private let persistQueue: DispatchQueue
 
-    init() {
+    /// - Parameter applyMaintenanceOnLoad: quando true (app em produção), aplica
+    ///   retenção e remove WAVs órfãos logo após carregar. Leitores externos do
+    ///   diretório de produção (ex.: testes de benchmark que só consultam o
+    ///   histórico) DEVEM passar false — a manutenção é destrutiva e, rodando em
+    ///   outro processo com o app aberto, poderia apagar um WAV recém-criado.
+    init(applyMaintenanceOnLoad: Bool = true) {
         let base = SafePath.firstURL(for: .applicationSupportDirectory)
         let defaultBase = base.appendingPathComponent("zspeak", isDirectory: true)
         appSupportDir = defaultBase
         audioDir = defaultBase.appendingPathComponent("audio", isDirectory: true)
         historyFile = defaultBase.appendingPathComponent("history.json")
+        userDefaults = .standard
         persistQueue = StorePersistQueue.shared(forFileAt: historyFile)
         try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
         records = loadRecords()
+        if applyMaintenanceOnLoad {
+            applyRetentionLimit()
+            cleanupOrphanAudioFiles()
+        }
     }
 
-    init(baseDirectory: URL) {
+    init(baseDirectory: URL, userDefaults: UserDefaults = .standard) {
         appSupportDir = baseDirectory
         audioDir = baseDirectory.appendingPathComponent("audio", isDirectory: true)
         historyFile = baseDirectory.appendingPathComponent("history.json")
+        self.userDefaults = userDefaults
         persistQueue = StorePersistQueue.shared(forFileAt: historyFile)
 
         // Criar diretórios se não existirem
         try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
 
         records = loadRecords()
+        applyRetentionLimit()
+        cleanupOrphanAudioFiles()
     }
 
     // MARK: - API pública
@@ -92,8 +109,68 @@ final class TranscriptionStore {
         )
 
         records.insert(record, at: 0)
+        pruneExcessRecords()
         saveJSON()
         return id
+    }
+
+    // MARK: - Retenção
+
+    /// Limite efetivo de registros mantidos (0 = ilimitado). Lido de UserDefaults
+    /// a cada aplicação, então mudança na UI vale sem reiniciar o app.
+    var retentionLimit: Int {
+        guard userDefaults.object(forKey: TranscriptionStoreRetention.limitKey) != nil else {
+            return TranscriptionStoreRetention.defaultLimit
+        }
+        return userDefaults.integer(forKey: TranscriptionStoreRetention.limitKey)
+    }
+
+    /// Aplica o limite de retenção imediatamente (chamado no init e quando o
+    /// usuário muda o limite na UI). Persiste o JSON somente se algo saiu.
+    func applyRetentionLimit() {
+        if pruneExcessRecords() {
+            saveJSON()
+        }
+    }
+
+    /// Remove os registros além do limite (os mais antigos ficam no fim da
+    /// lista, que é ordenada do mais novo para o mais velho) e agenda a remoção
+    /// dos WAVs na fila de persistência — atrás de writes pendentes, então um
+    /// WAV nunca é apagado antes de terminar de ser escrito.
+    @discardableResult
+    private func pruneExcessRecords() -> Bool {
+        let limit = retentionLimit
+        guard limit > 0, records.count > limit else { return false }
+
+        let excess = Array(records[limit...])
+        records.removeSubrange(limit...)
+
+        let urls = excess.compactMap(\.audioFileName).map { audioDir.appendingPathComponent($0) }
+        if !urls.isEmpty {
+            persistQueue.async {
+                for url in urls {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+        }
+        return true
+    }
+
+    /// Remove WAVs órfãos (sem registro no histórico) deixados por versões
+    /// antigas ou por crash entre o write do WAV e o save do JSON. Roda na fila
+    /// de persistência logo após o init; WAVs de addRecord subsequentes entram
+    /// na fila depois desta varredura e nunca são vistos por ela.
+    private func cleanupOrphanAudioFiles() {
+        let referenced = Set(records.compactMap(\.audioFileName))
+        let dir = audioDir
+        persistQueue.async {
+            let fm = FileManager.default
+            guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+            for url in files
+            where url.pathExtension.lowercased() == "wav" && !referenced.contains(url.lastPathComponent) {
+                try? fm.removeItem(at: url)
+            }
+        }
     }
 
     /// Atualiza o map de nomes de speakers de um registro existente
@@ -217,6 +294,20 @@ final class TranscriptionStore {
 /// Vive fora da classe @MainActor para ser Sendable e acessível em closures detached.
 enum TranscriptionStoreSchema {
     static let currentVersion = 1
+}
+
+/// Configuração de retenção do histórico. Fora da classe para uso em
+/// `@AppStorage` nas views (mesma chave, mesmo default).
+enum TranscriptionStoreRetention {
+    static let limitKey = "historyRetentionLimit"
+    /// 200 registros ≈ semanas de uso normal; limita history.json e o diretório de WAVs.
+    static let defaultLimit = 200
+    /// Opções expostas na UI (0 = ilimitado).
+    static let options: [Int] = [50, 100, 200, 500, 0]
+
+    static func label(for limit: Int) -> String {
+        limit == 0 ? "Ilimitado" : "\(limit) transcrições"
+    }
 }
 
 /// Codifica samples Float 16kHz mono como WAV PCM 16-bit. Pure, safe off-main.

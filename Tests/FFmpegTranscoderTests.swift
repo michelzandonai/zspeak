@@ -126,6 +126,42 @@ struct FFmpegTranscoderTests {
         #expect(size > 44) // > header WAV
     }
 
+    @Test("cancelamento da Task mata o processo e lança CancellationError")
+    func transcodeCancelledPropagatesCancellation() async throws {
+        let tmp = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let inputURL = tmp.appendingPathComponent("input.wav")
+        try createSilentWAV(at: inputURL, durationSeconds: 1)
+
+        // "ffmpeg" fake que dorme 30s — simula transcodificação longa sem
+        // depender do binário real (ausente em dev sem brew).
+        let slowScript = tmp.appendingPathComponent("fake-ffmpeg.sh")
+        try "#!/bin/sh\nsleep 30\n".write(to: slowScript, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: slowScript.path
+        )
+
+        let inicio = Date()
+        let task = Task {
+            try await FFmpegTranscoder.shared.transcodeToWAV(
+                inputURL: inputURL,
+                executableOverride: slowScript
+            )
+        }
+        // Deixa o processo subir antes de cancelar
+        try await Task.sleep(for: .milliseconds(150))
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await task.value
+        }
+
+        // Regressão do deadlock: antes do fix, o cancelamento ficava preso
+        // aguardando o processo terminar sozinho (30s). Agora mata na hora.
+        #expect(Date().timeIntervalSince(inicio) < 5)
+    }
+
     @Test("binaryNotFound é lançado quando ffmpeg não está disponível em ambiente dev")
     func binaryNotFoundError() async throws {
         // Este teste só faz sentido se o ffmpeg NÃO estiver disponível

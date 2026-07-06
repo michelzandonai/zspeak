@@ -306,19 +306,26 @@ struct BenchmarkStoreTests {
         store.addFixture(name: "Primeiro", expectedText: "olá mundo", audioFileName: "first.wav", duration: 1.0)
         store.addFixture(name: "Segundo", expectedText: "deploy kubernetes", audioFileName: "second.wav", duration: 1.0)
 
-        var baselineCalls = 0
-        var candidateCalls = 0
+        // Responde pelo CONTEÚDO do áudio (não pela ordem de chamada): cada
+        // perfil recebe primeiro um warm-up de 1 s de silêncio que não pode
+        // contar como fixture.
+        let firstSample = Float(100) / 32_767
+        // Warm-up é 1 s de silêncio puro; as fixtures têm samples não-zero
+        func isWarmUp(_ samples: [Float]) -> Bool { samples.allSatisfy { $0 == 0 } }
+        func isFirstFixture(_ samples: [Float]) -> Bool {
+            abs((samples.first ?? 0) - firstSample) < 0.0001
+        }
 
         let comparison = await store.compareProfiles(
             baselineName: "baseline",
-            baseline: { _ in
-                baselineCalls += 1
-                return baselineCalls == 1 ? "olá planeta" : "deploy"
+            baseline: { samples in
+                if isWarmUp(samples) { return "" }
+                return isFirstFixture(samples) ? "olá planeta" : "deploy"
             },
             candidateName: "candidato",
-            candidate: { _ in
-                candidateCalls += 1
-                return candidateCalls == 1 ? "olá mundo" : "deploy kubernetes"
+            candidate: { samples in
+                if isWarmUp(samples) { return "" }
+                return isFirstFixture(samples) ? "olá mundo" : "deploy kubernetes"
             }
         )
 

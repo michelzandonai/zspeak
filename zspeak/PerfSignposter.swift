@@ -64,7 +64,9 @@ enum PerfSignposter {
     /// (tap callback → actor, etc.).
     struct Interval: Sendable {
         let event: Event
-        let startTime: CFAbsoluteTime
+        /// Nanosegundos monotônicos (CLOCK_UPTIME_RAW) — imune a saltos de
+        /// NTP/mudança de relógio que corrompiam o `elapsed_ms` do log.
+        let startUptimeNanos: UInt64
         let signpostID: OSSignpostID
         let signpostState: OSSignpostIntervalState
     }
@@ -82,12 +84,18 @@ enum PerfSignposter {
         let id = signposter.makeSignpostID()
         let state = beginSignpost(event, id: id)
         log(event: event, phase: "begin", metadata: metadata)
-        return Interval(event: event, startTime: CFAbsoluteTimeGetCurrent(), signpostID: id, signpostState: state)
+        return Interval(
+            event: event,
+            startUptimeNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW),
+            signpostID: id,
+            signpostState: state
+        )
     }
 
     /// Fecha um intervalo aberto por `begin`. Calcula `elapsed_ms` e adiciona ao log.
     static func end(_ interval: Interval, metadata: [String: String] = [:]) {
-        let elapsedMs = (CFAbsoluteTimeGetCurrent() - interval.startTime) * 1000
+        let elapsedNanos = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) &- interval.startUptimeNanos
+        let elapsedMs = Double(elapsedNanos) / 1_000_000
         endSignpost(interval.event, state: interval.signpostState)
         var meta = metadata
         meta["elapsed_ms"] = String(format: "%.2f", elapsedMs)

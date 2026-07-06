@@ -14,6 +14,10 @@ struct HistoryView: View {
     // Paginação: carrega em blocos para não travar a UI com históricos grandes
     @State private var visibleCount: Int = 50
 
+    /// Limite de retenção — mesma chave lida pelo TranscriptionStore.
+    @AppStorage(TranscriptionStoreRetention.limitKey)
+    private var retentionLimit: Int = TranscriptionStoreRetention.defaultLimit
+
     private let pageSize: Int = 50
 
     // MARK: - Agrupamento
@@ -125,6 +129,8 @@ struct HistoryView: View {
                     paginationFooter(filteredTotal: filteredTotal)
                 }
             }
+
+            retentionSection
         }
         .formStyle(.grouped)
         .zsFormPage()
@@ -168,6 +174,28 @@ struct HistoryView: View {
                 "Cada transcrição ficará salva aqui com áudio e metadados."
             )
         )
+    }
+
+    // MARK: - Retenção
+
+    /// Seleção do limite de retenção. Reduzir o limite apaga imediatamente os
+    /// registros (e WAVs) mais antigos que excedem o novo valor.
+    @ViewBuilder
+    private var retentionSection: some View {
+        Section {
+            Picker("Manter no histórico", selection: $retentionLimit) {
+                ForEach(TranscriptionStoreRetention.options, id: \.self) { limit in
+                    Text(TranscriptionStoreRetention.label(for: limit)).tag(limit)
+                }
+            }
+            .onChange(of: retentionLimit) { _, _ in
+                store.applyRetentionLimit()
+            }
+        } header: {
+            Text("Retenção")
+        } footer: {
+            Text("Transcrições e áudios além do limite são apagados automaticamente, das mais antigas para as mais novas.")
+        }
     }
 
     // MARK: - Busca

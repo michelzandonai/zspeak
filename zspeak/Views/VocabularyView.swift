@@ -21,6 +21,12 @@ struct VocabularyView: View {
     /// para disparar um único debounce de 300ms por rajada de edições.
     @State private var autosaveToken: Int = 0
 
+    init(appState: AppState, store: VocabularyStore, initialExpandedIDs: Set<UUID> = []) {
+        self.appState = appState
+        self.store = store
+        _expandedIDs = State(initialValue: initialExpandedIDs)
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -37,6 +43,8 @@ struct VocabularyView: View {
             if store.entries.isEmpty {
                 emptyStateSection
             } else {
+                addTermSection
+
                 ForEach(filteredIndices, id: \.self) { index in
                     entrySection(at: index)
                 }
@@ -122,6 +130,19 @@ struct VocabularyView: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var addTermSection: some View {
+        Section {
+            Button {
+                addNewEntry()
+            } label: {
+                Label("Adicionar termo", systemImage: "plus.circle.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
     }
 
@@ -295,6 +316,7 @@ struct VocabularyView: View {
     }
 
     private func addNewEntry() {
+        searchText = ""
         store.addEntry(term: "", aliases: [], weight: 10.0)
         if let newID = store.entries.last?.id {
             expandedIDs.insert(newID)

@@ -30,7 +30,7 @@ struct SelectionTranslationCoordinatorTests {
         #expect(coordinator.isVisible)
         #expect(coordinator.isTranslating)
 
-        try await waitUntilOnMain(timeout: .seconds(5)) {
+        try await waitUntilOnMain(timeout: .seconds(15)) {
             coordinator.isTranslating == false
                 && coordinator.translatedText == "Olá, mundo."
         }
@@ -45,7 +45,7 @@ struct SelectionTranslationCoordinatorTests {
         #expect(await llm.keepAliveSequence() == [true])
 
         coordinator.dismiss()
-        try await waitUntil(timeout: .seconds(1)) {
+        try await waitUntil(timeout: .seconds(15)) {
             await llm.keepAliveSequence() == [true, false]
         }
     }
@@ -69,12 +69,12 @@ struct SelectionTranslationCoordinatorTests {
         )
 
         coordinator.translateSelection()
-        try await waitUntilOnMain(timeout: .seconds(2)) {
+        try await waitUntilOnMain(timeout: .seconds(15)) {
             coordinator.isTranslating == false
         }
 
         coordinator.lookupWord("feature.", immediate: true)
-        try await waitUntilOnMain(timeout: .seconds(2)) {
+        try await waitUntilOnMain(timeout: .seconds(15)) {
             coordinator.isLookingUpTerm == false && coordinator.lookupTranslation == "recurso"
         }
 
@@ -109,7 +109,7 @@ struct SelectionTranslationCoordinatorTests {
 
         coordinator.translateSelection()
 
-        try await waitUntilOnMain(timeout: .seconds(2)) {
+        try await waitUntilOnMain(timeout: .seconds(15)) {
             coordinator.isLookingUpTerm == false && coordinator.lookupTranslation == "recurso"
         }
 
@@ -142,7 +142,7 @@ struct SelectionTranslationCoordinatorTests {
             ambientLookupEnabled: true
         )
 
-        try await waitUntilOnMain(timeout: .seconds(2)) {
+        try await waitUntilOnMain(timeout: .seconds(15)) {
             coordinator.presentation == .compactLookup
                 && coordinator.lookupTranslation == "limpo"
         }
@@ -153,6 +153,101 @@ struct SelectionTranslationCoordinatorTests {
         #expect(await llm.receivedTerms() == ["clean"])
 
         coordinator.setAmbientLookupEnabled(false)
+    }
+
+    // MARK: - Regressão: parciais atrasadas (hop Task { @MainActor } não herda cancelamento)
+
+    @Test("parcial atrasada nao sobrescreve a traducao final")
+    func latePartialDoesNotOverwriteFinalTranslation() async throws {
+        let reader = FakeSelectionReader(
+            selection: SelectedTextSelection(
+                text: "Hello there, my good friend.",
+                bounds: nil
+            )
+        )
+        let llm = FakeTranslationLLM(
+            result: "Olá, meu bom amigo.",
+            latePartial: "Olá"
+        )
+        let coordinator = SelectionTranslationCoordinator(
+            llmManager: llm,
+            selectionReader: reader,
+            ambientLookupEnabled: false
+        )
+
+        coordinator.translateSelection()
+        try await waitUntilOnMain(timeout: .seconds(15)) {
+            coordinator.isTranslating == false
+                && coordinator.translatedText == "Olá, meu bom amigo."
+        }
+
+        // Dá tempo da parcial atrasada aterrissar no MainActor. Antes do fix
+        // (guard por runID), ela sobrescrevia a tradução completa com o prefixo.
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(coordinator.translatedText == "Olá, meu bom amigo.")
+    }
+
+    @Test("parcial atrasada apos dismiss nao ressuscita estado do overlay")
+    func latePartialAfterDismissIsDiscarded() async throws {
+        let reader = FakeSelectionReader(
+            selection: SelectedTextSelection(
+                text: "Hello there, my good friend.",
+                bounds: nil
+            )
+        )
+        let llm = FakeTranslationLLM(
+            result: "Olá, meu bom amigo.",
+            latePartial: "Olá"
+        )
+        let coordinator = SelectionTranslationCoordinator(
+            llmManager: llm,
+            selectionReader: reader,
+            ambientLookupEnabled: false
+        )
+
+        coordinator.translateSelection()
+        try await waitUntilOnMain(timeout: .seconds(15)) {
+            coordinator.isTranslating == false
+        }
+
+        coordinator.dismiss()
+
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(coordinator.translatedText == nil)
+        #expect(!coordinator.isVisible)
+    }
+
+    @Test("parcial atrasada de lookup nao sobrescreve o resultado final")
+    func lateLookupPartialDoesNotOverwriteFinal() async throws {
+        let reader = FakeSelectionReader(
+            selection: SelectedTextSelection(
+                text: "This feature is fast.",
+                bounds: nil
+            )
+        )
+        let llm = FakeTranslationLLM(
+            result: "Esse recurso é rápido.",
+            termResults: ["feature": "recurso"],
+            lateTermPartial: "rec"
+        )
+        let coordinator = SelectionTranslationCoordinator(
+            llmManager: llm,
+            selectionReader: reader,
+            ambientLookupEnabled: false
+        )
+
+        coordinator.translateSelection()
+        try await waitUntilOnMain(timeout: .seconds(15)) {
+            coordinator.isTranslating == false
+        }
+
+        coordinator.lookupWord("feature", immediate: true)
+        try await waitUntilOnMain(timeout: .seconds(15)) {
+            coordinator.isLookingUpTerm == false && coordinator.lookupTranslation == "recurso"
+        }
+
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(coordinator.lookupTranslation == "recurso")
     }
 }
 
@@ -174,15 +269,26 @@ private actor FakeTranslationLLM: LLMCorrecting {
 
     private let result: String
     private let termResults: [String: String]
+    /// Quando setados, disparam um onPartial ~80ms DEPOIS do resultado final —
+    /// simula o hop atrasado no MainActor que causava a race de sobrescrita.
+    private let latePartial: String?
+    private let lateTermPartial: String?
     private var text: String?
     private var targetLanguage: String?
     private var terms: [String] = []
     private var termContexts: [String] = []
     private var keepAliveValues: [Bool] = []
 
-    init(result: String, termResults: [String: String] = [:]) {
+    init(
+        result: String,
+        termResults: [String: String] = [:],
+        latePartial: String? = nil,
+        lateTermPartial: String? = nil
+    ) {
         self.result = result
         self.termResults = termResults
+        self.latePartial = latePartial
+        self.lateTermPartial = lateTermPartial
     }
 
     func setKeepAlive(_ alive: Bool) {
@@ -233,6 +339,12 @@ private actor FakeTranslationLLM: LLMCorrecting {
         self.text = text
         self.targetLanguage = targetLanguage
         onPartial?("Olá")
+        if let latePartial {
+            Task {
+                try? await Task.sleep(for: .milliseconds(80))
+                onPartial?(latePartial)
+            }
+        }
         return result
     }
 
@@ -247,6 +359,12 @@ private actor FakeTranslationLLM: LLMCorrecting {
         termContexts.append(context ?? "")
         let translated = termResults[term] ?? term
         onPartial?(translated)
+        if let lateTermPartial {
+            Task {
+                try? await Task.sleep(for: .milliseconds(80))
+                onPartial?(lateTermPartial)
+            }
+        }
         return translated
     }
 

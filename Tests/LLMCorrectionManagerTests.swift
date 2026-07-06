@@ -31,8 +31,11 @@ struct LLMCorrectionManagerTests {
 
         #expect(LLMGenerationProfile.correctionMaxTokens == 1024)
         #expect(parameters.maxTokens == 1024)
-        #expect(parameters.temperature == 0.7)
-        #expect(parameters.topP == 0.8)
+        // Temperatura baixa para EDIÇÃO de texto (não geração criativa):
+        // 0.7/0.8 eram os defaults de chat do Qwen e causavam paráfrases
+        // aleatórias na correção de transcrição.
+        #expect(parameters.temperature == 0.2)
+        #expect(parameters.topP == 0.9)
         #expect(parameters.topK == 20)
         #expect(parameters.minP == 0)
         #expect(LLMGenerationProfile.nonThinkingPromptSuffix(modelID: LLMModelOption.defaultID).contains("/no_think"))

@@ -16,39 +16,90 @@ struct TextInserter {
     /// o novo texto — evita Cmd+Z que agrupa operações e destrói edições anteriores do usuário.
     @MainActor static var lastPastedCount: Int = 0
 
+    /// Task pendente de restauração do clipboard, agendada após paste bem-sucedido.
+    /// Operações subsequentes aguardam sua conclusão antes de capturar novo snapshot,
+    /// para não fotografar um estado intermediário nosso em vez do conteúdo do usuário.
+    @MainActor static var pendingClipboardRestore: Task<Void, Never>?
+
+    /// Delay antes de restaurar o clipboard após o Cmd+V — o app alvo lê o
+    /// pasteboard de forma assíncrona ao processar o evento de teclado.
+    @MainActor static var clipboardRestoreDelay: UInt64 = 300_000_000
+
     /// Salva o app em foco atual (chamar antes de começar gravação)
     @MainActor static func saveFocusedApp() {
         previousApp = NSWorkspace.shared.frontmostApplication
         logger.debug("App em foco salvo: \(previousApp?.localizedName ?? "nenhum")")
     }
 
+    /// Aguarda a conclusão da restauração pendente (se houver) antes de uma nova
+    /// operação de paste — sem isso, o snapshot seguinte fotografaria nossa própria
+    /// transcrição em vez do conteúdo original do usuário.
+    @MainActor static func awaitPendingClipboardRestore() async {
+        if let pending = pendingClipboardRestore {
+            await pending.value
+            pendingClipboardRestore = nil
+        }
+    }
+
+    /// Agenda a devolução do snapshot ao clipboard após `clipboardRestoreDelay`.
+    /// A restauração só acontece se o `changeCount` não mudou nesse meio tempo —
+    /// se o usuário ou outro app copiou algo novo, o conteúdo mais recente vence.
+    /// Snapshot vazio não agenda nada: não há o que devolver e a transcrição
+    /// permanece no clipboard.
+    @MainActor static func scheduleClipboardRestore(
+        _ snapshot: ClipboardSnapshot,
+        to pasteboard: NSPasteboard,
+        ifChangeCountIs expected: Int
+    ) {
+        guard !snapshot.isEmpty else { return }
+        pendingClipboardRestore = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: clipboardRestoreDelay)
+            guard !Task.isCancelled else { return }
+            if snapshot.restore(to: pasteboard, ifChangeCountIs: expected) {
+                logger.debug("Clipboard anterior do usuário restaurado após paste")
+            } else {
+                logger.debug("Restore do clipboard pulado — conteúdo mudou após o paste")
+            }
+        }
+    }
+
     /// Insere texto no app em foco
     /// Retorna true se conseguiu inserir, false se falhou (sem permissão ou erro)
     ///
-    /// Não restaura o clipboard anterior — o texto transcrito permanece disponível
-    /// para Cmd+V manual caso o paste automático falhe (foco perdido, app lento, etc.).
-    /// Ver TASK-010: o restore agressivo apagava a transcrição quando o paste async
-    /// falhava silenciosamente, deixando o usuário sem texto em lugar nenhum.
+    /// Restaura o clipboard anterior do usuário SOMENTE após paste bem-sucedido,
+    /// com delay e condicional ao changeCount. Em falha de paste, a transcrição
+    /// permanece no clipboard para Cmd+V manual — ver TASK-010: o restore
+    /// incondicional apagava a transcrição quando o paste async falhava
+    /// silenciosamente, deixando o usuário sem texto em lugar nenhum.
     @discardableResult
     @MainActor func insert(_ text: String) async -> Bool {
         // Verifica permissão de Acessibilidade antes de tudo
         guard AXIsProcessTrusted() else {
             logger.error("Sem permissão de Acessibilidade — não é possível simular paste")
+            Self.lastPastedCount = 0
             return false
         }
 
+        // Aguarda restauração pendente de um paste anterior para fotografar o
+        // conteúdo real do usuário, não um estado intermediário nosso.
+        await Self.awaitPendingClipboardRestore()
+
         let pasteboard = NSPasteboard.general
+
+        // Fotografa o conteúdo do usuário antes de sobrescrever, para devolver após o paste
+        let snapshot = ClipboardSnapshot.capture(from: pasteboard)
 
         // Coloca texto transcrito no clipboard (permanece lá para fallback manual)
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-        Self.lastPastedCount = text.count
+        let transcriptChangeCount = pasteboard.changeCount
         logger.debug("Texto colocado no clipboard (\(text.count) chars)")
 
         // Reativa o app que estava em foco antes da gravação
         if let app = Self.previousApp {
             guard !app.isTerminated else {
                 logger.warning("App anterior (\(app.localizedName ?? "?")) já foi encerrado — texto disponível no clipboard")
+                Self.lastPastedCount = 0
                 return false
             }
             app.activate()
@@ -60,9 +111,19 @@ struct TextInserter {
         let pasteOk = Self.simulatePaste()
         if pasteOk {
             logger.debug("Paste simulado com sucesso")
+            // Devolve o conteúdo anterior do usuário depois que o app alvo
+            // consumir o Cmd+V. Em falha, nada é agendado: a transcrição fica
+            // no clipboard como fallback manual (TASK-010).
+            Self.scheduleClipboardRestore(snapshot, to: pasteboard, ifChangeCountIs: transcriptChangeCount)
         } else {
             logger.error("Falha ao simular paste — CGEvent retornou nil. Texto permanece no clipboard.")
         }
+
+        // Só arma o contador quando o paste de fato foi disparado. Antes, o
+        // contador era setado no início e permanecia armado mesmo com falha —
+        // a próxima correção LLM mandava N backspaces num campo que nunca
+        // recebeu o texto, apagando conteúdo real do usuário.
+        Self.lastPastedCount = pasteOk ? text.count : 0
 
         return pasteOk
     }
@@ -94,11 +155,18 @@ struct TextInserter {
         let charsToDelete = Self.lastPastedCount
         guard charsToDelete > 0 else {
             logger.warning("replaceLastPaste: lastPastedCount = 0, nada para substituir — apenas cola novo texto")
-            // Fallback: insere o novo texto normalmente
+            // Fallback: insere o novo texto normalmente (insert cuida do restore)
             return await insert(newText)
         }
 
+        // Aguarda restauração pendente do paste original antes de fotografar,
+        // para capturar o conteúdo do usuário e não a transcrição bruta.
+        await Self.awaitPendingClipboardRestore()
+
         let pasteboard = NSPasteboard.general
+
+        // Fotografa o conteúdo do usuário antes de sobrescrever com o texto corrigido
+        let snapshot = ClipboardSnapshot.capture(from: pasteboard)
 
         // Re-ativa app anterior
         if let app = Self.previousApp {
@@ -106,7 +174,9 @@ struct TextInserter {
                 logger.warning("App anterior (\(app.localizedName ?? "?")) já foi encerrado — texto corrigido será colocado no clipboard")
                 pasteboard.clearContents()
                 pasteboard.setString(newText, forType: .string)
-                Self.lastPastedCount = newText.count
+                // Nada foi colado no documento — desarma o contador para a
+                // próxima operação não deletar conteúdo alheio.
+                Self.lastPastedCount = 0
                 return false
             }
             app.activate()
@@ -121,7 +191,7 @@ struct TextInserter {
             logger.error("replaceLastPaste: simulateBackspaces falhou. Texto corrigido será colocado no clipboard.")
             pasteboard.clearContents()
             pasteboard.setString(newText, forType: .string)
-            Self.lastPastedCount = newText.count
+            Self.lastPastedCount = 0
             return false
         }
         logger.debug("Enviados \(charsToDelete) backspaces para substituir paste anterior")
@@ -129,17 +199,22 @@ struct TextInserter {
         // Delay para o app processar os backspaces
         try? await Task.sleep(nanoseconds: 150_000_000)
 
-        // Coloca texto corrigido no clipboard (permanece lá — sem restore, ver TASK-010)
+        // Coloca texto corrigido no clipboard
         pasteboard.clearContents()
         pasteboard.setString(newText, forType: .string)
-        Self.lastPastedCount = newText.count
+        let correctedChangeCount = pasteboard.changeCount
 
         // Delay para clipboard propagar
         try? await Task.sleep(nanoseconds: 50_000_000)
         let pasteOk = Self.simulatePaste()
-        if !pasteOk {
+        if pasteOk {
+            // Devolve o conteúdo anterior do usuário após o app alvo consumir o
+            // Cmd+V. Em falha, o texto corrigido fica no clipboard (TASK-010).
+            Self.scheduleClipboardRestore(snapshot, to: pasteboard, ifChangeCountIs: correctedChangeCount)
+        } else {
             logger.error("replaceLastPaste: simulatePaste falhou. Texto permanece no clipboard.")
         }
+        Self.lastPastedCount = pasteOk ? newText.count : 0
 
         return pasteOk
     }

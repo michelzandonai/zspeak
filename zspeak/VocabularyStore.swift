@@ -18,7 +18,9 @@ enum VocabularyBiasingProfile {
 @Observable
 @MainActor
 final class VocabularyStore {
-    var entries: [VocabularyEntry] = []
+    var entries: [VocabularyEntry] = [] {
+        didSet { invalidateReplacementCache() }
+    }
 
     private let vocabularyFile: URL
 
@@ -79,12 +81,26 @@ final class VocabularyStore {
         )
     }
 
+    /// Cache das regras compiladas de substituição. Invalidado quando
+    /// `entries` muda. Sem o cache, `applyReplacements` recompilava ~1 regex
+    /// por alias A CADA update da transcrição ao vivo (várias vezes/segundo,
+    /// na main thread) — centenas de compiles/s durante o ditado.
+    @ObservationIgnored
+    private var compiledReplacements: [(regex: NSRegularExpression, template: String)]?
+
+    /// Marca o cache de regex como obsoleto. Chamar em toda mutação de `entries`.
+    func invalidateReplacementCache() {
+        compiledReplacements = nil
+    }
+
     /// Aplica substituições aliases → term no texto transcrito.
     ///
     /// Fallback em Swift para complementar o context biasing nativo do FluidAudio.
     /// Serve como rede de segurança para aliases exatos no texto final.
     ///
-    /// - Busca com word boundaries (`\b`) — não substitui dentro de palavras
+    /// - Boundaries via lookaround (`(?<![\p{L}\p{N}])`...`(?![\p{L}\p{N}])`)
+    ///   em vez de `\b`: aliases com símbolo nas bordas (".NET", "C++",
+    ///   "@State") nunca casavam com `\b`, que exige transição word/non-word.
     /// - Case-insensitive — "Git Pool", "git pool", "GIT POOL" todos viram o term
     /// - Preserva o casing do term cadastrado pelo usuário
     /// - Aliases mais longos são aplicados primeiro, evitando que um alias curto "vaze"
@@ -92,6 +108,27 @@ final class VocabularyStore {
     /// - Apenas entradas habilitadas (`isEnabled`) participam
     func applyReplacements(to text: String) -> String {
         guard !text.isEmpty else { return text }
+
+        let rules = compiledReplacementRules()
+        guard !rules.isEmpty else { return text }
+
+        var result = text
+        for rule in rules {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = rule.regex.stringByReplacingMatches(
+                in: result,
+                options: [],
+                range: range,
+                withTemplate: rule.template
+            )
+        }
+        return result
+    }
+
+    private func compiledReplacementRules() -> [(regex: NSRegularExpression, template: String)] {
+        if let compiledReplacements {
+            return compiledReplacements
+        }
 
         var pairs: [(alias: String, term: String)] = []
         for entry in entries where entry.isEnabled {
@@ -105,24 +142,19 @@ final class VocabularyStore {
         }
         pairs.sort { $0.alias.count > $1.alias.count }
 
-        guard !pairs.isEmpty else { return text }
-
-        var result = text
+        var rules: [(regex: NSRegularExpression, template: String)] = []
+        rules.reserveCapacity(pairs.count)
         for (alias, term) in pairs {
             let escapedAlias = NSRegularExpression.escapedPattern(for: alias)
-            let pattern = "\\b\(escapedAlias)\\b"
+            let pattern = "(?<![\\p{L}\\p{N}])\(escapedAlias)(?![\\p{L}\\p{N}])"
             guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
                 continue
             }
-            let range = NSRange(location: 0, length: (result as NSString).length)
-            result = regex.stringByReplacingMatches(
-                in: result,
-                options: [],
-                range: range,
-                withTemplate: NSRegularExpression.escapedTemplate(for: term)
-            )
+            rules.append((regex: regex, template: NSRegularExpression.escapedTemplate(for: term)))
         }
-        return result
+
+        compiledReplacements = rules
+        return rules
     }
 
     // MARK: - Persistência JSON
@@ -285,7 +317,10 @@ final class VocabularyStore {
         ("git clean", ["get clean"], 10.0),
         ("fast-forward", ["fast forward"], 10.0),
         ("ff-only", ["ff only", "f f only"], 10.0),
-        ("HEAD", ["head"], 8.0),
+        // Sem alias "head": o replace textual transformaria qualquer "head"
+        // legítimo em fala com code-switching ("head of the team") na sigla.
+        // O biasing nativo do decoder (com contexto) continua cobrindo o termo.
+        ("HEAD", [], 8.0),
         ("remote", [], 8.0),
         ("upstream", [], 8.0),
         ("staged", [], 10.0),
@@ -307,9 +342,12 @@ final class VocabularyStore {
         ("entitlements", [], 8.0),
         ("DMG", ["d m g"], 10.0),
         ("ffmpeg", ["f f mpeg", "efe efe mpeg"], 10.0),
-        ("OPUS", ["opus"], 8.0),
+        // "opus" e "wave" são palavras comuns em inglês — como alias de
+        // substituição textual, corrompiam fala legítima. Mantidos só os
+        // aliases foneticamente inequívocos.
+        ("OPUS", [], 8.0),
         ("M4A", ["m quatro a", "m 4 a"], 8.0),
-        ("WAV", ["wave", "uav"], 8.0),
+        ("WAV", ["uav"], 8.0),
         ("pyannote", ["pai anote", "py anote"], 10.0),
         ("WeSpeaker", ["we speaker"], 10.0),
         ("diarização", ["diarization"], 8.0),
@@ -392,7 +430,22 @@ final class VocabularyStore {
             flagName: ".vocab_defaults_seeded_v5",
             in: directory
         )
+        seedAliasRemovals(
+            Self.dangerousAliasRemovalsV6,
+            flagName: ".vocab_alias_cleanup_v6",
+            in: directory
+        )
     }
+
+    /// Aliases de seeds antigos que sequestravam palavras reais: "wave",
+    /// "head" e "opus" são vocabulário legítimo (inglês/nomes) e viravam
+    /// WAV/HEAD/OPUS em qualquer fala. Instalações novas já não os recebem;
+    /// esta migração limpa o vocabulary.json de instalações existentes.
+    private static let dangerousAliasRemovalsV6: [(term: String, aliases: [String])] = [
+        ("WAV", ["wave"]),
+        ("HEAD", ["head"]),
+        ("OPUS", ["opus"])
+    ]
 
     private func seedDefaults(
         _ defaults: [(term: String, aliases: [String], weight: Float)],
@@ -443,6 +496,38 @@ final class VocabularyStore {
                     entries[entryIndex].aliases.append(alias)
                     mutated = true
                 }
+            }
+        }
+
+        if mutated {
+            saveJSON()
+        }
+        try? Data().write(to: flagURL)
+    }
+
+    /// Remove aliases específicos de entradas existentes (migração one-shot).
+    private func seedAliasRemovals(
+        _ removals: [(term: String, aliases: [String])],
+        flagName: String,
+        in directory: URL
+    ) {
+        let flagURL = directory.appendingPathComponent(flagName)
+        guard !FileManager.default.fileExists(atPath: flagURL.path) else { return }
+
+        var mutated = false
+        for removal in removals {
+            guard let entryIndex = entries.firstIndex(where: {
+                $0.term.caseInsensitiveCompare(removal.term) == .orderedSame
+            }) else {
+                continue
+            }
+
+            let before = entries[entryIndex].aliases.count
+            entries[entryIndex].aliases.removeAll { alias in
+                removal.aliases.contains { $0.caseInsensitiveCompare(alias) == .orderedSame }
+            }
+            if entries[entryIndex].aliases.count != before {
+                mutated = true
             }
         }
 

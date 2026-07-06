@@ -16,22 +16,29 @@ enum BenchmarkMetrics {
             .joined(separator: " ")
     }
 
-    /// Tokeniza por palavras ignorando pontuação superficial.
+    /// Tokeniza por palavras removendo pontuação apenas nas BORDAS do token.
+    ///
+    /// A tokenização anterior (`.byWords`) fragmentava termos técnicos em
+    /// hífens e pontos internos — "node.js" virava ["node","js"] e
+    /// "guarda-chuva" virava 2 tokens — inflando sistematicamente o WER em
+    /// PT-BR com code-switching (caso de uso central do app). O padrão dos
+    /// scorers de ASR (sclite/jiwer) é preservar o token e limpar as bordas.
     static func canonicalWords(_ text: String) -> [String] {
-        let canonical = canonicalText(text)
-        var words: [String] = []
-        canonical.enumerateSubstrings(
-            in: canonical.startIndex..<canonical.endIndex,
-            options: [.byWords, .substringNotRequired]
-        ) { _, range, _, _ in
-            words.append(String(canonical[range]))
-        }
-        return words
+        canonicalText(text)
+            .components(separatedBy: .whitespaces)
+            .map { $0.trimmingCharacters(in: .punctuationCharacters) }
+            .filter { !$0.isEmpty }
     }
 
-    /// CER sobre texto canônico.
+    /// CER sobre o MESMO texto normalizado usado pelo WER (pontuação de borda
+    /// removida). Antes, o CER preservava pontuação enquanto o WER a ignorava:
+    /// "Olá, mundo!" vs "olá mundo" dava WER 0 e CER > 0 — um modelo sem
+    /// pontuação parecia pior no CER sem erro real de reconhecimento.
     static func characterErrorRate(expected: String, actual: String) -> Double {
-        errorRate(reference: Array(canonicalText(expected)), hypothesis: Array(canonicalText(actual)))
+        errorRate(
+            reference: Array(canonicalWords(expected).joined(separator: " ")),
+            hypothesis: Array(canonicalWords(actual).joined(separator: " "))
+        )
     }
 
     /// WER sobre tokenização por palavra.

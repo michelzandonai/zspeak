@@ -1,11 +1,57 @@
 import SwiftUI
 import AppKit
 
+/// Tokens visuais do overlay — hierarquia de texto, superfícies e acentos por
+/// estado. Centraliza os valores que antes viviam espalhados como
+/// `.white.opacity(x)` em cada subview, garantindo consistência.
+enum OverlayTheme {
+    static let cornerRadius: CGFloat = 16
+    static let innerRadius: CGFloat = 9
+
+    static let textPrimary = Color.white.opacity(0.96)
+    static let textSecondary = Color.white.opacity(0.74)
+    static let textTertiary = Color.white.opacity(0.50)
+
+    static let surface = Color.white.opacity(0.055)
+    static let surfaceStroke = Color.white.opacity(0.11)
+    static let raisedSurface = Color.white.opacity(0.09)
+    static let raisedStroke = Color.white.opacity(0.22)
+
+    /// Vermelho vivo do estado de gravação (dot pulsante + badge "ao vivo").
+    static let recordingAccent = Color(red: 1.0, green: 0.30, blue: 0.32)
+    /// Azul frio do estado de processamento.
+    static let processingAccent = Color(red: 0.45, green: 0.68, blue: 1.0)
+
+    /// Fundo "dark glass": base quase preta com leve tinta azulada no topo.
+    static var backgroundGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 0.095, green: 0.10, blue: 0.12).opacity(0.97),
+                Color(red: 0.030, green: 0.033, blue: 0.045).opacity(0.96),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    /// Borda com brilho concentrado na aresta superior — dá o relevo de vidro.
+    static var edgeHighlight: LinearGradient {
+        LinearGradient(
+            colors: [Color.white.opacity(0.30), Color.white.opacity(0.07)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+}
+
 /// Modelo observável do overlay — atualizado in-place para evitar recriação de views
 @Observable
 @MainActor
 final class OverlayModel {
     var state: AppState.RecordingState = .idle
+    /// Instante do 1º sample da sessão atual — âncora do timer do chip.
+    /// Vem do RecordingController; sobrevive a recriações do overlay.
+    var recordingStartedAt: Date?
     var isModelReady: Bool = false
     var focusedAppName: String = ""
     var focusedAppIcon: NSImage?
@@ -31,6 +77,9 @@ final class OverlayModel {
     var waveformAnimationPhaseOverride: TimeInterval?
     /// Usado apenas por snapshots para renderizar a waveform em estado ativo.
     var waveformLevelOverride: Float?
+    /// Mostra o hint "esc cancela" durante a gravação — espelha a preferência
+    /// `escapeToCancel` do ActivationKeyManager (wired em App.swift).
+    var escHintEnabled: Bool = true
 
     // Modo Prompt
     var promptModeEnabled: Bool = false
@@ -125,7 +174,7 @@ struct OverlayView: View {
     }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
             if model.translationVisible {
                 if model.selectionTranslationPresentation == .compactLookup {
                     CompactSelectionLookupOverlayContent(model: model)
@@ -133,84 +182,19 @@ struct OverlayView: View {
                     SelectionTranslationOverlayContent(model: model)
                 }
             } else {
-            // Linha superior: app em foco + branding (estilo Spokenly)
-            HStack(spacing: 8) {
-                if let icon = model.focusedAppIcon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 20, height: 20)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .accessibilityHidden(true)
-                }
+            // Header: app em foco à esquerda + chip de estado à direita.
+            OverlayHeader(model: model)
 
-                Text(model.focusedAppName)
-                    .font(.system(.body, design: .default).weight(.medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .lineLimit(1)
-                    .accessibilityLabel("App em foco: \(model.focusedAppName)")
-
-                Spacer()
-
-                Image(systemName: "waveform")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .accessibilityHidden(true)
-                Text("zspeak")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .accessibilityHidden(true)
-            }
-
-            // Bloco central por estado
-            if state == .preparing {
-                // Engine subindo entre o press do hotkey e o 1º sample real.
-                // Mostra um spinner discreto com o mesmo footprint vertical da
-                // waveform para evitar "pulo" de layout na transição → recording.
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white.opacity(0.7))
-                        .accessibilityHidden(true)
-                    Text("Preparando microfone...")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.75))
-                }
-                .frame(height: 20)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Preparando microfone")
-            } else if state == .recording {
+            // Waveform visível já no preparing (com movimento idle) — evita o
+            // pulo de layout na transição preparing → recording e dá feedback
+            // imediato no press da hotkey.
+            if state == .preparing || state == .recording {
                 WaveformView(model: model)
-                    .frame(height: 48)
+                    .frame(height: 44)
+                    .frame(maxWidth: .infinity)
                     .accessibilityLabel("Forma de onda do áudio capturado")
 
-                // Nome do mic ativo durante gravação — reativo via MicrophoneManager.
-                // Tipografia pequena e secundária para não competir com a waveform.
-                // Trunca no meio se o nome do device for muito longo.
-                // Dynamic Type limitado a xLarge: em tamanhos a11y, o nome do mic
-                // cresceria demais e quebraria o layout lateral do overlay.
-                let micName = model.effectiveMicrophoneName
-                if !micName.isEmpty {
-                    HStack(spacing: 4) {
-                        Image(systemName: "mic.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.7))
-                            .accessibilityHidden(true)
-                        Text(micName)
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.7))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .dynamicTypeSize(...DynamicTypeSize.xLarge)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Microfone ativo: \(micName)")
-                }
-            } else if state == .processing {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(.white.opacity(0.7))
-                    .frame(height: 20)
-                    .accessibilityLabel("Processando transcrição")
+                RecordingMetaRow(model: model)
             }
 
             if state == .recording || state == .processing {
@@ -232,7 +216,7 @@ struct OverlayView: View {
             // Seção inferior: seletor de prompt + ações rápidas (Modo Prompt)
             if model.promptModeEnabled {
                 Divider()
-                    .background(.white.opacity(0.25))
+                    .background(.white.opacity(0.16))
 
                 PromptSelectorBar(model: model)
 
@@ -243,7 +227,7 @@ struct OverlayView: View {
                 // Resultado da última correção LLM (toggleável)
                 if model.lastLLMResult != nil {
                     Divider()
-                        .background(.white.opacity(0.25))
+                        .background(.white.opacity(0.16))
 
                     LLMResultView(model: model)
                 }
@@ -251,27 +235,18 @@ struct OverlayView: View {
             }
         }
         .padding(.horizontal, model.selectionTranslationPresentation == .compactLookup ? 11 : 16)
-        .padding(.vertical, model.selectionTranslationPresentation == .compactLookup ? 9 : 12)
+        .padding(.vertical, model.selectionTranslationPresentation == .compactLookup ? 9 : 13)
         .frame(width: overlayWidth)
         .fixedSize(horizontal: false, vertical: true)
         .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.045, green: 0.047, blue: 0.050).opacity(0.96),
-                            Color(red: 0.010, green: 0.012, blue: 0.014).opacity(0.94),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+            RoundedRectangle(cornerRadius: OverlayTheme.cornerRadius, style: .continuous)
+                .fill(OverlayTheme.backgroundGradient)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(.white.opacity(0.22), lineWidth: 1)
+            RoundedRectangle(cornerRadius: OverlayTheme.cornerRadius, style: .continuous)
+                .strokeBorder(OverlayTheme.edgeHighlight, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.36), radius: 16, y: 6)
+        .shadow(color: .black.opacity(0.40), radius: 22, y: 10)
         // VoiceOver: anuncia o estado corrente do overlay como valor do container.
         // O label de cada bloco interno (preparing/recording/processing) também
         // é exposto, mas esse valor global ajuda a orientar quem entra no overlay.
@@ -285,8 +260,230 @@ struct OverlayView: View {
             return 230
         }
         if model.translationVisible { return 500 }
-        if state == .recording || state == .processing { return 520 }
+        // Preparing já usa a largura de gravação: o overlay nasce no tamanho
+        // final e não "salta" quando o primeiro sample chega.
+        if state == .preparing || state == .recording || state == .processing { return 520 }
         return model.promptModeEnabled ? 520 : 320
+    }
+}
+
+/// Linha superior do overlay: destino da transcrição (app em foco) à esquerda
+/// e o chip de estado (idle/preparando/gravando/processando) à direita.
+private struct OverlayHeader: View {
+    let model: OverlayModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let icon = model.focusedAppIcon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 20, height: 20)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .accessibilityHidden(true)
+            }
+
+            Text(model.focusedAppName)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(OverlayTheme.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .accessibilityLabel("App em foco: \(model.focusedAppName)")
+
+            Spacer(minLength: 12)
+
+            OverlayStatusChip(model: model)
+        }
+    }
+}
+
+/// Chip de estado no canto superior direito. Substitui o branding estático
+/// "zspeak" por informação útil: dot pulsante + timer na gravação, spinner
+/// nos estados de espera. No idle mantém a marca discreta.
+private struct OverlayStatusChip: View {
+    let model: OverlayModel
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        switch model.state {
+        case .idle:
+            HStack(spacing: 5) {
+                Image(systemName: "waveform")
+                    .font(.caption2)
+                Text("zspeak")
+                    .font(.caption.weight(.medium))
+            }
+            .foregroundStyle(OverlayTheme.textTertiary)
+            .accessibilityHidden(true)
+
+        case .preparing:
+            chip(tint: Color.white.opacity(0.65), fill: OverlayTheme.surface, stroke: OverlayTheme.surfaceStroke) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(.white.opacity(0.7))
+                    .accessibilityHidden(true)
+                Text("Preparando")
+                    .font(.caption.weight(.medium))
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Preparando microfone")
+
+        case .recording:
+            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                // Âncora vem do modelo (1º sample da sessão) — o timer não
+                // zera se o overlay for fechado/reaberto durante a gravação.
+                let elapsed = model.waveformAnimationPhaseOverride
+                    ?? model.recordingStartedAt.map { max(0, context.date.timeIntervalSince($0)) }
+                    ?? 0
+                chip(
+                    tint: OverlayTheme.recordingAccent,
+                    fill: OverlayTheme.recordingAccent.opacity(0.16),
+                    stroke: OverlayTheme.recordingAccent.opacity(0.34)
+                ) {
+                    PulsingDot(
+                        color: OverlayTheme.recordingAccent,
+                        phase: model.waveformAnimationPhaseOverride,
+                        frozen: reduceMotion
+                    )
+                    Text(Self.formattedElapsedTime(elapsed))
+                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                        .contentTransition(.numericText())
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Gravando áudio")
+
+        case .processing:
+            chip(
+                tint: OverlayTheme.processingAccent,
+                fill: OverlayTheme.processingAccent.opacity(0.14),
+                stroke: OverlayTheme.processingAccent.opacity(0.30)
+            ) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(OverlayTheme.processingAccent)
+                    .accessibilityHidden(true)
+                Text("Transcrevendo")
+                    .font(.caption.weight(.medium))
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Processando transcrição")
+        }
+    }
+
+    private func chip<Content: View>(
+        tint: Color,
+        fill: Color,
+        stroke: Color,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 6) {
+            content()
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(fill, in: Capsule())
+        .overlay(Capsule().strokeBorder(stroke, lineWidth: 0.5))
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
+    }
+
+    static func formattedElapsedTime(_ elapsed: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(elapsed.rounded(.down)))
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return "\(minutes):\(String(format: "%02d", seconds))"
+    }
+}
+
+/// Dot vermelho pulsante do estado de gravação. Congela em snapshots (phase
+/// override) e quando "Reduce Motion" está ativo.
+private struct PulsingDot: View {
+    let color: Color
+    let phase: TimeInterval?
+    let frozen: Bool
+
+    var body: some View {
+        if frozen || phase != nil {
+            dot(opacity: 1.0)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                dot(opacity: 0.55 + 0.45 * (sin(t * 3.6) + 1) / 2)
+            }
+        }
+    }
+
+    private func dot(opacity: Double) -> some View {
+        Circle()
+            .fill(color.opacity(opacity))
+            .frame(width: 7, height: 7)
+            .shadow(color: color.opacity(opacity * 0.6), radius: 3)
+            .accessibilityHidden(true)
+    }
+}
+
+/// Linha de metadados abaixo da waveform: mic ativo (ou "preparando") à
+/// esquerda e o hint de cancelamento via Esc à direita.
+private struct RecordingMetaRow: View {
+    let model: OverlayModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if model.state == .preparing {
+                HStack(spacing: 5) {
+                    Image(systemName: "mic")
+                        .font(.caption2)
+                        .accessibilityHidden(true)
+                    Text("Preparando microfone...")
+                        .font(.caption2)
+                }
+                .foregroundStyle(OverlayTheme.textTertiary)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Preparando microfone")
+            } else {
+                // Nome do mic ativo — reativo via MicrophoneManager. Trunca no
+                // meio se o nome do device for muito longo. Dynamic Type limitado
+                // a xLarge para não quebrar o layout lateral do overlay.
+                let micName = model.effectiveMicrophoneName
+                if !micName.isEmpty {
+                    HStack(spacing: 5) {
+                        Image(systemName: "mic.fill")
+                            .font(.caption2)
+                            .accessibilityHidden(true)
+                        Text(micName)
+                            .font(.caption2)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .foregroundStyle(OverlayTheme.textTertiary)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Microfone ativo: \(micName)")
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            if model.escHintEnabled && model.state == .recording {
+                HStack(spacing: 4) {
+                    Text("esc")
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1.5)
+                        .background(OverlayTheme.raisedSurface, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .strokeBorder(OverlayTheme.surfaceStroke, lineWidth: 0.5)
+                        )
+                    Text("cancela")
+                        .font(.caption2)
+                }
+                .foregroundStyle(OverlayTheme.textTertiary)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Tecla Escape cancela a gravação")
+            }
+        }
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
     }
 }
 
@@ -475,17 +672,43 @@ private struct TranscriptionPreviewBlock: View {
         state == .recording || state == .processing
     }
 
+    /// Rótulo curto em mini-caps — menos peso visual que o Label antigo com ícone.
+    private var badgeText: String {
+        switch state {
+        case .recording:
+            return "AO VIVO"
+        case .processing:
+            return "TRANSCRIÇÃO"
+        case .preparing, .idle:
+            return "ÚLTIMA TRANSCRIÇÃO"
+        }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: "quote.bubble")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.82))
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 5) {
+                if state == .recording {
+                    Circle()
+                        .fill(OverlayTheme.recordingAccent)
+                        .frame(width: 5, height: 5)
+                        .accessibilityHidden(true)
+                }
+                Text(badgeText)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .tracking(0.9)
+                    .foregroundStyle(
+                        state == .recording
+                            ? OverlayTheme.recordingAccent.opacity(0.92)
+                            : OverlayTheme.textTertiary
+                    )
+                    .accessibilityLabel(title)
+            }
 
             ScrollView {
                 if isWaitingForText {
                     Text(waitingMessage)
                         .font(.body)
-                        .foregroundStyle(.white.opacity(0.62))
+                        .foregroundStyle(OverlayTheme.textTertiary)
                         .italic()
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
@@ -503,14 +726,14 @@ private struct TranscriptionPreviewBlock: View {
             .defaultScrollAnchor(.bottom)
             .frame(minHeight: shouldAnimateText ? 52 : nil, maxHeight: 96)
         }
-        .padding(8)
+        .padding(10)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.white.opacity(0.05))
+            RoundedRectangle(cornerRadius: OverlayTheme.innerRadius, style: .continuous)
+                .fill(OverlayTheme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(.white.opacity(0.2), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: OverlayTheme.innerRadius, style: .continuous)
+                .strokeBorder(OverlayTheme.surfaceStroke, lineWidth: 0.5)
         )
     }
 }
@@ -592,6 +815,12 @@ private struct ProgressiveTranscriptText: View {
             }
         }
 
+        // Target já aguardado por descontinuidade de texto inteiro. Sem essa
+        // marca, um target final que encolhe muito o texto (ex.: preview longo
+        // errado → resultado final curto) faria o loop dormir e recomputar a
+        // mesma revisão para sempre — o overlay nunca mostraria o texto final.
+        var discontinuityWaitedTarget: String?
+
         revealLoop: while stableText != targetText, !Task.isCancelled {
             let nextTarget = targetText
             var revision = ProgressiveTextReveal.revision(
@@ -600,6 +829,29 @@ private struct ProgressiveTranscriptText: View {
             )
 
             if !revision.removed.isEmpty {
+                let wholeTextDelay = ProgressiveTextReveal.wholeTextDiscontinuityDelayMilliseconds(
+                    for: revision
+                )
+                if wholeTextDelay > 0, discontinuityWaitedTarget != nextTarget {
+                    try? await Task.sleep(for: .milliseconds(Int64(wholeTextDelay)))
+                    guard !Task.isCancelled else { break }
+
+                    if targetText != nextTarget {
+                        continue revealLoop
+                    }
+
+                    let retryDelay = ProgressiveTextReveal.wholeTextDiscontinuityRetryDelayMilliseconds
+                    if retryDelay > 0 {
+                        try? await Task.sleep(for: .milliseconds(Int64(retryDelay)))
+                    }
+                    guard !Task.isCancelled else { break }
+                    // Espera única por target: se ele continuar o mesmo na
+                    // próxima volta (era o resultado final), anima a revisão
+                    // em vez de esperar indefinidamente.
+                    discontinuityWaitedTarget = nextTarget
+                    continue revealLoop
+                }
+
                 let stabilizationDelay = ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(
                     for: revision
                 )
@@ -759,6 +1011,12 @@ private struct ProgressiveTranscriptText: View {
                 }
             }
         }
+
+        if !Task.isCancelled, stableText == targetText {
+            withAnimation(.easeOut(duration: 0.14)) {
+                displayedRevision = .plain(stableText)
+            }
+        }
     }
 }
 
@@ -798,24 +1056,28 @@ struct PromptSelectorBar: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(OverlayTheme.textSecondary)
+                            .accessibilityHidden(true)
                         Text(model.selectedPrompt?.name ?? "Selecionar prompt")
-                            .font(.body.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.95))
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(OverlayTheme.textPrimary)
                             .lineLimit(1)
                         Image(systemName: "chevron.down")
                             .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.7))
+                            .foregroundStyle(OverlayTheme.textTertiary)
                             .accessibilityHidden(true)
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(.white.opacity(0.08))
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(OverlayTheme.raisedSurface)
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(.white.opacity(0.25), lineWidth: 0.5)
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(OverlayTheme.raisedStroke, lineWidth: 0.5)
                     )
                     .contentShape(Rectangle())
                 }
@@ -832,16 +1094,16 @@ struct PromptSelectorBar: View {
                 } label: {
                     Image(systemName: "doc.on.clipboard")
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(OverlayTheme.textSecondary)
                         .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, 7)
                         .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(.white.opacity(0.08))
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(OverlayTheme.raisedSurface)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(.white.opacity(0.25), lineWidth: 0.5)
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(OverlayTheme.raisedStroke, lineWidth: 0.5)
                         )
                         .contentShape(Rectangle())
                 }
@@ -1018,12 +1280,12 @@ private struct LLMTextBlock: View {
         }
         .padding(8)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.white.opacity(0.05))
+            RoundedRectangle(cornerRadius: OverlayTheme.innerRadius, style: .continuous)
+                .fill(OverlayTheme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(.white.opacity(0.2), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: OverlayTheme.innerRadius, style: .continuous)
+                .strokeBorder(OverlayTheme.surfaceStroke, lineWidth: 0.5)
         )
     }
 }
@@ -1075,12 +1337,12 @@ private struct LLMSplitDiffBlock: View {
         }
         .padding(8)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.white.opacity(0.05))
+            RoundedRectangle(cornerRadius: OverlayTheme.innerRadius, style: .continuous)
+                .fill(OverlayTheme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(.white.opacity(0.2), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: OverlayTheme.innerRadius, style: .continuous)
+                .strokeBorder(OverlayTheme.surfaceStroke, lineWidth: 0.5)
         )
     }
 }
@@ -1166,63 +1428,6 @@ private struct PromptInlineDiffText: View {
     }
 }
 
-private struct PromptDiffSegmentRow: View {
-    let segment: PromptDiffSegment
-
-    private var tint: Color {
-        switch segment.kind {
-        case .equal: return .white
-        case .removed: return .red
-        case .added: return .green
-        }
-    }
-
-    private var marker: String {
-        switch segment.kind {
-        case .equal: return " "
-        case .removed: return "-"
-        case .added: return "+"
-        }
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            Text(marker)
-                .font(.caption.monospaced().weight(.bold))
-                .foregroundStyle(tint.opacity(segment.kind == .equal ? 0.25 : 0.95))
-                .frame(width: 12, alignment: .center)
-
-            Text(segment.text)
-                .font(.caption)
-                .foregroundStyle(.white.opacity(segment.kind == .equal ? 0.86 : 0.96))
-                .strikethrough(segment.kind == .removed, color: .white.opacity(0.75))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(segment.kind == .equal ? .white.opacity(0.035) : tint.opacity(0.18))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 5)
-                .stroke(segment.kind == .equal ? .white.opacity(0.06) : tint.opacity(0.36), lineWidth: 0.5)
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityValue(segment.text)
-    }
-
-    private var accessibilityLabel: String {
-        switch segment.kind {
-        case .equal: return "Sem alteração"
-        case .removed: return "Removido"
-        case .added: return "Adicionado"
-        }
-    }
-}
-
 private struct PromptSideBySideDiff {
     let left: [PromptDiffSegment]
     let right: [PromptDiffSegment]
@@ -1240,124 +1445,11 @@ private struct PromptDiffSegment: Identifiable {
     let text: String
 }
 
-/// Diff simples em estilo GitHub: vermelho para trechos removidos da
-/// transcrição bruta e verde para trechos adicionados pelo prompt/LLM.
-private struct LLMDiffBlock: View {
-    let original: String
-    let revised: String
-
-    private var chunks: [PromptDiffChunk] {
-        PromptWordDiff.chunks(original: original, revised: revised)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Mudanças", systemImage: "plus.forwardslash.minus")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.82))
-
-            if chunks.isEmpty {
-                Text("Sem mudanças relevantes.")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.62))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(chunks) { chunk in
-                            PromptDiffRow(chunk: chunk)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 120)
-            }
-        }
-        .padding(8)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.white.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(.white.opacity(0.2), lineWidth: 0.5)
-        )
-    }
-}
-
-private struct PromptDiffRow: View {
-    let chunk: PromptDiffChunk
-
-    private var tint: Color {
-        switch chunk.kind {
-        case .removed: return .red
-        case .added: return .green
-        }
-    }
-
-    private var prefix: String {
-        switch chunk.kind {
-        case .removed: return "-"
-        case .added: return "+"
-        }
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            Text(prefix)
-                .font(.caption.monospaced().weight(.bold))
-                .foregroundStyle(tint.opacity(0.95))
-                .frame(width: 12, alignment: .center)
-
-            Text(chunk.text)
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.94))
-                .strikethrough(chunk.kind == .removed, color: .white.opacity(0.75))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(tint.opacity(0.18))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 5)
-                .stroke(tint.opacity(0.36), lineWidth: 0.5)
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(chunk.kind == .removed ? "Removido" : "Adicionado")
-        .accessibilityValue(chunk.text)
-    }
-}
-
-private struct PromptDiffChunk: Identifiable {
-    enum Kind {
-        case removed
-        case added
-    }
-
-    let id = UUID()
-    let kind: Kind
-    let text: String
-}
-
 private enum PromptWordDiff {
     private enum Edit {
         case equal(String)
         case removed(String)
         case added(String)
-    }
-
-    static func chunks(original: String, revised: String) -> [PromptDiffChunk] {
-        let originalTokens = tokenize(original)
-        let revisedTokens = tokenize(revised)
-        guard !originalTokens.isEmpty || !revisedTokens.isEmpty else { return [] }
-
-        let edits = edits(originalTokens: originalTokens, revisedTokens: revisedTokens)
-        return groupedChunks(from: edits)
     }
 
     static func sideBySide(original: String, revised: String) -> PromptSideBySideDiff {
@@ -1442,44 +1534,6 @@ private enum PromptWordDiff {
         }
 
         return result
-    }
-
-    private static func groupedChunks(from edits: [Edit]) -> [PromptDiffChunk] {
-        var chunks: [PromptDiffChunk] = []
-        var currentKind: PromptDiffChunk.Kind?
-        var currentWords: [String] = []
-
-        func flush() {
-            guard let kind = currentKind else { return }
-            let text = currentWords.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty {
-                chunks.append(PromptDiffChunk(kind: kind, text: text))
-            }
-            currentKind = nil
-            currentWords = []
-        }
-
-        for edit in edits {
-            switch edit {
-            case .equal:
-                flush()
-            case .removed(let word):
-                if currentKind != .removed {
-                    flush()
-                    currentKind = .removed
-                }
-                currentWords.append(word)
-            case .added(let word):
-                if currentKind != .added {
-                    flush()
-                    currentKind = .added
-                }
-                currentWords.append(word)
-            }
-        }
-
-        flush()
-        return chunks
     }
 
     private static func groupedSideBySide(from edits: [Edit]) -> PromptSideBySideDiff {
@@ -1618,11 +1672,11 @@ struct TextInputBlock: View {
         }
         .padding(8)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.white.opacity(0.05))
+            RoundedRectangle(cornerRadius: OverlayTheme.innerRadius, style: .continuous)
+                .fill(OverlayTheme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: OverlayTheme.innerRadius, style: .continuous)
                 .stroke(.white.opacity(isFocused ? 0.35 : 0.2), lineWidth: 0.5)
         )
     }
@@ -1712,23 +1766,24 @@ struct TextInputBlock: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.white.opacity(0.05))
+            RoundedRectangle(cornerRadius: OverlayTheme.innerRadius, style: .continuous)
+                .fill(OverlayTheme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(.white.opacity(0.2), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: OverlayTheme.innerRadius, style: .continuous)
+                .strokeBorder(OverlayTheme.surfaceStroke, lineWidth: 0.5)
         )
     }
 }
 
-/// HUD de voz inspirado no padrão mobile do ChatGPT: barras discretas,
-/// preview ao vivo separado e relógio visual desacoplado do volume.
+/// HUD de voz inspirado no padrão mobile do ChatGPT: barras discretas com
+/// movimento idle suave e resposta ao nível real do microfone. O relógio de
+/// gravação vive no chip de estado do header (OverlayStatusChip).
 struct WaveformView: View {
     let model: OverlayModel
 
-    private let barCount = 32
-    private let sampleCount = 32
+    private let barCount = 44
+    private let sampleCount = 44
     private let barWidth: CGFloat = 4
     private let barSpacing: CGFloat = 3
     private let minimumBarHeight: CGFloat = 4
@@ -1737,7 +1792,7 @@ struct WaveformView: View {
     private let recordingColor = Color.white
     private let renderPeriod: TimeInterval = 1.0 / 60.0
 
-    @State private var history: [Float] = Array(repeating: 0, count: 32)
+    @State private var history: [Float] = Array(repeating: 0, count: 44)
     @State private var smoothedLevel: Float = 0
     @State private var sampleTask: Task<Void, Never>?
     @State private var animationStartTime: TimeInterval = Date.timeIntervalSinceReferenceDate
@@ -1748,23 +1803,14 @@ struct WaveformView: View {
                 0,
                 context.date.timeIntervalSinceReferenceDate - animationStartTime
             )
-            HStack(spacing: 10) {
-                Canvas { canvas, size in
-                    drawWaveform(
-                        in: &canvas,
-                        size: size,
-                        phase: phase
-                    )
-                }
-                .frame(width: waveformWidth, height: waveformHeight)
-
-                Text(formattedElapsedTime(phase))
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.58))
-                    .frame(width: 34, alignment: .leading)
-                    .accessibilityHidden(true)
+            Canvas { canvas, size in
+                drawWaveform(
+                    in: &canvas,
+                    size: size,
+                    phase: phase
+                )
             }
-            .frame(height: waveformHeight)
+            .frame(width: waveformWidth, height: waveformHeight)
             .shadow(
                 color: recordingColor.opacity(0.10 + Double(smoothedLevel) * 0.18),
                 radius: 5 + CGFloat(smoothedLevel) * 8,
@@ -1855,13 +1901,6 @@ struct WaveformView: View {
                 with: .color(recordingColor.opacity(opacity))
             )
         }
-    }
-
-    private func formattedElapsedTime(_ elapsed: TimeInterval) -> String {
-        let totalSeconds = max(0, Int(elapsed.rounded(.down)))
-        let minutes = totalSeconds / 60
-        let seconds = totalSeconds % 60
-        return "\(minutes):\(String(format: "%02d", seconds))"
     }
 
 }

@@ -25,6 +25,8 @@ struct BenchmarkView: View {
 
     // MARK: - Erros por fixture
     @State private var errorsById: [UUID: String] = [:]
+    /// Erro do último import de WAV externo (formato não suportado etc.).
+    @State private var importError: String?
 
     // MARK: - Filtros
     @State private var showOnlyHighError = false
@@ -276,6 +278,14 @@ struct BenchmarkView: View {
             }
         } message: {
             Text("Esta ação não pode ser desfeita.")
+        }
+        .alert("Falha ao importar WAV", isPresented: .init(
+            get: { importError != nil },
+            set: { if !$0 { importError = nil } }
+        )) {
+            Button("OK", role: .cancel) { importError = nil }
+        } message: {
+            Text(importError ?? "")
         }
     }
 
@@ -580,11 +590,17 @@ struct BenchmarkView: View {
         return rtf > 0.8
     }
 
+    /// Percentil com interpolação linear entre ranks. O nearest-rank anterior
+    /// (`rounded(.up)`) fazia P95 ≡ máximo para qualquer n ≤ 20 — o card "P95"
+    /// duplicava o "Pior caso" no fluxo padrão de 20 fixtures.
     private func percentile(_ sortedValues: [Double], percentile: Double) -> Double {
         guard !sortedValues.isEmpty else { return 0 }
         let clamped = min(1, max(0, percentile))
-        let index = Int((Double(sortedValues.count - 1) * clamped).rounded(.up))
-        return sortedValues[min(index, sortedValues.count - 1)]
+        let position = Double(sortedValues.count - 1) * clamped
+        let lower = Int(position.rounded(.down))
+        let upper = min(lower + 1, sortedValues.count - 1)
+        let fraction = position - Double(lower)
+        return sortedValues[lower] + (sortedValues[upper] - sortedValues[lower]) * fraction
     }
 
     // MARK: - Player de áudio
@@ -692,13 +708,22 @@ struct BenchmarkView: View {
         panel.allowedContentTypes = [.wav]
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            if let fileName = try? store.importWAV(from: url) {
+            do {
+                // Valida o WAV ANTES de criar a fixture: formato errado
+                // (44,1 kHz, estéreo, float) agora falha com mensagem clara em
+                // vez de virar lixo silencioso que corrompe o agregado.
+                let samples = try BenchmarkStore.decodeWAV(Data(contentsOf: url))
+                let fileName = try store.importWAV(from: url)
                 store.addFixture(
                     name: url.deletingPathExtension().lastPathComponent,
                     expectedText: "",
                     audioFileName: fileName,
-                    duration: 0
+                    // Duração derivada dos samples — com 0, o RTF nunca era
+                    // calculado para WAV importado manualmente.
+                    duration: Double(samples.count) / 16_000.0
                 )
+            } catch {
+                importError = error.localizedDescription
             }
         }
     }

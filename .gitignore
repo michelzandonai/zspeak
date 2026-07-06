@@ -48,5 +48,8 @@ Packages/
 # Local assistant/worktree artifacts
 .claude/
 
+# Evidências locais de teste manual (screenshots, vídeos, WAVs)
+evidencias/
+
 # Temp files
 Untitled-*

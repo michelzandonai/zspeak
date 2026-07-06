@@ -39,6 +39,11 @@ final class SelectionTranslationCoordinator {
 
     private let llmManager: any LLMCorrecting
     private let selectionReader: any SelectedTextReading
+    /// Identifica a tradução em voo. Todo write de estado pós-await confere
+    /// este ID: parciais atrasadas de uma tradução cancelada/dispensada (o hop
+    /// `Task { @MainActor }` não herda o cancelamento da task de origem) não
+    /// podem sobrescrever o estado da tradução atual nem de overlay fechado.
+    private var translationRunID: UUID?
     private var translationTask: Task<Void, Never>?
     private var lookupTask: Task<Void, Never>?
     private var ambientLookupTask: Task<Void, Never>?
@@ -73,6 +78,9 @@ final class SelectionTranslationCoordinator {
         translationTask?.cancel()
         TextInserter.saveFocusedApp()
 
+        let runID = UUID()
+        translationRunID = runID
+
         isVisible = true
         isTranslating = true
         presentation = .fullTranslation
@@ -87,7 +95,7 @@ final class SelectionTranslationCoordinator {
 
             do {
                 let selection = try await selectionReader.readSelectedText()
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, translationRunID == runID else { return }
 
                 sourceText = selection.text
                 anchorRect = selection.bounds ?? anchorRect
@@ -111,13 +119,16 @@ final class SelectionTranslationCoordinator {
                     maxTokens: maxTokens(for: selection.text),
                     onPartial: { [weak self] partial in
                         Task { @MainActor in
-                            guard let self, !Task.isCancelled else { return }
+                            // Confere o runID, não Task.isCancelled: este hop é uma
+                            // task NOVA que nunca está cancelada, mesmo quando a
+                            // tradução de origem já foi cancelada/finalizada.
+                            guard let self, self.translationRunID == runID else { return }
                             self.translatedText = partial
                         }
                     }
                 )
 
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, translationRunID == runID else { return }
 
                 let trimmed = translated.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.isEmpty {
@@ -130,16 +141,21 @@ final class SelectionTranslationCoordinator {
             } catch is CancellationError {
                 selectionTranslationLogger.debug("Tradução de seleção cancelada")
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, translationRunID == runID else { return }
                 translatedText = nil
                 errorMessage = error.localizedDescription
                 selectionTranslationLogger.error("Tradução de seleção falhou: \(error.localizedDescription)")
             }
 
-            if !Task.isCancelled {
+            // Encerra o run SINCRONAMENTE junto com o resultado final: qualquer
+            // parcial ainda na fila do MainActor falha no guard de runID e não
+            // sobrescreve a tradução completa. Só mexe no estado se este run
+            // ainda é o corrente (um translateSelection novo pode ter assumido).
+            if translationRunID == runID {
                 isTranslating = false
+                translationTask = nil
+                translationRunID = nil
             }
-            translationTask = nil
         }
     }
 
@@ -185,6 +201,9 @@ final class SelectionTranslationCoordinator {
         ambientDismissTask?.cancel()
         ambientDismissTask = nil
         translationTask?.cancel()
+        translationTask = nil
+        // Fecha o run: writes atrasados da tradução cancelada são descartados.
+        translationRunID = nil
         presentation = .compactLookup
         isVisible = true
         isTranslating = false
@@ -242,8 +261,13 @@ final class SelectionTranslationCoordinator {
                     maxTokens: 64,
                     onPartial: { [weak self] partial in
                         Task { @MainActor in
+                            // isLookingUpTerm fecha a janela de parciais: o tail
+                            // do lookup zera a flag no MESMO bloco síncrono do
+                            // resultado final, então um parcial atrasado na fila
+                            // não sobrescreve a tradução completa.
                             guard let self,
                                   self.activeLookupCacheKey == cacheKey,
+                                  self.isLookingUpTerm,
                                   !partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             else { return }
                             self.lookupTranslation = partial
@@ -284,6 +308,9 @@ final class SelectionTranslationCoordinator {
         let wasVisible = isVisible
         translationTask?.cancel()
         translationTask = nil
+        // Fecha o run: parciais ainda na fila do MainActor não reaparecem
+        // num overlay já dispensado (nem vazam para a próxima tradução).
+        translationRunID = nil
         lookupTask?.cancel()
         lookupTask = nil
         ambientLookupTask?.cancel()

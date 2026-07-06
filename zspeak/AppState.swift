@@ -68,6 +68,8 @@ final class AppState {
         set { recordingController.state = newValue }
     }
     var isRecordingOrPreparing: Bool { recordingController.isRecordingOrPreparing }
+    /// Âncora do timer de gravação (1º sample da sessão atual).
+    var recordingStartedAt: Date? { recordingController.recordingStartedAt }
     var isModelReady: Bool {
         get { recordingController.isModelReady }
         set { recordingController.isModelReady = newValue }
@@ -195,6 +197,12 @@ final class AppState {
             llmManager: llm,
             selectionReader: selectionReader
         )
+
+        // Nova gravação invalida a correção LLM em voo: o replace dela
+        // apagaria o texto recém-colado da gravação nova.
+        self.recordingController.onRecordingWillStart = { [weak self] in
+            self?.llmCoordinator.cancelActiveCorrection()
+        }
 
         // Propagação bidirecional de erro: controller → façade.
         // Setter do façade propaga na direção inversa, com guarda para evitar loop.

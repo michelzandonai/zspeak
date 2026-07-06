@@ -20,7 +20,8 @@ struct RecentHistoryBenchmarkTests {
             return
         }
 
-        let historyStore = TranscriptionStore()
+        // Somente leitura do histórico de produção — sem manutenção destrutiva
+        let historyStore = TranscriptionStore(applyMaintenanceOnLoad: false)
         let recentRecords = historyStore.records
             .filter { record in
                 record.sourceRecordID == nil
