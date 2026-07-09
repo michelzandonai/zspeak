@@ -5,15 +5,18 @@ import AppKit
 /// estado. Centraliza os valores que antes viviam espalhados como
 /// `.white.opacity(x)` em cada subview, garantindo consistência.
 enum OverlayTheme {
-    static let cornerRadius: CGFloat = 16
+    static let cornerRadius: CGFloat = 15
     static let innerRadius: CGFloat = 9
+
+    /// Largura compacta do HUD de gravação.
+    static let recordingWidth: CGFloat = 410
 
     static let textPrimary = Color.white.opacity(0.96)
     static let textSecondary = Color.white.opacity(0.74)
     static let textTertiary = Color.white.opacity(0.50)
 
-    static let surface = Color.white.opacity(0.055)
-    static let surfaceStroke = Color.white.opacity(0.11)
+    static let surface = Color(red: 0.035, green: 0.055, blue: 0.085).opacity(0.92)
+    static let surfaceStroke = Color(red: 0.28, green: 0.38, blue: 0.49).opacity(0.72)
     static let raisedSurface = Color.white.opacity(0.09)
     static let raisedStroke = Color.white.opacity(0.22)
 
@@ -22,22 +25,25 @@ enum OverlayTheme {
     /// Azul frio do estado de processamento.
     static let processingAccent = Color(red: 0.45, green: 0.68, blue: 1.0)
 
-    /// Fundo "dark glass": base quase preta com leve tinta azulada no topo.
+    /// Fundo azul-grafite do HUD, alinhado à identidade visual da referência.
     static var backgroundGradient: LinearGradient {
         LinearGradient(
             colors: [
-                Color(red: 0.095, green: 0.10, blue: 0.12).opacity(0.97),
-                Color(red: 0.030, green: 0.033, blue: 0.045).opacity(0.96),
+                Color(red: 0.072, green: 0.105, blue: 0.143).opacity(0.99),
+                Color(red: 0.060, green: 0.088, blue: 0.122).opacity(0.99),
             ],
             startPoint: .top,
             endPoint: .bottom
         )
     }
 
-    /// Borda com brilho concentrado na aresta superior — dá o relevo de vidro.
+    /// Borda azulada fina e uniforme, como no painel da referência.
     static var edgeHighlight: LinearGradient {
         LinearGradient(
-            colors: [Color.white.opacity(0.30), Color.white.opacity(0.07)],
+            colors: [
+                Color(red: 0.52, green: 0.64, blue: 0.76).opacity(0.92),
+                Color(red: 0.43, green: 0.55, blue: 0.68).opacity(0.86),
+            ],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -183,7 +189,7 @@ struct OverlayView: View {
     }
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: contentSpacing) {
             if model.translationVisible {
                 if model.selectionTranslationPresentation == .compactLookup {
                     CompactSelectionLookupOverlayContent(model: model)
@@ -211,14 +217,15 @@ struct OverlayView: View {
             if state == .recording || state == .processing {
                 TranscriptionPreviewBlock(
                     text: model.liveTranscriptionPreview,
-                    state: state
+                    state: state,
+                    animateText: model.waveformAnimationPhaseOverride == nil
                 )
                 .transition(.opacity)
             }
 
             if model.promptModeEnabled && state != .recording && state != .processing {
                 if !model.lastTranscription.isEmpty || state != .idle {
-                    TranscriptionPreviewBlock(text: model.lastTranscription, state: state)
+                    TranscriptionPreviewBlock(text: model.lastTranscription, state: state, animateText: false)
                 } else if state == .idle {
                     // TextField editável — usuário pode colar texto para o LLM (TASK-013)
                     TextInputBlock(model: model)
@@ -250,8 +257,9 @@ struct OverlayView: View {
         // já anima o frame (KVO em preferredContentSize); o conteúdo acompanha.
         // Aplicado antes do .frame(width:) para a largura não participar.
         .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: state)
-        .padding(.horizontal, model.selectionTranslationPresentation == .compactLookup ? 11 : 16)
-        .padding(.vertical, model.selectionTranslationPresentation == .compactLookup ? 9 : 13)
+        .padding(.horizontal, horizontalPadding)
+        .padding(.top, topPadding)
+        .padding(.bottom, bottomPadding)
         .frame(width: overlayWidth)
         .fixedSize(horizontal: false, vertical: true)
         .background(
@@ -278,8 +286,40 @@ struct OverlayView: View {
         if model.translationVisible { return 500 }
         // Preparing já usa a largura de gravação: o overlay nasce no tamanho
         // final e não "salta" quando o primeiro sample chega.
-        if state == .preparing || state == .recording || state == .processing { return 520 }
+        if state == .preparing || state == .recording || state == .processing {
+            return model.promptModeEnabled ? 520 : OverlayTheme.recordingWidth
+        }
         return model.promptModeEnabled ? 520 : 320
+    }
+
+    private var horizontalPadding: CGFloat {
+        if model.selectionTranslationPresentation == .compactLookup { return 11 }
+        if state == .preparing || state == .recording || state == .processing {
+            return 12
+        }
+        return 16
+    }
+
+    private var topPadding: CGFloat {
+        if model.selectionTranslationPresentation == .compactLookup { return 9 }
+        if state == .preparing || state == .recording || state == .processing {
+            return 9
+        }
+        return 13
+    }
+
+    private var bottomPadding: CGFloat {
+        if state == .preparing || state == .recording || state == .processing {
+            return 20
+        }
+        return topPadding
+    }
+
+    private var contentSpacing: CGFloat {
+        if state == .preparing || state == .recording || state == .processing {
+            return 8
+        }
+        return 10
     }
 }
 
@@ -293,14 +333,14 @@ private struct OverlayHeader: View {
             if let icon = model.focusedAppIcon {
                 Image(nsImage: icon)
                     .resizable()
-                    .frame(width: 20, height: 20)
+                    .frame(width: 19, height: 19)
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                     .accessibilityHidden(true)
             }
 
             Text(model.focusedAppName)
-                .font(.callout.weight(.medium))
-                .foregroundStyle(OverlayTheme.textSecondary)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(OverlayTheme.textPrimary)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .accessibilityLabel("App em foco: \(model.focusedAppName)")
@@ -362,7 +402,7 @@ private struct OverlayStatusChip: View {
                         frozen: reduceMotion
                     )
                     Text(Self.formattedElapsedTime(elapsed))
-                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                         .contentTransition(.numericText())
                 }
             }
@@ -397,8 +437,8 @@ private struct OverlayStatusChip: View {
             content()
         }
         .foregroundStyle(tint)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
         .background(fill, in: Capsule())
         .overlay(Capsule().strokeBorder(stroke, lineWidth: 0.5))
         .dynamicTypeSize(...DynamicTypeSize.xLarge)
@@ -433,8 +473,8 @@ private struct PulsingDot: View {
     private func dot(opacity: Double) -> some View {
         Circle()
             .fill(color.opacity(opacity))
-            .frame(width: 7, height: 7)
-            .shadow(color: color.opacity(opacity * 0.6), radius: 3)
+            .frame(width: 5, height: 5)
+            .shadow(color: color.opacity(opacity * 0.60), radius: 3)
             .accessibilityHidden(true)
     }
 }
@@ -477,16 +517,11 @@ private struct RecordingMetaRow: View {
                 // a xLarge para não quebrar o layout lateral do overlay.
                 let micName = model.effectiveMicrophoneName
                 if !micName.isEmpty {
-                    HStack(spacing: 5) {
-                        Image(systemName: "mic.fill")
-                            .font(.caption2)
-                            .accessibilityHidden(true)
-                        Text(micName)
-                            .font(.caption2)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .foregroundStyle(OverlayTheme.textTertiary)
+                    Text(micName)
+                        .font(.system(size: 11.5, weight: .regular))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(OverlayTheme.textTertiary)
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("Microfone ativo: \(micName)")
                 }
@@ -495,20 +530,9 @@ private struct RecordingMetaRow: View {
             Spacer(minLength: 8)
 
             if model.escHintEnabled && model.state == .recording {
-                HStack(spacing: 4) {
-                    Text("esc")
-                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1.5)
-                        .background(OverlayTheme.raisedSurface, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .strokeBorder(OverlayTheme.surfaceStroke, lineWidth: 0.5)
-                        )
-                    Text("cancela")
-                        .font(.caption2)
-                }
-                .foregroundStyle(OverlayTheme.textTertiary)
+                Text("Esc para cancelar")
+                    .font(.system(size: 11.5, weight: .regular))
+                    .foregroundStyle(OverlayTheme.textTertiary)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Tecla Escape cancela a gravação")
             }
@@ -671,6 +695,7 @@ private struct SelectionTranslationOverlayContent: View {
 private struct TranscriptionPreviewBlock: View {
     let text: String
     let state: AppState.RecordingState
+    let animateText: Bool
 
     private var isWaitingForText: Bool {
         text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -699,6 +724,10 @@ private struct TranscriptionPreviewBlock: View {
     }
 
     private var shouldAnimateText: Bool {
+        animateText && (state == .recording || state == .processing)
+    }
+
+    private var usesLiveLayout: Bool {
         state == .recording || state == .processing
     }
 
@@ -747,15 +776,17 @@ private struct TranscriptionPreviewBlock: View {
                 } else {
                     ProgressiveTranscriptText(
                         text: text,
-                        animate: shouldAnimateText
+                        animate: shouldAnimateText,
+                        fontSize: 13
                     )
                     .accessibilityLabel(title)
                         .accessibilityValue(text)
                 }
             }
             .defaultScrollAnchor(.bottom)
-            .frame(minHeight: shouldAnimateText ? 52 : nil, maxHeight: 96)
+            .frame(minHeight: usesLiveLayout ? 52 : nil, maxHeight: 96)
         }
+        .frame(height: usesLiveLayout ? 83 : nil, alignment: .topLeading)
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: OverlayTheme.innerRadius, style: .continuous)
@@ -776,6 +807,7 @@ private struct TranscriptionPreviewBlock: View {
 private struct ProgressiveTranscriptText: View {
     let text: String
     let animate: Bool
+    let fontSize: CGFloat
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var displayedText: String = ""
@@ -783,13 +815,18 @@ private struct ProgressiveTranscriptText: View {
     @State private var revealTask: Task<Void, Never>?
 
     var body: some View {
-        Text(displayedText)
-            .font(.body)
+        Text(animate && !reduceMotion ? displayedText : text)
+            .font(.system(size: fontSize))
             .foregroundStyle(.white.opacity(0.95))
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
             .onAppear {
-                updateRevealTarget(text)
+                // No modo estático (snapshots/Reduce Motion), o `Text` já usa
+                // a string final diretamente; evitar uma segunda mutação de
+                // estado impede frames parciais durante a captura da view.
+                if animate && !reduceMotion {
+                    updateRevealTarget(text)
+                }
             }
             .onChange(of: text) { _, newValue in
                 updateRevealTarget(newValue)
@@ -860,7 +897,7 @@ private struct ProgressiveTranscriptText: View {
                 )
                 // Sem withAnimation por passo: a cadencia (~30-50/s) ja da a
                 // sensacao de digitacao; transacoes animadas por passo
-                // disputavam o MainActor com a waveform de 60fps.
+                // disputavam o MainActor com a waveform em alta cadência.
                 displayedText = ProgressiveTextReveal.nextText(
                     current: displayedText,
                     target: nextTarget,
@@ -1636,24 +1673,22 @@ struct TextInputBlock: View {
     }
 }
 
-/// HUD de voz com histórico rolante (estilo Voice Memos): cada barra é uma
-/// amostra real do nível de voz; novas amostras entram pela direita e a linha
-/// desliza continuamente para a esquerda, com fade nas bordas e cauda que
-/// esmaece. Silêncio vira uma linha de pontos com respiração sutil. O relógio
-/// de gravação vive no chip de estado do header (OverlayStatusChip).
+/// HUD de voz com fita cinética: o histórico real de áudio vira uma superfície
+/// luminosa contínua, com núcleo e halo independentes. A rolagem ocorre entre
+/// amostras para que a animação tenha a fluidez de uma interface em tempo real.
 struct WaveformView: View {
     let model: OverlayModel
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let barCount = 52
-    private let barWidth: CGFloat = 3
-    private let barSpacing: CGFloat = 3.5
-    private let minimumBarHeight: CGFloat = 3
-    private let maximumBarHeight: CGFloat = 34
-    private let waveformHeight: CGFloat = 40
-    private let recordingColor = Color.white
-    /// Cadência de amostragem — 52 barras ≈ 2,3 s de histórico visível.
+    private let sampleCount = 52
+    private let ribbonWidth: CGFloat = 306
+    private let waveformHeight: CGFloat = 42
+    private let minimumAmplitude: CGFloat = 2
+    private let maximumAmplitude: CGFloat = 15.5
+    private let cyan = Color(red: 0.18, green: 0.78, blue: 1.0)
+    private let violet = Color(red: 0.68, green: 0.34, blue: 1.0)
+    /// Cadência de amostragem — ~2,3 s de fala visível no histórico.
     private let samplePeriod: TimeInterval = 0.045
 
     @State private var history: [Float] = []
@@ -1665,13 +1700,13 @@ struct WaveformView: View {
     @State private var animationStartTime: TimeInterval = Date.timeIntervalSinceReferenceDate
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+        TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 120.0)) { context in
             let now = context.date.timeIntervalSinceReferenceDate
             let isFrozen = model.waveformAnimationPhaseOverride != nil
             let progress: CGFloat = isFrozen
                 ? 0
                 : CGFloat(min(max((now - lastSampleAt) / samplePeriod, 0), 1))
-            // Nível contínuo a 60fps: interpola a amostra anterior e a atual
+            // Nível contínuo a cada refresh: interpola a amostra anterior e a atual
             // no mesmo relógio da rolagem — glow e respiração fluem em vez de
             // pular a cada amostra. Snapshots usam o override determinístico.
             let glowLevel: CGFloat = model.waveformLevelOverride.map { CGFloat($0) }
@@ -1682,19 +1717,25 @@ struct WaveformView: View {
                 ))
 
             ZStack {
-                // Glow ambiente que respira com a voz — profundidade sem
-                // depender de shadow por barra.
+                // Halo contínuo: amplia de forma proporcional ao volume, sem
+                // inventar picos de voz que não vieram do microfone.
                 Capsule()
-                    .fill(recordingColor)
-                    .frame(
-                        width: waveformWidth * (0.42 + 0.34 * glowLevel),
-                        height: 12 + 12 * glowLevel
+                    .fill(
+                        LinearGradient(
+                            colors: [cyan, Color(red: 0.34, green: 0.62, blue: 1.0), violet],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
                     )
-                    .blur(radius: 16)
-                    .opacity(0.05 + 0.15 * Double(glowLevel))
+                    .frame(
+                        width: ribbonWidth * (0.54 + 0.30 * glowLevel),
+                        height: 8 + 14 * glowLevel
+                    )
+                    .blur(radius: 18)
+                    .opacity(0.035 + 0.12 * Double(glowLevel))
 
                 Canvas { canvas, size in
-                    drawWaveform(
+                    drawRibbon(
                         in: &canvas,
                         size: size,
                         now: now,
@@ -1703,15 +1744,18 @@ struct WaveformView: View {
                         attack: isFrozen ? 0 : max(0, smoothedLevel - previousSmoothedLevel)
                     )
                 }
-                .frame(width: waveformWidth, height: waveformHeight)
-                .mask(edgeFade)
-                // Respiração de conjunto: a linha inteira ganha um leve
-                // alongamento vertical com o volume da voz.
-                .scaleEffect(x: 1, y: 1 + 0.05 * glowLevel, anchor: .center)
+                .frame(width: ribbonWidth, height: waveformHeight)
+                .scaleEffect(x: 1, y: 1 + 0.035 * glowLevel, anchor: .center)
                 .shadow(
-                    color: recordingColor.opacity(0.05 + Double(glowLevel) * 0.12),
-                    radius: 3 + glowLevel * 5,
-                    x: 0,
+                    color: cyan.opacity(0.08 + Double(glowLevel) * 0.16),
+                    radius: 4 + glowLevel * 6,
+                    x: -5,
+                    y: 0
+                )
+                .shadow(
+                    color: violet.opacity(0.08 + Double(glowLevel) * 0.16),
+                    radius: 4 + glowLevel * 6,
+                    x: 5,
                     y: 0
                 )
             }
@@ -1725,26 +1769,7 @@ struct WaveformView: View {
         }
     }
 
-    private var pitch: CGFloat { barWidth + barSpacing }
-
-    private var waveformWidth: CGFloat {
-        CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barSpacing
-    }
-
-    /// Fade horizontal nas bordas: barras nascem suaves à direita e morrem
-    /// suaves à esquerda — esconde a entrada/saída de amostras da rolagem.
-    private var edgeFade: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: .clear, location: 0),
-                .init(color: .black, location: 0.07),
-                .init(color: .black, location: 0.93),
-                .init(color: .clear, location: 1),
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-    }
+    private var pitch: CGFloat { ribbonWidth / CGFloat(sampleCount - 1) }
 
     /// Loop de amostragem em GRADE AGENDADA: dorme até o próximo deadline
     /// absoluto (`lastSampleAt + período`) em vez de "período após o trabalho".
@@ -1783,7 +1808,7 @@ struct WaveformView: View {
             scheduledLastSampleAt: lastSampleAt,
             now: now,
             samplePeriod: samplePeriod,
-            maximumSlots: barCount + 1
+            maximumSlots: sampleCount + 1
         )
         guard slots > 0 else { return }
 
@@ -1794,12 +1819,12 @@ struct WaveformView: View {
                 rawLevel: level,
                 previousLevel: smoothedLevel
             )
-            // +1 de capacidade: uma amostra extra fora da tela para o deslize
-            // contínuo não descartar a barra que ainda está saindo pela esquerda.
-            history = WaveformDynamics.appending(smoothedLevel, to: history, capacity: barCount + 1)
+            // +1 de capacidade: uma amostra extra fora da tela preserva a
+            // continuidade da fita enquanto o histórico desliza para a esquerda.
+            history = WaveformDynamics.appending(smoothedLevel, to: history, capacity: sampleCount + 1)
         }
 
-        if slots >= barCount + 1 {
+        if slots >= sampleCount + 1 {
             // Stall maior que a janela visível: reancora a grade no presente
             // em vez de correr atrás de slots que já saíram da tela.
             lastSampleAt = now
@@ -1814,7 +1839,14 @@ struct WaveformView: View {
         }
     }
 
-    private func drawWaveform(
+    private struct RibbonNode {
+        let x: CGFloat
+        let centerY: CGFloat
+        let amplitude: CGFloat
+        let level: Float
+    }
+
+    private func drawRibbon(
         in context: inout GraphicsContext,
         size: CGSize,
         now: TimeInterval,
@@ -1823,96 +1855,170 @@ struct WaveformView: View {
         attack: Float
     ) {
         // Snapshots congelam via phase override; previews sem áudio usam o
-        // histórico sintético determinístico.
+        // histórico sintético determinístico. Em produção, cada nó vem do
+        // buffer real do microfone.
         let phase = model.waveformAnimationPhaseOverride ?? max(0, now - animationStartTime)
 
         let rawSamples: [Float]
         if let levelOverride = model.waveformLevelOverride {
             rawSamples = WaveformDynamics.syntheticSpeechHistory(
-                count: barCount + 1,
+                count: sampleCount + 1,
                 level: levelOverride,
                 phase: phase
             )
         } else {
             rawSamples = history
         }
-        // Perfil suavizado: vizinhas se conectam como onda, sem serrilhado.
+        // Perfil suavizado: vizinhas se conectam como uma única superfície,
+        // sem a aparência de colunas independentes.
         let samples = WaveformDynamics.smoothedProfile(rawSamples)
-
-        let rightmostX = size.width - barWidth
         let centerY = size.height / 2
+        let rightmostX = size.width
+        var nodes: [RibbonNode] = []
+        nodes.reserveCapacity(sampleCount)
 
-        for distance in 0...barCount {
+        // Os nós já nascem deslocados por `progress`; no instante em que uma
+        // nova amostra entra, ela ocupa a extrema direita e a anterior está
+        // exatamente na posição em que estava no frame anterior. É a mesma
+        // continuidade de uma scroll view, aplicada à geometria da fita.
+        for index in 0..<sampleCount {
+            let distance = sampleCount - 1 - index
             let x = WaveformDynamics.scrollingBarX(
                 distanceFromNewest: distance,
                 sampleProgress: progress,
                 pitch: pitch,
                 rightmostX: rightmostX
             )
-            guard x > -barWidth, x < size.width + barWidth else { continue }
 
             let sampleIndex = samples.count - 1 - distance
             var level = sampleIndex >= 0 ? min(max(samples[sampleIndex], 0), 1) : 0
 
-            // "Caneta" ao vivo: a barra mais recente acompanha o nível
-            // interpolado em tempo real e congela exatamente no valor
-            // amostrado quando envelhece — altura contínua, sem pop de
-            // entrada. Snapshots (override) mantêm o perfil sintético.
+            // A ponta direita acompanha o nível interpolado no intervalo
+            // entre samples e congela no histórico ao envelhecer.
             if distance == 0, model.waveformLevelOverride == nil {
                 level = Float(liveLevel)
             }
 
             // Linha de base respira de leve no silêncio (determinística por
-            // slot+phase; desativada com Reduce Motion).
-            if !reduceMotion {
-                level = max(level, WaveformDynamics.idleBreathLevel(slot: distance, phase: phase))
-            }
+            // slot+phase; desativada com Reduce Motion), sem substituir a
+            // altura vinda do histórico real de áudio.
+            let idleLevel = !reduceMotion
+                ? WaveformDynamics.idleBreathLevel(slot: distance, phase: phase)
+                : 0
+            level = WaveformDynamics.audioDrivenLevel(
+                sampleLevel: level,
+                idleLevel: idleLevel
+            )
 
-            let height = WaveformDynamics.scrollingBarHeight(
+            let amplitude = WaveformDynamics.ribbonAmplitude(
                 level: level,
-                minimumHeight: minimumBarHeight,
-                maximumHeight: maximumBarHeight
+                minimumAmplitude: minimumAmplitude,
+                maximumAmplitude: maximumAmplitude
             )
+            nodes.append(RibbonNode(x: x, centerY: centerY, amplitude: amplitude, level: level))
+        }
 
-            let position = 1 - (CGFloat(distance) + progress) / CGFloat(barCount)
-            let opacity = min(
-                WaveformDynamics.scrollingBarOpacity(level: level, positionProgress: position)
-                    + WaveformDynamics.recencyBoost(distanceFromNewest: distance)
-                    + WaveformDynamics.onsetBoost(attack: attack, distanceFromNewest: distance),
-                0.98
+        guard nodes.count > 1 else { return }
+
+        let energy = min(max(liveLevel + CGFloat(attack) * 0.45, 0), 1)
+        let outerPath = ribbonPath(nodes: nodes, amplitudeScale: 1)
+        let corePath = ribbonPath(nodes: nodes, amplitudeScale: 0.42)
+        let start = CGPoint(x: 0, y: centerY)
+        let end = CGPoint(x: size.width, y: centerY)
+
+        // Camada externa: energia difusa, com o azul evoluindo para violeta
+        // junto da borda mais recente da fala.
+        context.fill(
+            outerPath,
+            with: .linearGradient(
+                Gradient(stops: [
+                    .init(color: cyan.opacity(0.12 + Double(energy) * 0.14), location: 0),
+                    .init(color: Color(red: 0.30, green: 0.57, blue: 1.0).opacity(0.18 + Double(energy) * 0.16), location: 0.53),
+                    .init(color: violet.opacity(0.14 + Double(energy) * 0.18), location: 1),
+                ]),
+                startPoint: start,
+                endPoint: end
             )
+        )
+        context.stroke(
+            outerPath,
+            with: .linearGradient(
+                Gradient(colors: [cyan.opacity(0.42), Color(red: 0.40, green: 0.58, blue: 1.0).opacity(0.52), violet.opacity(0.48)]),
+                startPoint: start,
+                endPoint: end
+            ),
+            lineWidth: 0.8
+        )
 
+        // Camada interna: o núcleo mais claro dá leitura imediata de energia
+        // sem sacrificar a sensação contínua da forma de onda.
+        context.fill(
+            corePath,
+            with: .linearGradient(
+                Gradient(colors: [cyan.opacity(0.42), Color(red: 0.58, green: 0.78, blue: 1.0).opacity(0.58), violet.opacity(0.52)]),
+                startPoint: start,
+                endPoint: end
+            )
+        )
+        context.stroke(
+            corePath,
+            with: .color(.white.opacity(0.18 + Double(energy) * 0.20)),
+            lineWidth: 0.55
+        )
+
+        // Pequenos glints são totalmente guiados por trechos de fala fortes:
+        // dão o acabamento de HUD de jogo, mas não criam movimento artificial.
+        let glints = nodes.enumerated().filter {
+            $0.offset.isMultiple(of: 5) && $0.element.level > 0.48
+        }.suffix(5)
+        for (_, node) in glints {
+            let diameter = 1.1 + CGFloat(node.level) * 1.7
             let rect = CGRect(
-                x: x,
-                y: centerY - height / 2,
-                width: barWidth,
-                height: height
+                x: node.x - diameter / 2,
+                y: node.centerY - node.amplitude * 0.25 - diameter / 2,
+                width: diameter,
+                height: diameter
             )
-            let bar = Path(roundedRect: rect, cornerRadius: barWidth / 2)
-
-            // Temperatura de cor: cauda antiga esfria (branco-azulado), o
-            // presente é branco puro — reforça a leitura de "agora" à direita.
-            let coolness = 1 - position
-            let tint = Color(
-                red: 1 - 0.20 * coolness,
-                green: 1 - 0.16 * coolness,
-                blue: 1 - 0.05 * coolness
-            )
-
-            // Gradiente vertical por barra: núcleo brilhante, pontas suaves —
-            // profundidade de "energia" em vez de retângulo chapado.
             context.fill(
-                bar,
-                with: .linearGradient(
-                    Gradient(stops: [
-                        .init(color: tint.opacity(opacity * 0.62), location: 0),
-                        .init(color: tint.opacity(opacity), location: 0.5),
-                        .init(color: tint.opacity(opacity * 0.62), location: 1),
-                    ]),
-                    startPoint: CGPoint(x: rect.midX, y: rect.minY),
-                    endPoint: CGPoint(x: rect.midX, y: rect.maxY)
-                )
+                Path(ellipseIn: rect),
+                with: .color(.white.opacity(0.28 + Double(node.level) * 0.42))
             )
+        }
+    }
+
+    private func ribbonPath(nodes: [RibbonNode], amplitudeScale: CGFloat) -> Path {
+        let upper = nodes.map {
+            CGPoint(x: $0.x, y: $0.centerY - $0.amplitude * amplitudeScale)
+        }
+        let lower = nodes.reversed().map {
+            CGPoint(x: $0.x, y: $0.centerY + $0.amplitude * amplitudeScale)
+        }
+        guard let firstUpper = upper.first, let firstLower = lower.first else { return Path() }
+
+        var path = Path()
+        path.move(to: firstUpper)
+        appendSmoothCurve(upper, to: &path)
+        path.addLine(to: firstLower)
+        appendSmoothCurve(lower, to: &path)
+        path.closeSubpath()
+        return path
+    }
+
+    private func appendSmoothCurve(_ points: [CGPoint], to path: inout Path) {
+        guard points.count > 1 else { return }
+
+        for index in 0..<(points.count - 1) {
+            let previous = index > 0 ? points[index - 1] : points[index]
+            let current = points[index]
+            let next = points[index + 1]
+            let following = index + 2 < points.count ? points[index + 2] : next
+            let controls = WaveformDynamics.ribbonBezierControls(
+                previous: previous,
+                current: current,
+                next: next,
+                following: following
+            )
+            path.addCurve(to: next, control1: controls.first, control2: controls.second)
         }
     }
 }

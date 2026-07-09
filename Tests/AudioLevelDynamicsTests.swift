@@ -166,6 +166,62 @@ struct AudioLevelDynamicsTests {
         #expect(overshoot == 0.8)
     }
 
+    @Test("Waveform preserva as diferenças das amostras reais da voz")
+    func waveformFollowsRealAudioSamples() {
+        let quiet = WaveformDynamics.audioDrivenLevel(sampleLevel: 0.10, idleLevel: 0.04)
+        let loud = WaveformDynamics.audioDrivenLevel(sampleLevel: 0.82, idleLevel: 0.04)
+        let idle = WaveformDynamics.audioDrivenLevel(sampleLevel: 0, idleLevel: 0.04)
+
+        #expect(quiet == 0.10)
+        #expect(loud == 0.82)
+        #expect(loud > quiet * 5)
+        #expect(idle == 0.04)
+    }
+
+    @Test("Fita luminosa mantém a dinâmica da voz e os limites visuais")
+    func ribbonAmplitudeFollowsAudioLevel() {
+        let silent = WaveformDynamics.ribbonAmplitude(
+            level: 0,
+            minimumAmplitude: 2,
+            maximumAmplitude: 16
+        )
+        let quiet = WaveformDynamics.ribbonAmplitude(
+            level: 0.12,
+            minimumAmplitude: 2,
+            maximumAmplitude: 16
+        )
+        let loud = WaveformDynamics.ribbonAmplitude(
+            level: 0.82,
+            minimumAmplitude: 2,
+            maximumAmplitude: 16
+        )
+        let saturated = WaveformDynamics.ribbonAmplitude(
+            level: 2,
+            minimumAmplitude: 2,
+            maximumAmplitude: 16
+        )
+
+        #expect(silent == 2)
+        #expect(quiet > silent)
+        #expect(loud > quiet + 5)
+        #expect(saturated == 16)
+    }
+
+    @Test("Controles da fita mantêm o avanço horizontal suave")
+    func ribbonBezierControlsPreserveForwardFlow() {
+        let controls = WaveformDynamics.ribbonBezierControls(
+            previous: CGPoint(x: 0, y: 10),
+            current: CGPoint(x: 10, y: 3),
+            next: CGPoint(x: 20, y: 16),
+            following: CGPoint(x: 30, y: 8)
+        )
+
+        #expect(controls.first.x > 10)
+        #expect(controls.first.x < 20)
+        #expect(controls.second.x > 10)
+        #expect(controls.second.x < 20)
+    }
+
     @Test("Histórico sintético de snapshots é determinístico e escala com o nível")
     func syntheticHistoryDeterministic() {
         let first = WaveformDynamics.syntheticSpeechHistory(count: 53, level: 0.56, phase: 0.42)

@@ -17,16 +17,17 @@ struct VisualSnapshotTests {
     func testOverlayRecordingSnapshot() throws {
         let model = OverlayModel()
         model.state = .recording
-        model.focusedAppName = "Cursor"
+        model.focusedAppName = "Claude Code"
         model.microphoneName = "MacBook Pro Microphone"
+        model.liveTranscriptionPreview = "Vamos transformar esta reunião em um resumo com decisões, riscos e próximos passos."
         model.getAudioLevel = { 0.42 }
-        model.waveformAnimationPhaseOverride = 0.42
-        model.waveformLevelOverride = 0.56
+        model.waveformAnimationPhaseOverride = 12.42
+        model.waveformLevelOverride = 0.70
 
         try SnapshotTestHelpers.assertSnapshot(
             named: "overlay-recording",
             of: OverlayView(model: model),
-            size: CGSize(width: 520, height: 264)
+            size: CGSize(width: 410, height: 233)
         )
     }
 
@@ -139,7 +140,7 @@ struct VisualSnapshotTests {
         try SnapshotTestHelpers.assertSnapshot(
             named: "overlay-preparing",
             of: OverlayView(model: model),
-            size: CGSize(width: 320, height: 88)
+            size: CGSize(width: 410, height: 104)
         )
     }
 
@@ -152,7 +153,7 @@ struct VisualSnapshotTests {
         try SnapshotTestHelpers.assertSnapshot(
             named: "overlay-transcribing",
             of: OverlayView(model: model),
-            size: CGSize(width: 520, height: 196)
+            size: CGSize(width: 410, height: 157)
         )
     }
 

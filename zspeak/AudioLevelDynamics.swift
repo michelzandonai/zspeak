@@ -18,14 +18,13 @@ enum AudioLevelNormalizer {
 
 /// Modela a dinâmica visual da waveform do overlay.
 ///
-/// Design "histórico rolante" (estilo Voice Memos): cada barra é uma amostra
-/// real do nível de voz; amostras novas entram pela direita e a linha desliza
-/// continuamente para a esquerda. O perfil natural da fala (sílabas/pausas)
-/// gera a variação visual — nada de envelope artificial que satura em bloco.
+/// Design "histórico rolante": cada barra é uma amostra real do nível de voz.
+/// O perfil da fala (sílabas e pausas) é preservado; a UI não injeta ondas
+/// artificiais que façam a forma deixar de acompanhar quem está falando.
 enum WaveformDynamics {
     private static let noiseGate: Float = 0.04
-    private static let attackFactor: Float = 0.85
-    private static let releaseFactor: Float = 0.45
+    private static let attackFactor: Float = 0.72
+    private static let releaseFactor: Float = 0.35
 
     static func nextDisplayLevel(rawLevel: Float, previousLevel: Float) -> Float {
         let clamped = min(max(rawLevel, 0), 1)
@@ -36,7 +35,9 @@ enum WaveformDynamics {
             gated = (clamped - noiseGate) / (1 - noiseGate)
         }
 
-        let shaped = pow(gated, 0.58)
+        // Curva quase linear: fala alta e fala média seguem visualmente
+        // distintas, em vez de ambas colarem no topo da waveform.
+        let shaped = pow(gated, 1.10)
         let previous = min(max(previousLevel, 0), 1)
         let factor = shaped > previous ? attackFactor : releaseFactor
         return previous + (shaped - previous) * factor
@@ -149,12 +150,58 @@ enum WaveformDynamics {
 
     /// Nível contínuo entre duas amostras: interpola a anterior e a atual no
     /// mesmo relógio da rolagem (sampleProgress 0→1). Elementos ambientes
-    /// (glow, respiração) fluem a 60fps em vez de pular a cada amostra.
+    /// (glow, respiração) fluem a cada refresh em vez de pular a cada amostra.
     static func interpolatedLevel(previous: Float, current: Float, progress: Float) -> Float {
         let clampedProgress = min(max(progress, 0), 1)
         let clampedPrevious = min(max(previous, 0), 1)
         let clampedCurrent = min(max(current, 0), 1)
         return clampedPrevious + (clampedCurrent - clampedPrevious) * clampedProgress
+    }
+
+    /// Mantém a altura ligada à amostra real. `idleLevel` só dá uma respiração
+    /// mínima no silêncio e nunca substitui a dinâmica da voz.
+    static func audioDrivenLevel(sampleLevel: Float, idleLevel: Float) -> Float {
+        max(
+            min(max(sampleLevel, 0), 1),
+            min(max(idleLevel, 0), 1)
+        )
+    }
+
+    /// Converte energia de fala em meia-altura da fita visual. A curva é
+    /// contínua e preserva a diferença entre voz baixa e alta, enquanto o
+    /// piso mantém o HUD vivo no silêncio.
+    static func ribbonAmplitude(
+        level: Float,
+        minimumAmplitude: CGFloat,
+        maximumAmplitude: CGFloat
+    ) -> CGFloat {
+        let minimum = max(0, minimumAmplitude)
+        let maximum = max(minimum, maximumAmplitude)
+        let clamped = CGFloat(min(max(level, 0), 1))
+        let shaped = pow(clamped, 0.70)
+        return minimum + (maximum - minimum) * shaped
+    }
+
+    /// Controles Catmull-Rom convertidos para Bézier cúbica. A fita usa este
+    /// cálculo para passar por cada amostra sem cantos nem mudanças bruscas de
+    /// direção entre frames.
+    static func ribbonBezierControls(
+        previous: CGPoint,
+        current: CGPoint,
+        next: CGPoint,
+        following: CGPoint,
+        tension: CGFloat = 1
+    ) -> (first: CGPoint, second: CGPoint) {
+        let clampedTension = min(max(tension, 0), 1)
+        let first = CGPoint(
+            x: current.x + (next.x - previous.x) * clampedTension / 6,
+            y: current.y + (next.y - previous.y) * clampedTension / 6
+        )
+        let second = CGPoint(
+            x: next.x - (following.x - current.x) * clampedTension / 6,
+            y: next.y - (following.y - current.y) * clampedTension / 6
+        )
+        return (first, second)
     }
 
     /// Perfil determinístico de "fala" para snapshots/previews, onde não há
