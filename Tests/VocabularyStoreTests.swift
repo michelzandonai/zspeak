@@ -715,4 +715,151 @@ struct VocabularyStoreTests {
         store2.addEntry(term: "Wave", aliases: [])
         #expect(store2.entries.contains { $0.term == "Wave" })
     }
+
+    // MARK: - Contexto por app (perfis dev/global)
+
+    @Test("Entrada legada sem chave context decodifica como .global")
+    func testLegacyEntryDecodesAsGlobal() throws {
+        let json = """
+        {"id":"\(UUID().uuidString)","term":"git pull","aliases":["git pool"],"weight":10,"isEnabled":true}
+        """
+        let entry = try JSONDecoder().decode(VocabularyEntry.self, from: Data(json.utf8))
+        #expect(entry.context == .global)
+    }
+
+    @Test("Valor de context desconhecido degrada para .global em vez de falhar")
+    func testUnknownContextDecodesAsGlobal() throws {
+        let json = """
+        {"id":"\(UUID().uuidString)","term":"x","aliases":[],"weight":10,"isEnabled":true,"context":"futuro"}
+        """
+        let entry = try JSONDecoder().decode(VocabularyEntry.self, from: Data(json.utf8))
+        #expect(entry.context == .global)
+    }
+
+    @Test("Context .dev sobrevive a roundtrip de persistência")
+    func testDevContextRoundtrip() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let store = makeStore(in: tmpDir)
+        store.addEntry(term: "kubectl", aliases: ["cube control"], weight: 12, context: .dev)
+
+        let reloaded = makeStore(in: tmpDir)
+        let entry = try #require(reloaded.entries.first { $0.term == "kubectl" })
+        #expect(entry.context == .dev)
+    }
+
+    @Test("buildVocabularyContext filtra entradas .dev fora de apps de dev")
+    func testBuildContextFiltersByCategory() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let store = makeStore(in: tmpDir)
+        store.addEntry(term: "Terraform", aliases: ["terra forme"], context: .global)
+        store.addEntry(term: "kubectl", aliases: ["cube control"], context: .dev)
+
+        let globalOnly = store.buildVocabularyContext(categories: [.global])
+        #expect(globalOnly.terms.contains { $0.text == "Terraform" })
+        #expect(!globalOnly.terms.contains { $0.text == "kubectl" })
+
+        let devToo = store.buildVocabularyContext(categories: [.global, .dev])
+        #expect(devToo.terms.contains { $0.text == "kubectl" })
+
+        // Default (sem argumento) mantém o comportamento histórico: tudo entra
+        let all = store.buildVocabularyContext()
+        #expect(all.terms.contains { $0.text == "kubectl" })
+    }
+
+    @Test("applyReplacements respeita as categorias ativas e o cache por categoria")
+    func testApplyReplacementsByCategory() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let store = makeStore(in: tmpDir)
+        store.addEntry(term: "kubectl", aliases: ["cube control"], context: .dev)
+
+        // Fora de app dev: alias .dev não dispara (e o cache global-only compila)
+        #expect(store.applyReplacements(to: "roda cube control ai", categories: [.global])
+            == "roda cube control ai")
+        // Em app dev: dispara (cache é por conjunto de categorias, não pode vazar)
+        #expect(store.applyReplacements(to: "roda cube control ai", categories: [.global, .dev])
+            == "roda kubectl ai")
+
+        // Mutação invalida os DOIS caches
+        store.addEntry(term: "Terraform", aliases: ["terra forme"], context: .global)
+        #expect(store.applyReplacements(to: "sobe terra forme", categories: [.global])
+            == "sobe Terraform")
+        #expect(store.applyReplacements(to: "sobe terra forme e cube control", categories: [.global, .dev])
+            == "sobe Terraform e kubectl")
+    }
+
+    @Test("FocusedAppContext classifica terminais e IDEs como dev")
+    func testFocusedAppContextClassification() {
+        // Sem bundle (desconhecido) → só global
+        #expect(FocusedAppContext.categories(forBundleID: nil) == [.global])
+        // Apps comuns → só global
+        #expect(FocusedAppContext.categories(forBundleID: "com.apple.Safari") == [.global])
+        #expect(FocusedAppContext.categories(forBundleID: "com.apple.mail") == [.global])
+        // Terminais e IDEs → dev
+        #expect(FocusedAppContext.categories(forBundleID: "com.apple.Terminal").contains(.dev))
+        #expect(FocusedAppContext.categories(forBundleID: "com.googlecode.iterm2").contains(.dev))
+        #expect(FocusedAppContext.categories(forBundleID: "com.microsoft.VSCode").contains(.dev))
+        #expect(FocusedAppContext.categories(forBundleID: "com.apple.dt.Xcode").contains(.dev))
+        // Prefixo cobre a família JetBrains inteira
+        #expect(FocusedAppContext.categories(forBundleID: "com.jetbrains.WebStorm").contains(.dev))
+        // Prefixo não pode casar substring no meio do bundle
+        #expect(FocusedAppContext.categories(forBundleID: "br.com.jetbrains.fake") == [.global])
+    }
+
+    // MARK: - Fluxo do modal de novo termo
+
+    @Test("addEntry com prepend insere no topo da lista")
+    func testAddEntryPrepend() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let store = makeStore(in: tmpDir)
+
+        store.addEntry(term: "no fim", aliases: [], weight: 5)
+        store.addEntry(term: "no topo", aliases: ["alias"], weight: 12, context: .dev, prepend: true)
+
+        #expect(store.entries.first?.term == "no topo")
+        #expect(store.entries.first?.context == .dev)
+        #expect(store.entries.last?.term == "no fim")
+    }
+
+    @Test("removeEmptyEntries apaga só entradas totalmente em branco")
+    func testRemoveEmptyEntries() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let store = makeStore(in: tmpDir)
+        let seedCount = store.entries.count
+
+        // Artefatos do fluxo antigo: termo vazio, sem alias útil
+        store.addEntry(term: "", aliases: [], weight: 10)
+        store.addEntry(term: "   ", aliases: ["", "  "], weight: 10)
+        // Entrada incompleta mas com alias digitado — deve SOBREVIVER
+        store.addEntry(term: "", aliases: ["cuber netes"], weight: 10)
+
+        let removed = store.removeEmptyEntries()
+
+        #expect(removed == 2)
+        #expect(store.entries.count == seedCount + 1)
+        #expect(store.entries.contains { $0.aliases == ["cuber netes"] })
+
+        // Persistiu: reabrir o store não ressuscita as entradas em branco
+        let reloaded = makeStore(in: tmpDir)
+        #expect(reloaded.entries.count == seedCount + 1)
+
+        // Idempotente: segunda passada não remove nada
+        #expect(store.removeEmptyEntries() == 0)
+    }
+
+    @Test("parseAliasesInput separa por vírgula e quebra de linha, aparando vazios")
+    func testParseAliasesInput() {
+        #expect(VocabularyStore.parseAliasesInput("cloud code, claud code") == ["cloud code", "claud code"])
+        #expect(VocabularyStore.parseAliasesInput("um\ndois , três ") == ["um", "dois", "três"])
+        #expect(VocabularyStore.parseAliasesInput("  ,, \n ,") == [])
+        #expect(VocabularyStore.parseAliasesInput("") == [])
+        #expect(VocabularyStore.parseAliasesInput("único") == ["único"])
+    }
 }

@@ -116,6 +116,151 @@ struct RecordingControllerTests {
             controller.state == .idle
         }
     }
+
+    @Test("trimSpeechForASR injetado substitui o trim RMS no stop")
+    func trimSpeechForASRInjetadoEUsado() async throws {
+        let audioCapture = LiveFakeAudioCapture()
+        let transcriber = LiveFakeTranscriber()
+        let textInserter = RecordingTextInserterSpy()
+        let microphoneManager = MicrophoneManager(skipBundlePermissionCheck: true)
+        microphoneManager.permissionState = .authorized
+
+        let controller = RecordingController(
+            audioCapture: audioCapture,
+            transcriber: transcriber,
+            textInserter: textInserter,
+            microphoneManager: microphoneManager
+        )
+        controller.isModelReady = true
+        controller.accessibilityGranted = true
+
+        // Hook do AppState (caminho VAD): registra a chamada e devolve o buffer
+        // inteiro como "fala" — o pipeline deve seguir até a transcrição final.
+        let hookChamado = AtomicBool()
+        controller.trimSpeechForASR = { samples in
+            hookChamado.set(true)
+            return SpeechTrimResult(
+                samples: samples,
+                originalSampleCount: samples.count,
+                startSampleIndex: 0,
+                endSampleIndex: samples.count
+            )
+        }
+
+        controller.startRecordingIfIdle()
+        try await waitUntilOnMain(timeout: .seconds(15), interval: .milliseconds(10)) {
+            controller.state == .recording
+        }
+
+        controller.stopRecordingIfActive()
+        try await waitUntilOnMain(timeout: .seconds(15), interval: .milliseconds(10)) {
+            controller.state == .idle
+        }
+
+        #expect(hookChamado.current, "o trim injetado deveria ter sido usado no stop")
+        #expect(controller.lastTranscription == "texto final")
+    }
+
+    @Test("Mic zumbi (start OK sem samples) cai para o default via watchdog")
+    func micZumbiCaiParaDefaultViaWatchdog() async throws {
+        let suiteName = "recording-tests-zumbi"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let audioCapture = ZombieThenGoodAudioCapture()
+        let microphoneManager = MicrophoneManager(skipBundlePermissionCheck: true, defaults: defaults)
+        microphoneManager.permissionState = .authorized
+        microphoneManager.useSystemDefault = false
+        microphoneManager.systemDefaultUIDProvider = { "mic-default" }
+        microphoneManager.microphones = [
+            MicrophoneInfo(id: "mic-zumbi", name: "Zumbi", isConnected: true)
+        ]
+
+        let controller = RecordingController(
+            audioCapture: audioCapture,
+            transcriber: LiveFakeTranscriber(),
+            textInserter: RecordingTextInserterSpy(),
+            microphoneManager: microphoneManager
+        )
+        controller.isModelReady = true
+        controller.accessibilityGranted = true
+
+        controller.startRecordingIfIdle()
+
+        // O watchdog (2s) precisa derrubar o zumbi e engatar no default.
+        try await waitUntilOnMain(timeout: .seconds(15), interval: .milliseconds(25)) {
+            controller.state == .recording
+        }
+
+        let uids = await audioCapture.startedUIDs
+        #expect(uids == ["mic-zumbi", nil], "deveria tentar o preferido e cair para o default")
+        #expect(microphoneManager.activeMicrophoneID == nil)
+
+        controller.stopRecordingIfActive()
+        try await waitUntilOnMain(timeout: .seconds(15), interval: .milliseconds(25)) {
+            controller.state == .idle
+        }
+    }
+
+    @Test("Todos os microfones bloqueados falha com mensagem clara, sem travar")
+    func todosBloqueadosFalhaComMensagem() async throws {
+        let suiteName = "recording-tests-bloqueados"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let microphoneManager = MicrophoneManager(skipBundlePermissionCheck: true, defaults: defaults)
+        microphoneManager.permissionState = .authorized
+        microphoneManager.useSystemDefault = true
+        microphoneManager.systemDefaultUIDProvider = { "mic-A" }
+        microphoneManager.microphones = [
+            MicrophoneInfo(id: "mic-A", name: "Mic A", isConnected: true)
+        ]
+        microphoneManager.setBlocked("mic-A", blocked: true)
+
+        let controller = RecordingController(
+            audioCapture: LiveFakeAudioCapture(),
+            transcriber: LiveFakeTranscriber(),
+            textInserter: RecordingTextInserterSpy(),
+            microphoneManager: microphoneManager
+        )
+        controller.isModelReady = true
+        controller.accessibilityGranted = true
+
+        controller.startRecordingIfIdle()
+
+        try await waitUntilOnMain(timeout: .seconds(15), interval: .milliseconds(25)) {
+            controller.errorMessage != nil && controller.state == .idle
+        }
+        #expect(controller.errorMessage?.contains("bloqueado") == true)
+    }
+}
+
+/// Mock do bug real: device específico "inicia" o engine mas nunca entrega
+/// samples (zumbi); o default do sistema funciona. O watchdog do controller
+/// deve detectar e cair para o default.
+private actor ZombieThenGoodAudioCapture: AudioCapturing {
+    private(set) var startedUIDs: [String?] = []
+
+    nonisolated func currentAudioLevel() -> Float { 0 }
+    nonisolated func isInputClipping() -> Bool { false }
+
+    func start(
+        deviceUID: String?,
+        onFirstSample: (@Sendable () -> Void)?,
+        onSamples: (@Sendable ([Float]) -> Void)?
+    ) async throws {
+        startedUIDs.append(deviceUID)
+        guard deviceUID == nil else { return } // zumbi: sem onFirstSample
+        onFirstSample?()
+        onSamples?([Float](repeating: 0.05, count: 4_000))
+    }
+
+    func stop() async -> [Float] {
+        [Float](repeating: 0.05, count: 16_000)
+    }
+
+    func warmUp(deviceUID: String?) async throws {}
+    func coolDown() {}
 }
 
 private actor ControlledWarmUpAudioCapture: AudioCapturing {
@@ -123,6 +268,7 @@ private actor ControlledWarmUpAudioCapture: AudioCapturing {
     private var warmUpContinuation: CheckedContinuation<Void, Never>?
 
     nonisolated func currentAudioLevel() -> Float { 0 }
+    nonisolated func isInputClipping() -> Bool { false }
 
     func start(
         deviceUID: String?,
@@ -175,6 +321,7 @@ private actor FakeLiveTranscriptionSession: LiveTranscriptionSession {
 
 private actor LiveFakeAudioCapture: AudioCapturing {
     nonisolated func currentAudioLevel() -> Float { 0.5 }
+    nonisolated func isInputClipping() -> Bool { false }
 
     func start(
         deviceUID: String?,

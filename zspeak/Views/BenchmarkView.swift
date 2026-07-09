@@ -102,15 +102,6 @@ struct BenchmarkView: View {
 
     var body: some View {
         Form {
-            Section {
-                ZSFormHero(
-                    title: "Benchmark",
-                    subtitle: "Meça acurácia, WER, CER e latência das transcrições locais.",
-                    systemImage: "gauge.with.needle",
-                    tone: .info
-                )
-            }
-
             if isLoadingFixtures {
                 ContentUnavailableView {
                     Label("Carregando benchmarks…", systemImage: "hourglass")
@@ -153,10 +144,20 @@ struct BenchmarkView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                // Card agregado no topo — só aparece se há resultados
+                // Grid agregado no topo — só aparece se há resultados
                 if let metrics = aggregateMetrics {
                     Section {
-                        aggregateCard(metrics)
+                        aggregateGrid(metrics)
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color.clear)
+                    } header: {
+                        HStack {
+                            Text("Resumo agregado")
+                            Spacer()
+                            Text("\(metrics.count) \(metrics.count == 1 ? "fixture avaliada" : "fixtures avaliadas")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -186,14 +187,16 @@ struct BenchmarkView: View {
                     ForEach(visibleFixtures, id: \.element.id) { index, fixture in
                         Section {
                             fixtureRow(fixture, index: index)
+                        } header: {
+                            fixtureHeader(fixture)
                         }
                     }
                 }
             }
         }
         .formStyle(.grouped)
-        .zsFormPage()
         .navigationTitle("Benchmark")
+        .navigationSubtitle("Acurácia, WER, CER e latência locais")
         .task {
             await store.loadFixturesAsync()
             availableAudioFiles = store.availableAudioFileNames()
@@ -304,94 +307,70 @@ struct BenchmarkView: View {
     }
 
     @ViewBuilder
-    private func aggregateCard(_ metrics: AggregateMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Resumo agregado", systemImage: "chart.bar.doc.horizontal")
-                    .font(.headline)
-                Spacer()
-                Text("\(metrics.count) \(metrics.count == 1 ? "fixture avaliada" : "fixtures avaliadas")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+    private func aggregateGrid(_ metrics: AggregateMetrics) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 10)], spacing: 10) {
+            ZSMetricTile(
+                title: "Acurácia média",
+                value: String(format: "%.0f%%", metrics.averageAccuracy * 100),
+                systemImage: "checkmark.seal.fill",
+                color: accuracyColor(metrics.averageAccuracy)
+            )
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 12)], spacing: 12) {
-                metricCard(
-                    title: "Acurácia média",
-                    value: String(format: "%.0f%%", metrics.averageAccuracy * 100),
-                    icon: "checkmark.seal.fill",
-                    color: accuracyColor(metrics.averageAccuracy)
-                )
-
-                if let wer = metrics.averageWER {
-                    metricCard(
-                        title: "WER médio",
-                        value: String(format: "%.1f%%", wer * 100),
-                        icon: "textformat.abc",
-                        color: errorRateColor(wer)
-                    )
-                }
-
-                if let cer = metrics.averageCER {
-                    metricCard(
-                        title: "CER médio",
-                        value: String(format: "%.1f%%", cer * 100),
-                        icon: "character.cursor.ibeam",
-                        color: errorRateColor(cer)
-                    )
-                }
-
-                metricCard(
-                    title: "Latência média",
-                    value: String(format: "%.0fms", metrics.averageLatency * 1000),
-                    icon: "timer",
-                    color: .secondary
-                )
-
-                metricCard(
-                    title: "P95 latência",
-                    value: String(format: "%.0fms", metrics.p95Latency * 1000),
-                    icon: "timer.circle",
-                    color: latencyColor(metrics.p95Latency)
-                )
-
-                metricCard(
-                    title: "Pior caso",
-                    value: String(format: "%.0fms", metrics.maxLatency * 1000),
-                    icon: "exclamationmark.triangle.fill",
-                    color: latencyColor(metrics.maxLatency)
-                )
-
-                if let rtf = metrics.averageRealtimeFactor {
-                    metricCard(
-                        title: "RTF médio",
-                        value: String(format: "%.2fx", rtf),
-                        icon: "waveform.path.ecg",
-                        color: realtimeFactorColor(rtf)
-                    )
-                }
-
-                metricCard(
-                    title: "Casos lentos",
-                    value: "\(metrics.slowCount)",
-                    icon: "tortoise.fill",
-                    color: metrics.slowCount == 0 ? .green : .orange
+            if let wer = metrics.averageWER {
+                ZSMetricTile(
+                    title: "WER médio",
+                    value: String(format: "%.1f%%", wer * 100),
+                    systemImage: "textformat.abc",
+                    color: errorRateColor(wer)
                 )
             }
-        }
-    }
 
-    @ViewBuilder
-    private func metricCard(title: String, value: String, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label(title, systemImage: icon)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(color)
+            if let cer = metrics.averageCER {
+                ZSMetricTile(
+                    title: "CER médio",
+                    value: String(format: "%.1f%%", cer * 100),
+                    systemImage: "character.cursor.ibeam",
+                    color: errorRateColor(cer)
+                )
+            }
+
+            ZSMetricTile(
+                title: "Latência média",
+                value: String(format: "%.0fms", metrics.averageLatency * 1000),
+                systemImage: "timer",
+                color: .gray
+            )
+
+            ZSMetricTile(
+                title: "P95 latência",
+                value: String(format: "%.0fms", metrics.p95Latency * 1000),
+                systemImage: "timer.circle.fill",
+                color: latencyColor(metrics.p95Latency)
+            )
+
+            ZSMetricTile(
+                title: "Pior caso",
+                value: String(format: "%.0fms", metrics.maxLatency * 1000),
+                systemImage: "exclamationmark.triangle.fill",
+                color: latencyColor(metrics.maxLatency)
+            )
+
+            if let rtf = metrics.averageRealtimeFactor {
+                ZSMetricTile(
+                    title: "RTF médio",
+                    value: String(format: "%.2fx", rtf),
+                    systemImage: "waveform.path.ecg",
+                    color: realtimeFactorColor(rtf)
+                )
+            }
+
+            ZSMetricTile(
+                title: "Casos lentos",
+                value: "\(metrics.slowCount)",
+                systemImage: "tortoise.fill",
+                color: metrics.slowCount == 0 ? .green : .orange
+            )
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Progresso global
@@ -417,19 +396,44 @@ struct BenchmarkView: View {
 
     // MARK: - Linha de cada fixture
 
+    /// Header da section de cada fixture: dot de status colorido pelo WER do
+    /// último resultado + resumo compacto à direita.
+    @ViewBuilder
+    private func fixtureHeader(_ fixture: BenchmarkFixture) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(fixtureStatusColor(fixture))
+                .frame(width: 8, height: 8)
+
+            Text(isNameRedundant(fixture) ? "Fixture" : fixture.name)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer()
+
+            if let result = fixture.lastResult {
+                Text(String(format: "Acc %.0f%% · %.0fms", result.accuracyScore * 100, result.latency * 1000))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Não avaliada")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Verde/amarelo/vermelho pelo erro do último resultado; cinza sem resultado.
+    private func fixtureStatusColor(_ fixture: BenchmarkFixture) -> Color {
+        guard let result = fixture.lastResult else { return Color(nsColor: .tertiaryLabelColor) }
+        let errorRate = result.wordErrorRate ?? (1 - result.accuracyScore)
+        return errorRateColor(errorRate)
+    }
+
     @ViewBuilder
     private func fixtureRow(_ fixture: BenchmarkFixture, index: Int) -> some View {
-        // Nome — só mostramos quando é realmente um rótulo distinto do texto
-        // esperado (ex: nome de arquivo customizado). Quando `name` foi gerado
-        // do próprio texto (import do histórico), o header vira redundância
-        // truncada.
-        if !isNameRedundant(fixture) {
-            Text(fixture.name)
-                .font(.headline)
-                .lineLimit(2)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        // O nome da fixture vive no header da section (fixtureHeader) — aqui
+        // só o conteúdo editável e os resultados.
 
         // Texto esperado editável — binding direto por índice evita firstIndex O(n) por linha.
         if index < store.fixtures.count {
@@ -514,10 +518,15 @@ struct BenchmarkView: View {
 
     @ViewBuilder
     private func resultSection(_ result: BenchmarkResult, duration: TimeInterval) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(result.transcribedText)
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(
+                    Color.primary.opacity(0.04),
+                    in: RoundedRectangle(cornerRadius: ZSDesign.compactRadius, style: .continuous)
+                )
 
             HStack(spacing: 12) {
                 if isSlowResult(result, duration: duration) {

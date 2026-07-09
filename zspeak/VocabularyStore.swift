@@ -49,11 +49,49 @@ final class VocabularyStore {
 
     // MARK: - API pública
 
-    /// Adiciona uma nova entrada de vocabulário
-    func addEntry(term: String, aliases: [String] = [], weight: Float = 10.0) {
-        let entry = VocabularyEntry(term: term, aliases: aliases, weight: weight)
-        entries.append(entry)
+    /// Adiciona uma nova entrada de vocabulário. `prepend: true` insere no
+    /// TOPO da lista — termos recém-criados ficam visíveis de imediato em vez
+    /// de caírem fora da tela no fim do form.
+    func addEntry(
+        term: String,
+        aliases: [String] = [],
+        weight: Float = 10.0,
+        context: VocabularyEntryContext = .global,
+        prepend: Bool = false
+    ) {
+        let entry = VocabularyEntry(term: term, aliases: aliases, weight: weight, context: context)
+        if prepend {
+            entries.insert(entry, at: 0)
+        } else {
+            entries.append(entry)
+        }
         saveJSON()
+    }
+
+    /// Remove entradas totalmente vazias (sem termo e sem alias) — artefatos
+    /// do fluxo antigo de "Adicionar termo", que criava entradas em branco no
+    /// fim da lista sem o usuário perceber. Retorna quantas foram removidas.
+    @discardableResult
+    func removeEmptyEntries() -> Int {
+        let before = entries.count
+        entries.removeAll { entry in
+            entry.term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && entry.aliases.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+        let removed = before - entries.count
+        if removed > 0 {
+            saveJSON()
+        }
+        return removed
+    }
+
+    /// Converte o texto livre de aliases do modal ("cloud code, claud code")
+    /// em lista limpa: separa por vírgula/quebra de linha, apara e descarta vazios.
+    static func parseAliasesInput(_ text: String) -> [String] {
+        text
+            .split(whereSeparator: { $0 == "," || $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     /// Remove uma entrada de vocabulário
@@ -62,15 +100,22 @@ final class VocabularyStore {
         saveJSON()
     }
 
-    /// Constrói contexto de vocabulário para o decoder a partir das entries habilitadas
-    func buildVocabularyContext() -> CustomVocabularyContext {
-        let terms = entries.filter(\.isEnabled).map { entry in
-            CustomVocabularyTerm(
-                text: entry.term,
-                weight: entry.weight,
-                aliases: entry.aliases.isEmpty ? nil : entry.aliases
-            )
-        }
+    /// Constrói contexto de vocabulário para o decoder a partir das entries
+    /// habilitadas cujo contexto está entre as `categories` ativas.
+    /// O default (todas as categorias) preserva o comportamento histórico;
+    /// na gravação, o AppState passa as categorias do app em foco.
+    func buildVocabularyContext(
+        categories: Set<VocabularyEntryContext> = Set(VocabularyEntryContext.allCases)
+    ) -> CustomVocabularyContext {
+        let terms = entries
+            .filter { $0.isEnabled && categories.contains($0.context) }
+            .map { entry in
+                CustomVocabularyTerm(
+                    text: entry.term,
+                    weight: entry.weight,
+                    aliases: entry.aliases.isEmpty ? nil : entry.aliases
+                )
+            }
         return CustomVocabularyContext(
             terms: terms,
             alpha: VocabularyBiasingProfile.alpha,
@@ -81,16 +126,17 @@ final class VocabularyStore {
         )
     }
 
-    /// Cache das regras compiladas de substituição. Invalidado quando
-    /// `entries` muda. Sem o cache, `applyReplacements` recompilava ~1 regex
-    /// por alias A CADA update da transcrição ao vivo (várias vezes/segundo,
-    /// na main thread) — centenas de compiles/s durante o ditado.
+    /// Cache das regras compiladas de substituição, por conjunto de categorias
+    /// ativas (na prática só existem 2 combos: global e global+dev). Invalidado
+    /// quando `entries` muda. Sem o cache, `applyReplacements` recompilava ~1
+    /// regex por alias A CADA update da transcrição ao vivo (várias
+    /// vezes/segundo, na main thread) — centenas de compiles/s durante o ditado.
     @ObservationIgnored
-    private var compiledReplacements: [(regex: NSRegularExpression, template: String)]?
+    private var compiledReplacements: [Set<VocabularyEntryContext>: [(regex: NSRegularExpression, template: String)]] = [:]
 
     /// Marca o cache de regex como obsoleto. Chamar em toda mutação de `entries`.
     func invalidateReplacementCache() {
-        compiledReplacements = nil
+        compiledReplacements.removeAll()
     }
 
     /// Aplica substituições aliases → term no texto transcrito.
@@ -105,11 +151,16 @@ final class VocabularyStore {
     /// - Preserva o casing do term cadastrado pelo usuário
     /// - Aliases mais longos são aplicados primeiro, evitando que um alias curto "vaze"
     ///   dentro de um alias mais longo que ainda não foi processado
-    /// - Apenas entradas habilitadas (`isEnabled`) participam
-    func applyReplacements(to text: String) -> String {
+    /// - Apenas entradas habilitadas (`isEnabled`) e cujo contexto está entre
+    ///   as `categories` ativas participam (default: todas — comportamento
+    ///   histórico; a gravação passa as categorias do app em foco)
+    func applyReplacements(
+        to text: String,
+        categories: Set<VocabularyEntryContext> = Set(VocabularyEntryContext.allCases)
+    ) -> String {
         guard !text.isEmpty else { return text }
 
-        let rules = compiledReplacementRules()
+        let rules = compiledReplacementRules(categories: categories)
         guard !rules.isEmpty else { return text }
 
         var result = text
@@ -125,13 +176,15 @@ final class VocabularyStore {
         return result
     }
 
-    private func compiledReplacementRules() -> [(regex: NSRegularExpression, template: String)] {
-        if let compiledReplacements {
-            return compiledReplacements
+    private func compiledReplacementRules(
+        categories: Set<VocabularyEntryContext>
+    ) -> [(regex: NSRegularExpression, template: String)] {
+        if let cached = compiledReplacements[categories] {
+            return cached
         }
 
         var pairs: [(alias: String, term: String)] = []
-        for entry in entries where entry.isEnabled {
+        for entry in entries where entry.isEnabled && categories.contains(entry.context) {
             let term = entry.term.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !term.isEmpty else { continue }
             for alias in entry.aliases {
@@ -153,7 +206,7 @@ final class VocabularyStore {
             rules.append((regex: regex, template: NSRegularExpression.escapedTemplate(for: term)))
         }
 
-        compiledReplacements = rules
+        compiledReplacements[categories] = rules
         return rules
     }
 

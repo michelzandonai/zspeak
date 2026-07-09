@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import CoreAudio
 import os.log
 
 private let logger = Logger(subsystem: "com.zspeak", category: "MicrophoneManager")
@@ -51,12 +52,65 @@ final class MicrophoneManager {
     var microphones: [MicrophoneInfo] = []
     var useSystemDefault: Bool {
         didSet {
-            UserDefaults.standard.set(useSystemDefault, forKey: "useSystemDefaultMic")
+            defaults.set(useSystemDefault, forKey: "useSystemDefaultMic")
+        }
+    }
+    /// Microfones BLOQUEADOS: nunca são usados — nem como preferido, nem como
+    /// fallback, nem quando são o padrão do sistema (a captura redireciona
+    /// para o primeiro permitido).
+    var blockedMicrophoneIDs: Set<String> {
+        didSet {
+            defaults.set(Array(blockedMicrophoneIDs).sorted(), forKey: Self.blockedIDsKey)
         }
     }
     var activeMicrophoneID: String?
     var permissionState: MicrophonePermissionState
     private let skipBundlePermissionCheck: Bool
+    /// Injetável para testes isolarem persistência (evita corrida entre testes
+    /// paralelos escrevendo no `.standard` e vazamento para o app real).
+    @ObservationIgnored
+    private let defaults: UserDefaults
+
+    static let blockedIDsKey = "blockedMicrophoneIDs"
+
+    /// Seam testável do UID do device padrão do sistema (xctest headless pode
+    /// não expor AVCaptureDevice). Consulta o HAL primeiro: é ao default do HAL
+    /// que o AVAudioEngine conecta com uid=nil — `AVCaptureDevice.default` pode
+    /// divergir dele (ex.: mic Bluetooth vira default no HAL sem refletir ali),
+    /// e o bloqueio precisa valer para o device que será usado de fato.
+    @ObservationIgnored
+    var systemDefaultUIDProvider: () -> String? = {
+        MicrophoneManager.halDefaultInputUID() ?? AVCaptureDevice.default(for: .audio)?.uniqueID
+    }
+
+    /// UID do device de entrada padrão do HAL (CoreAudio), ou nil se a consulta
+    /// falhar (ex.: nenhum device de entrada).
+    nonisolated static func halDefaultInputUID() -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID
+        ) == noErr, deviceID != kAudioObjectUnknown else { return nil }
+
+        var uidAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var uid: CFString = "" as CFString
+        var uidSize = UInt32(MemoryLayout<CFString>.size)
+        let status = withUnsafeMutablePointer(to: &uid) { pointer in
+            AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, pointer)
+        }
+        guard status == noErr else { return nil }
+        let result = uid as String
+        return result.isEmpty ? nil : result
+    }
 
     // Tokens dos observers de NotificationCenter — removidos no deinit para evitar
     // callbacks em instâncias liberadas durante testes (onde várias instâncias são
@@ -87,10 +141,57 @@ final class MicrophoneManager {
     /// - Retorna array vazio quando `useSystemDefault == true` (sinaliza ao chamador
     ///   que deve usar o device padrão do sistema em vez de escolher da lista).
     /// - Caso contrário, devolve somente os `microphones` com `isConnected == true`
-    ///   na ordem salva em UserDefaults.
+    ///   e NÃO bloqueados, na ordem salva em UserDefaults.
     func connectedMicrophones() -> [MicrophoneInfo] {
         guard !useSystemDefault else { return [] }
-        return microphones.filter(\.isConnected)
+        return microphones.filter { $0.isConnected && !blockedMicrophoneIDs.contains($0.id) }
+    }
+
+    func isBlocked(_ id: String) -> Bool {
+        blockedMicrophoneIDs.contains(id)
+    }
+
+    func setBlocked(_ id: String, blocked: Bool) {
+        if blocked {
+            blockedMicrophoneIDs.insert(id)
+        } else {
+            blockedMicrophoneIDs.remove(id)
+        }
+    }
+
+    /// Candidatos de captura para a próxima gravação, na ordem de tentativa
+    /// (máx. 2 — cada retry custa 100–300 ms de engine.start()). `nil` = device
+    /// padrão do sistema. Lista VAZIA = nenhum microfone permitido (todos
+    /// bloqueados/desconectados) — o chamador deve falhar com mensagem clara.
+    ///
+    /// Regras:
+    /// - Padrão do sistema em uso e não bloqueado → [default].
+    /// - Padrão do sistema em uso mas BLOQUEADO → redireciona para o primeiro
+    ///   conectado permitido (explícito, nunca o default).
+    /// - Ordem de prioridade: preferido permitido + fallback (default se não
+    ///   bloqueado; senão o próximo permitido da lista).
+    func recordingCandidateUIDs() -> [String?] {
+        let defaultUID = systemDefaultUIDProvider()
+        let defaultBlocked = defaultUID.map { blockedMicrophoneIDs.contains($0) } ?? false
+        let allowedConnected = microphones.filter {
+            $0.isConnected && !blockedMicrophoneIDs.contains($0.id)
+        }
+
+        if useSystemDefault {
+            if !defaultBlocked { return [nil] }
+            return allowedConnected.prefix(1).map { $0.id as String? }
+        }
+
+        var candidates: [String?] = []
+        if let preferred = allowedConnected.first?.id {
+            candidates.append(preferred)
+        }
+        if !defaultBlocked {
+            candidates.append(nil)
+        } else if allowedConnected.count > 1 {
+            candidates.append(allowedConnected[1].id)
+        }
+        return candidates
     }
 
     var isPermissionGranted: Bool {
@@ -99,14 +200,18 @@ final class MicrophoneManager {
 
     // MARK: - Init
 
-    init(skipBundlePermissionCheck: Bool = false) {
+    init(skipBundlePermissionCheck: Bool = false, defaults: UserDefaults = .standard) {
         self.skipBundlePermissionCheck = skipBundlePermissionCheck
+        self.defaults = defaults
         let defaultKey = "useSystemDefaultMic"
-        if UserDefaults.standard.object(forKey: defaultKey) != nil {
-            self.useSystemDefault = UserDefaults.standard.bool(forKey: defaultKey)
+        if defaults.object(forKey: defaultKey) != nil {
+            self.useSystemDefault = defaults.bool(forKey: defaultKey)
         } else {
             self.useSystemDefault = true
         }
+        self.blockedMicrophoneIDs = Set(
+            defaults.stringArray(forKey: Self.blockedIDsKey) ?? []
+        )
         self.permissionState = .notDetermined
         refreshPermissionState()
         refreshDevices()
@@ -142,7 +247,7 @@ final class MicrophoneManager {
             !device.uniqueID.hasPrefix("CADefaultDeviceAggregate")
         }
 
-        let savedOrder = UserDefaults.standard.stringArray(forKey: "microphonePriorityOrder") ?? []
+        let savedOrder = defaults.stringArray(forKey: "microphonePriorityOrder") ?? []
 
         // Build ordered list: saved order first, then new devices
         var ordered: [MicrophoneInfo] = []
@@ -241,11 +346,7 @@ final class MicrophoneManager {
 
     private func savePriorityOrder() {
         let ids = microphones.map(\.id)
-        UserDefaults.standard.set(ids, forKey: "microphonePriorityOrder")
-    }
-
-    private var systemDefaultDeviceID: String? {
-        AVCaptureDevice.default(for: .audio)?.uniqueID
+        defaults.set(ids, forKey: "microphonePriorityOrder")
     }
 
     /// Em builds SwiftPM executáveis, o bundle costuma não carregar o Info.plist do app.

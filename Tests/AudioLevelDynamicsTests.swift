@@ -36,66 +36,203 @@ struct AudioLevelDynamicsTests {
         #expect(history == [0.2, 0.3, 0.4])
     }
 
-    @Test("Waveform estilo ChatGPT responde ao volume sem saltos visuais")
-    func chatGPTWaveformDynamics() {
-        let silenceHistory = Array(repeating: Float(0), count: 32)
-        let activeHistory: [Float] = [
-            0.05, 0.08, 0.20, 0.34, 0.58, 0.78, 0.62, 0.44,
-            0.36, 0.52, 0.70, 0.64, 0.40, 0.24, 0.18, 0.12,
-            0.10, 0.22, 0.42, 0.66, 0.84, 0.72, 0.48, 0.30,
-            0.20, 0.32, 0.54, 0.68, 0.50, 0.28, 0.14, 0.08
-        ]
-        let silentHeight = WaveformDynamics.chatGPTWaveformBarHeight(
-            index: 16,
-            count: 32,
-            level: 0,
-            history: silenceHistory,
-            phase: 1.0,
-            minimumHeight: 4,
-            maximumHeight: 30
+    @Test("Rolagem da waveform é contínua entre amostras")
+    func scrollContinuity() {
+        let pitch: CGFloat = 6.5
+        let right: CGFloat = 300
+
+        // Fim de um intervalo == início do próximo (a barra "envelhece" uma
+        // posição sem saltar quando a amostra nova chega).
+        let endOfInterval = WaveformDynamics.scrollingBarX(
+            distanceFromNewest: 3,
+            sampleProgress: 1,
+            pitch: pitch,
+            rightmostX: right
         )
-        let activeHeight = WaveformDynamics.chatGPTWaveformBarHeight(
-            index: 16,
-            count: 32,
-            level: 0.72,
-            history: activeHistory,
-            phase: 1.0,
-            minimumHeight: 4,
-            maximumHeight: 30
-        )
-        let activeEnergy = WaveformDynamics.chatGPTWaveformBarEnergy(
-            index: 16,
-            count: 32,
-            level: 0.72,
-            history: activeHistory,
-            phase: 1.0
-        )
-        let nextFrameEnergy = WaveformDynamics.chatGPTWaveformBarEnergy(
-            index: 16,
-            count: 32,
-            level: 0.72,
-            history: activeHistory,
-            phase: 1.1
-        )
-        let leftEnergy = WaveformDynamics.chatGPTWaveformBarEnergy(
-            index: 4,
-            count: 32,
-            level: 0.72,
-            history: activeHistory,
-            phase: 1.0
-        )
-        let opacity = WaveformDynamics.chatGPTWaveformBarOpacity(
-            index: 16,
-            count: 32,
-            energy: activeEnergy
+        let startOfNext = WaveformDynamics.scrollingBarX(
+            distanceFromNewest: 4,
+            sampleProgress: 0,
+            pitch: pitch,
+            rightmostX: right
         )
 
-        #expect(activeHeight > silentHeight + 8)
-        #expect(activeHeight <= 30)
-        #expect(silentHeight >= 4)
-        #expect(abs(activeEnergy - nextFrameEnergy) < 0.08)
-        #expect(abs(activeEnergy - leftEnergy) > 0.07)
-        #expect(opacity > 0.5)
-        #expect(opacity <= 0.96)
+        #expect(endOfInterval == startOfNext)
+        // A barra mais recente nasce na borda direita.
+        #expect(
+            WaveformDynamics.scrollingBarX(
+                distanceFromNewest: 0,
+                sampleProgress: 0,
+                pitch: pitch,
+                rightmostX: right
+            ) == right
+        )
+    }
+
+    @Test("Altura da barra cresce com o nível e respeita os limites")
+    func barHeightFollowsLevel() {
+        let silent = WaveformDynamics.scrollingBarHeight(level: 0, minimumHeight: 3, maximumHeight: 34)
+        let medium = WaveformDynamics.scrollingBarHeight(level: 0.5, minimumHeight: 3, maximumHeight: 34)
+        let loud = WaveformDynamics.scrollingBarHeight(level: 1, minimumHeight: 3, maximumHeight: 34)
+        let overdriven = WaveformDynamics.scrollingBarHeight(level: 2, minimumHeight: 3, maximumHeight: 34)
+
+        #expect(silent == 3)
+        #expect(medium > silent + 8)
+        #expect(loud > medium)
+        #expect(loud == 34)
+        #expect(overdriven == 34)
+    }
+
+    @Test("Opacidade favorece barras recentes e nunca estoura")
+    func barOpacityGradient() {
+        let newest = WaveformDynamics.scrollingBarOpacity(level: 0.6, positionProgress: 1)
+        let oldest = WaveformDynamics.scrollingBarOpacity(level: 0.6, positionProgress: 0)
+
+        #expect(newest > oldest)
+        #expect(oldest >= 0.25)
+        #expect(WaveformDynamics.scrollingBarOpacity(level: 1, positionProgress: 1) <= 0.97)
+    }
+
+    @Test("Respiração idle é sutil, positiva e determinística")
+    func idleBreathIsSubtle() {
+        for slot in 0..<64 {
+            let value = WaveformDynamics.idleBreathLevel(slot: slot, phase: 1.7)
+            #expect(value > 0)
+            #expect(value < 0.09)
+        }
+        #expect(
+            WaveformDynamics.idleBreathLevel(slot: 5, phase: 2.0)
+                == WaveformDynamics.idleBreathLevel(slot: 5, phase: 2.0)
+        )
+    }
+
+    @Test("Suavização 3-tap conecta vizinhas sem apagar picos")
+    func smoothedProfileConnectsNeighbors() {
+        let jagged: [Float] = [0, 0.9, 0, 0.9, 0]
+        let smoothed = WaveformDynamics.smoothedProfile(jagged)
+
+        #expect(smoothed.count == jagged.count)
+        // Extremidades intactas; vales sobem e picos descem — perfil de onda.
+        #expect(smoothed[0] == 0)
+        #expect(smoothed[4] == 0)
+        #expect(smoothed[2] > 0.3)
+        #expect(smoothed[1] < 0.9)
+        #expect(smoothed[1] > 0.4)
+        // Entradas curtas passam intocadas.
+        #expect(WaveformDynamics.smoothedProfile([0.5, 0.7]) == [0.5, 0.7])
+        #expect(WaveformDynamics.smoothedProfile([]).isEmpty)
+    }
+
+    @Test("Boost de recência decai e zera fora da cabeça")
+    func recencyBoostDecays() {
+        let newest = WaveformDynamics.recencyBoost(distanceFromNewest: 0)
+        let mid = WaveformDynamics.recencyBoost(distanceFromNewest: 2)
+        let outside = WaveformDynamics.recencyBoost(distanceFromNewest: 8)
+
+        #expect(newest == 0.25)
+        #expect(mid < newest)
+        #expect(mid > 0)
+        #expect(outside == 0)
+    }
+
+    @Test("Lampejo de ataque acende a cabeça e decai; silêncio não acende nada")
+    func onsetBoostFlashesOnAttack() {
+        let headOnAttack = WaveformDynamics.onsetBoost(attack: 0.4, distanceFromNewest: 0)
+        let midOnAttack = WaveformDynamics.onsetBoost(attack: 0.4, distanceFromNewest: 2)
+        let outside = WaveformDynamics.onsetBoost(attack: 0.4, distanceFromNewest: 8)
+        let noAttack = WaveformDynamics.onsetBoost(attack: 0, distanceFromNewest: 0)
+        let release = WaveformDynamics.onsetBoost(attack: -0.3, distanceFromNewest: 0)
+
+        #expect(abs(headOnAttack - 0.2) < 0.0001)
+        #expect(midOnAttack < headOnAttack)
+        #expect(midOnAttack > 0)
+        #expect(outside == 0)
+        #expect(noAttack == 0)
+        // Queda de nível (release) não gera lampejo.
+        #expect(release == 0)
+        // Ataque máximo continua dentro do teto de opacidade.
+        #expect(WaveformDynamics.onsetBoost(attack: 1, distanceFromNewest: 0) == 0.5)
+    }
+
+    @Test("Nível interpolado flui entre amostras e clampa nas bordas")
+    func interpolatedLevelFlows() {
+        let midpoint = WaveformDynamics.interpolatedLevel(previous: 0.2, current: 0.8, progress: 0.5)
+        let start = WaveformDynamics.interpolatedLevel(previous: 0.2, current: 0.8, progress: 0)
+        let end = WaveformDynamics.interpolatedLevel(previous: 0.2, current: 0.8, progress: 1)
+        let overshoot = WaveformDynamics.interpolatedLevel(previous: 0.2, current: 0.8, progress: 2)
+
+        #expect(abs(midpoint - 0.5) < 0.0001)
+        #expect(start == 0.2)
+        #expect(end == 0.8)
+        #expect(overshoot == 0.8)
+    }
+
+    @Test("Histórico sintético de snapshots é determinístico e escala com o nível")
+    func syntheticHistoryDeterministic() {
+        let first = WaveformDynamics.syntheticSpeechHistory(count: 53, level: 0.56, phase: 0.42)
+        let second = WaveformDynamics.syntheticSpeechHistory(count: 53, level: 0.56, phase: 0.42)
+        let quiet = WaveformDynamics.syntheticSpeechHistory(count: 53, level: 0.1, phase: 0.42)
+
+        #expect(first == second)
+        #expect(first.count == 53)
+        #expect(first.allSatisfy { $0 >= 0 && $0 <= 1 })
+        #expect(first.max()! > quiet.max()!)
+        #expect(WaveformDynamics.syntheticSpeechHistory(count: 0, level: 1, phase: 0).isEmpty)
+    }
+
+    // MARK: - Grade de amostragem agendada
+
+    @Test("Slots pendentes seguem a grade de tempo")
+    func pendingSlotsFollowGrid() {
+        let period = 0.045
+        // Acordou exatamente no deadline → 1 amostra.
+        #expect(WaveformDynamics.pendingSampleSlots(
+            scheduledLastSampleAt: 0, now: period, samplePeriod: period, maximumSlots: 53) == 1)
+        // Acordou cedo (antes de um período completo) → nada a registrar.
+        #expect(WaveformDynamics.pendingSampleSlots(
+            scheduledLastSampleAt: 0, now: period * 0.9, samplePeriod: period, maximumSlots: 53) == 0)
+        // Stall de 3,5 períodos → 3 amostras de catch-up.
+        #expect(WaveformDynamics.pendingSampleSlots(
+            scheduledLastSampleAt: 0, now: period * 3.5, samplePeriod: period, maximumSlots: 53) == 3)
+        // Stall gigante → capado na capacidade visível.
+        #expect(WaveformDynamics.pendingSampleSlots(
+            scheduledLastSampleAt: 0, now: 60, samplePeriod: period, maximumSlots: 53) == 53)
+        // Entradas degeneradas.
+        #expect(WaveformDynamics.pendingSampleSlots(
+            scheduledLastSampleAt: 10, now: 5, samplePeriod: period, maximumSlots: 53) == 0)
+        #expect(WaveformDynamics.pendingSampleSlots(
+            scheduledLastSampleAt: 0, now: 1, samplePeriod: 0, maximumSlots: 53) == 0)
+    }
+
+    // Regressão da micro-trava da rolagem: o sampler antigo dormia "período +
+    // trabalho" e carimbava a amostra com o horário REAL — o atraso acumulava
+    // e o sampleProgress ((now - lastSampleAt)/período, clampado em 1)
+    // saturava a CADA ciclo, congelando a rolagem um instante por amostra
+    // (visível com barras altas, i.e. falando). Com a grade agendada, o
+    // timestamp avança em múltiplos exatos do período e o progress nunca
+    // satura em regime normal, mesmo com o loop acordando atrasado.
+    @Test("Grade agendada não satura o progress com sampler acordando atrasado")
+    func scheduledGridKeepsScrollFlowing() {
+        let period = 0.045
+        let wakeupLateness = 0.009 // MainActor sob carga: acorda ~9ms depois
+
+        var scheduledLastSampleAt = 0.0
+        for _ in 0..<200 {
+            let now = scheduledLastSampleAt + period + wakeupLateness
+            let slots = WaveformDynamics.pendingSampleSlots(
+                scheduledLastSampleAt: scheduledLastSampleAt,
+                now: now,
+                samplePeriod: period,
+                maximumSlots: 53
+            )
+            #expect(slots == 1)
+            scheduledLastSampleAt += Double(slots) * period
+
+            // Invariante: logo após registrar, o relógio da rolagem retoma de
+            // um progress < 1 — sem trecho saturado esperando a próxima
+            // amostra (o atraso do wakeup NÃO acumula na grade).
+            let progressAfterAppend = (now - scheduledLastSampleAt) / period
+            #expect(progressAfterAppend < 1)
+            #expect(abs(progressAfterAppend - wakeupLateness / period) < 0.0001)
+        }
     }
 }

@@ -21,9 +21,15 @@ final class OverlayController {
         self.promptModeManager = promptModeManager
         self.activationKeyManager = activationKeyManager
 
-        // Closure direta: WaveformView lê audioLevel do AudioCapture sem intermediários
+        // Closure direta e SÍNCRONA: WaveformView lê o audioLevel sem hop de
+        // executor — ver doc de `OverlayModel.getAudioLevel`.
         model.getAudioLevel = { [weak appState] in
-            await appState?.currentAudioLevel() ?? 0
+            appState?.currentAudioLevel() ?? 0
+        }
+
+        // Flag de clipping do mic — alimenta o aviso "mic muito alto" no overlay.
+        model.getMicClipping = { [weak appState] in
+            appState?.isMicClipping() ?? false
         }
 
         // Aplica prompt selecionado na última transcrição
@@ -154,9 +160,17 @@ final class OverlayController {
         // Show/hide: visível durante preparação/gravação/processamento OU se modo prompt ativo.
         // Inclui `.preparing` para feedback imediato no press da hotkey (overlay
         // aparece com spinner antes do engine capturar o 1º sample).
-        let shouldShow = appState.state == .preparing
+        // No modo tray o ciclo de ditado NÃO mostra este overlay — o feedback
+        // vive no item do tray + mini-overlay (TrayInfoOverlay); Modo Prompt e
+        // tradução continuam usando o overlay grande.
+        let dictationCycleActive = appState.state == .preparing
             || appState.state == .recording
             || appState.state == .processing
+        let shouldShow = (dictationCycleActive
+                && !TrayInfoOverlay.suppressesMainOverlay(
+                    state: appState.state,
+                    trayModeEnabled: TrayLivePreview.isEnabled()
+                ))
             || promptModeManager.isEnabled
             || appState.isSelectionTranslationVisible
 

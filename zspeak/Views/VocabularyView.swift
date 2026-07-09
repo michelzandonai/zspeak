@@ -16,6 +16,9 @@ struct VocabularyView: View {
     @State private var applyError: String?
     @State private var searchText: String = ""
     @State private var expandedIDs: Set<UUID> = []
+    /// Modal de criação de termo — substitui o fluxo antigo que criava uma
+    /// entrada vazia no fim da lista, fora da tela.
+    @State private var showingNewTermSheet = false
 
     /// Token incrementado a cada mutação do snapshot de entries. Usado com `.task(id:)`
     /// para disparar um único debounce de 300ms por rajada de edições.
@@ -31,15 +34,6 @@ struct VocabularyView: View {
 
     var body: some View {
         Form {
-            Section {
-                ZSFormHero(
-                    title: "Vocabulário",
-                    subtitle: "Cadastre termos técnicos, aliases e pesos para melhorar a precisão local.",
-                    systemImage: "text.book.closed",
-                    tone: .accent
-                )
-            }
-
             if store.entries.isEmpty {
                 emptyStateSection
             } else {
@@ -73,16 +67,28 @@ struct VocabularyView: View {
             }
         }
         .formStyle(.grouped)
-        .zsFormPage()
         .navigationTitle("Vocabulário")
+        .navigationSubtitle("Termos, aliases e pesos do biasing local")
         .searchable(text: $searchText, placement: .toolbar, prompt: "Buscar termo ou alias")
         .toolbar {
             ToolbarItem {
                 Button {
-                    addNewEntry()
+                    showingNewTermSheet = true
                 } label: {
                     Label("Adicionar Termo", systemImage: "plus")
                 }
+            }
+        }
+        .sheet(isPresented: $showingNewTermSheet) {
+            NewVocabularyTermSheet { term, aliases, weight, context in
+                addEntryFromSheet(term: term, aliases: aliases, weight: weight, context: context)
+            }
+        }
+        .onAppear {
+            // Faxina de entradas em branco criadas pelo fluxo antigo (cliques
+            // repetidos em "Adicionar termo" sem feedback visual).
+            if store.removeEmptyEntries() > 0 {
+                scheduleAutosave()
             }
         }
         .alert("Apagar termo?", isPresented: .init(
@@ -124,7 +130,7 @@ struct VocabularyView: View {
                 Text("Adicione termos para melhorar a precisão da transcrição.")
             } actions: {
                 Button {
-                    addNewEntry()
+                    showingNewTermSheet = true
                 } label: {
                     Label("Adicionar termo", systemImage: "plus")
                 }
@@ -137,7 +143,7 @@ struct VocabularyView: View {
     private var addTermSection: some View {
         Section {
             Button {
-                addNewEntry()
+                showingNewTermSheet = true
             } label: {
                 Label("Adicionar termo", systemImage: "plus.circle.fill")
             }
@@ -161,7 +167,7 @@ struct VocabularyView: View {
             DisclosureGroup(isExpanded: isExpanded) {
                 expandedBody(for: index)
             } label: {
-                collapsedLabel(for: entry)
+                collapsedLabel(for: index)
             }
         }
         .listRowBackground(
@@ -173,37 +179,43 @@ struct VocabularyView: View {
         )
     }
 
+    /// Row colapsada: termo, badge de contexto dev, resumo (aliases · peso) e
+    /// switch inline — habilita/desabilita sem precisar expandir.
     @ViewBuilder
-    private func collapsedLabel(for entry: VocabularyEntry) -> some View {
+    private func collapsedLabel(for index: Int) -> some View {
+        let entry = store.entries[index]
+
         HStack(spacing: 8) {
             Text(entry.term.isEmpty ? "(sem nome)" : entry.term)
-                .font(.body)
-                .foregroundStyle(entry.term.isEmpty ? .secondary : .primary)
+                .font(.body.weight(.medium))
+                .foregroundStyle(entry.term.isEmpty || !entry.isEnabled ? .secondary : .primary)
                 .lineLimit(1)
+
+            if entry.context == .dev {
+                ZSStatusChip(text: "Dev", tone: .info, systemImage: "terminal")
+            }
 
             Spacer()
 
-            if !entry.aliases.isEmpty {
-                Text("\(entry.aliases.count) \(entry.aliases.count == 1 ? "alias" : "aliases")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text(collapsedSummary(for: entry))
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-            badge(isEnabled: entry.isEnabled)
+            Toggle("", isOn: $store.entries[index].isEnabled)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .accessibilityLabel(entry.isEnabled ? "Desativar termo" : "Ativar termo")
         }
     }
 
-    @ViewBuilder
-    private func badge(isEnabled: Bool) -> some View {
-        Text(isEnabled ? "Ativo" : "Inativo")
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                Capsule()
-                    .fill(isEnabled ? Color.green.opacity(0.2) : Color.gray.opacity(0.2))
-            )
-            .foregroundStyle(isEnabled ? Color.green : Color.secondary)
+    private func collapsedSummary(for entry: VocabularyEntry) -> String {
+        var parts: [String] = []
+        if !entry.aliases.isEmpty {
+            parts.append("\(entry.aliases.count) \(entry.aliases.count == 1 ? "alias" : "aliases")")
+        }
+        parts.append(String(format: "peso %.0f", entry.weight))
+        return parts.joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -276,7 +288,20 @@ struct VocabularyView: View {
 
             Divider()
 
-            Toggle("Ativo", isOn: $store.entries[index].isEnabled)
+            // Contexto: onde o termo participa (global ou só apps de dev)
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Contexto", selection: $store.entries[index].context) {
+                    ForEach(VocabularyEntryContext.allCases, id: \.self) { context in
+                        Text(context.label).tag(context)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text("Em \"Apps de dev\", o termo só é aplicado ditando em terminal, IDE ou editor de código.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
 
             HStack {
                 Spacer()
@@ -295,10 +320,10 @@ struct VocabularyView: View {
     // MARK: - Ações
 
     /// "Fingerprint" Equatable derivado das entries, já que `VocabularyEntry` não conforma Equatable.
-    /// Muda sempre que term, aliases, weight ou isEnabled mudam — cobre todas as edições inline.
+    /// Muda sempre que term, aliases, weight, isEnabled ou context mudam — cobre todas as edições inline.
     private var entriesFingerprint: String {
         store.entries.reduce(into: "") { acc, entry in
-            acc += "\(entry.id.uuidString)|\(entry.term)|\(entry.isEnabled)|\(entry.weight)|\(entry.aliases.joined(separator: ","));"
+            acc += "\(entry.id.uuidString)|\(entry.term)|\(entry.isEnabled)|\(entry.weight)|\(entry.context.rawValue)|\(entry.aliases.joined(separator: ","));"
         }
     }
 
@@ -315,12 +340,16 @@ struct VocabularyView: View {
         }
     }
 
-    private func addNewEntry() {
+    /// Cria a entrada a partir do modal: entra no TOPO da lista (visível de
+    /// imediato) e limpa a busca para o termo novo não nascer filtrado.
+    private func addEntryFromSheet(
+        term: String,
+        aliases: [String],
+        weight: Float,
+        context: VocabularyEntryContext
+    ) {
         searchText = ""
-        store.addEntry(term: "", aliases: [], weight: 10.0)
-        if let newID = store.entries.last?.id {
-            expandedIDs.insert(newID)
-        }
+        store.addEntry(term: term, aliases: aliases, weight: weight, context: context, prepend: true)
         scheduleAutosave()
     }
 
@@ -339,5 +368,101 @@ struct VocabularyView: View {
         } catch {
             applyError = error.localizedDescription
         }
+    }
+}
+
+// MARK: - Modal de novo termo
+
+/// Modal de criação de termo com todos os campos e validação: "Adicionar" só
+/// habilita com termo preenchido — impossível criar entradas em branco.
+struct NewVocabularyTermSheet: View {
+    /// Callback com (termo, aliases, peso, contexto) já validados/aparados.
+    let onAdd: (String, [String], Float, VocabularyEntryContext) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var term = ""
+    @State private var aliasesText = ""
+    @State private var weight: Float = 10
+    @State private var entryContext: VocabularyEntryContext = .global
+
+    private var trimmedTerm: String {
+        term.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                HStack(spacing: 12) {
+                    ZSSettingsIcon(systemImage: "text.book.closed.fill", color: .teal, size: 32)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Novo termo")
+                            .font(.headline)
+                        Text("Entra no biasing do modelo e nas correções do texto transcrito.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
+
+            Section {
+                TextField("Termo", text: $term, prompt: Text("ex.: Kubernetes"))
+                TextField("Aliases", text: $aliasesText, prompt: Text("erros comuns, separados por vírgula"))
+            } footer: {
+                Text("Aliases são variações que o modelo confunde — ex.: \"cuber netes, kubernets\". O texto transcrito é corrigido para o termo.")
+            }
+
+            Section {
+                HStack {
+                    Text("Peso")
+                    Slider(value: $weight, in: 1...20, step: 1)
+                    Text(String(format: "%.0f", weight))
+                        .font(.callout.monospacedDigit())
+                        .frame(minWidth: 24, alignment: .trailing)
+                }
+
+                Picker("Contexto", selection: $entryContext) {
+                    ForEach(VocabularyEntryContext.allCases, id: \.self) { context in
+                        Text(context.label).tag(context)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } footer: {
+                Text("Em \"Apps de dev\", o termo só é aplicado ditando em terminal, IDE ou editor de código.")
+            }
+
+            Section {
+                HStack {
+                    Spacer()
+
+                    Button("Cancelar", role: .cancel) {
+                        dismiss()
+                    }
+                    .keyboardShortcut(.cancelAction)
+
+                    Button("Adicionar") {
+                        onAdd(
+                            trimmedTerm,
+                            VocabularyStore.parseAliasesInput(aliasesText),
+                            weight,
+                            entryContext
+                        )
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trimmedTerm.isEmpty)
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 440, height: 440)
     }
 }

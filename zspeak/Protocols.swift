@@ -16,6 +16,8 @@ import Foundation
 protocol AudioCapturing: Actor {
     /// Leitura não-isolated do nível atual (UI faz pull em 30 Hz).
     nonisolated func currentAudioLevel() -> Float
+    /// Clipping recente na captação (aviso "mic muito alto" na UI).
+    nonisolated func isInputClipping() -> Bool
 
     /// Inicia a captura no device indicado (ou no default do sistema se nil).
     /// `onFirstSample` é invocado uma única vez quando a gravação começa a

@@ -69,16 +69,61 @@ struct LiveTranscriptionTests {
         await session.append([Float](repeating: 0.05, count: totalSamples))
 
         try await waitUntil(timeout: .seconds(2), interval: .milliseconds(10)) {
-            collector.texts.count >= 2
+            !collector.texts.isEmpty
         }
 
-        // O texto confirmado vira prefixo estável do preview seguinte
-        #expect(collector.texts.first == "trecho confirmado")
-        #expect(collector.texts.last == "trecho confirmado resto da janela")
+        // O commit não publica sozinho — o preview seguinte publica o texto
+        // completo (confirmado + janela) de uma vez, sem encolher na tela.
+        #expect(collector.texts == ["trecho confirmado resto da janela"])
 
         // Nenhuma transcrição cobriu o áudio inteiro — a janela limitou o custo
         let maxTranscribed = sizes.maxCount
         #expect(maxTranscribed < totalSamples, "maior chamada=\(maxTranscribed), total=\(totalSamples)")
+    }
+
+    // Regressão do bug "texto some e volta" no overlay: ao estourar a janela,
+    // o commit publicava só o texto confirmado — o preview da janela corrente
+    // sumia da tela e era redigitado logo depois, praticamente igual.
+    @Test("Commit não publica texto encolhido durante a gravação")
+    func commitDoesNotPublishShrunkText() async throws {
+        let collector = LiveTranscriptionUpdateCollector()
+        let calls = TranscribedSizeCollector()
+        let session = CumulativeLiveTranscriptionSession(
+            transcribePreview: { samples in
+                calls.add(samples.count)
+                switch calls.count {
+                case 1: return "alpha bravo charlie delta echo"   // preview de 11 s
+                case 2: return "alpha bravo"                      // chunk commitado
+                default: return "charlie delta echo foxtrot"      // janela restante
+                }
+            },
+            onUpdate: { update in
+                collector.append(update)
+            }
+        )
+
+        // 11 s → preview normal publica o texto longo
+        await session.append([Float](repeating: 0.05, count: 11 * 16_000))
+        try await waitUntil(timeout: .seconds(2), interval: .milliseconds(10)) {
+            collector.texts.count == 1
+        }
+
+        // +2 s → estoura a janela de 12 s e dispara o commit
+        await session.append([Float](repeating: 0.05, count: 2 * 16_000))
+        try await waitUntil(timeout: .seconds(2), interval: .milliseconds(10)) {
+            collector.texts.count >= 2
+        }
+
+        // Nenhum texto publicado pode ser mais curto que o anterior — o
+        // overlay nunca deve ver o texto "encolher" por causa do commit.
+        let texts = collector.texts
+        for (previous, next) in zip(texts, texts.dropFirst()) {
+            #expect(
+                next.count >= previous.count,
+                "texto encolheu de \"\(previous)\" para \"\(next)\""
+            )
+        }
+        #expect(texts.last == "alpha bravo charlie delta echo foxtrot")
     }
 
     @Test("commitCutIndex corta no trecho mais silencioso após searchStart")

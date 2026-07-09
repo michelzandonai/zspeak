@@ -3,9 +3,10 @@ import SwiftUI
 /// Página de Microfone.
 ///
 /// Lista dispositivos disponíveis e permite reordenar via `List.onMove` (drag).
-/// Badges indicam o microfone **Ativo** (em uso agora) e o **Preferido** (o que
-/// será tentado primeiro na próxima gravação). O toggle "Usar padrão do sistema"
-/// esconde/mostra a lista com transição animada.
+/// Badges indicam o microfone **Ativo** (em uso agora), o **Preferido** (o que
+/// será tentado primeiro na próxima gravação) e os **Bloqueados** (nunca são
+/// usados — nem quando são o padrão do sistema). O toggle "Usar padrão do
+/// sistema" alterna entre seguir o macOS e a ordem de prioridade própria.
 struct MicrophonePage: View {
     @Environment(MicrophoneManager.self) private var microphoneManager
 
@@ -14,52 +15,47 @@ struct MicrophonePage: View {
 
         Form {
             Section {
-                ZSFormHero(
-                    title: "Microfone",
-                    subtitle: "Escolha o padrão do sistema ou priorize dispositivos específicos.",
-                    systemImage: "mic.fill",
-                    tone: .danger
-                )
-            }
-
-            Section {
-                Toggle("Usar padrão do sistema", isOn: $mic.useSystemDefault)
+                Toggle(isOn: $mic.useSystemDefault) {
+                    ZSRowLabel("Usar padrão do sistema", systemImage: "mic.fill", color: .red, subtitle: "Segue o microfone escolhido no macOS")
+                }
             } footer: {
                 Text("Quando ligado, zspeak usa sempre o microfone padrão do sistema. Desligue para definir uma ordem de prioridade.")
             }
 
-            if !microphoneManager.useSystemDefault {
-                Section {
-                    if microphoneManager.microphones.isEmpty {
-                        emptyMicrophoneState
-                            .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
-                    } else {
-                        List {
-                            ForEach(microphoneManager.microphones) { mic in
-                                micRow(for: mic)
-                            }
-                            .onMove { offsets, destination in
-                                microphoneManager.reorder(fromOffsets: offsets, toOffset: destination)
-                            }
+            Section {
+                if microphoneManager.microphones.isEmpty {
+                    emptyMicrophoneState
+                        .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+                } else {
+                    List {
+                        ForEach(microphoneManager.microphones) { mic in
+                            micRow(for: mic)
                         }
-                        .frame(minHeight: listHeight)
+                        .onMove { offsets, destination in
+                            microphoneManager.reorder(fromOffsets: offsets, toOffset: destination)
+                        }
                     }
-                } header: {
-                    Text("Ordem de prioridade")
-                } footer: {
-                    Text("Arraste para reordenar. zspeak tenta cada microfone conectado na ordem acima.")
+                    .frame(minHeight: listHeight)
                 }
+            } header: {
+                Text(microphoneManager.useSystemDefault ? "Dispositivos" : "Ordem de prioridade")
+            } footer: {
+                Text(
+                    microphoneManager.useSystemDefault
+                        ? "Clique no símbolo de proibido para bloquear um microfone: ele nunca será usado — se virar o padrão do sistema, o zspeak grava com o primeiro permitido da lista."
+                        : "Arraste para reordenar — zspeak tenta cada microfone conectado na ordem acima. Clique no símbolo de proibido para bloquear um microfone: ele nunca será usado, nem como fallback."
+                )
             }
         }
         .formStyle(.grouped)
-        .zsFormPage()
         .navigationTitle("Microfone")
+        .navigationSubtitle("Padrão do sistema, prioridade e bloqueio")
         .animation(.default, value: microphoneManager.useSystemDefault)
     }
 
     // MARK: - Linha
 
-    private let rowHeight: CGFloat = 32
+    private let rowHeight: CGFloat = 38
 
     private var listHeight: CGFloat {
         if microphoneManager.microphones.isEmpty {
@@ -92,59 +88,69 @@ struct MicrophonePage: View {
 
     @ViewBuilder
     private func micRow(for mic: MicrophoneInfo) -> some View {
+        let isBlocked = microphoneManager.isBlocked(mic.id)
         let isActive = microphoneManager.activeMicrophoneID == mic.id
-        let isPreferred = preferredMicrophoneID == mic.id && !isActive
+        let isPreferred = preferredMicrophoneID == mic.id && !isActive && !isBlocked
 
-        HStack(spacing: 8) {
-            Image(systemName: iconName(for: mic, isActive: isActive))
-                .foregroundStyle(iconColor(for: mic, isActive: isActive))
-                .frame(width: 16)
+        HStack(spacing: 10) {
+            ZSSettingsIcon(
+                systemImage: iconName(for: mic, isActive: isActive, isBlocked: isBlocked),
+                color: iconColor(for: mic, isActive: isActive, isBlocked: isBlocked),
+                size: 24
+            )
 
             Text(mic.name)
-                .foregroundStyle(mic.isConnected ? .primary : .secondary)
+                .foregroundStyle(mic.isConnected && !isBlocked ? .primary : .secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
 
             Spacer(minLength: 8)
 
-            if isActive {
-                badge(text: "Ativo", color: .red)
+            if isBlocked {
+                ZSStatusChip(text: "Bloqueado", tone: .danger, systemImage: "nosign")
+            } else if isActive {
+                ZSStatusChip(text: "Ativo", tone: .danger, systemImage: "waveform")
             } else if isPreferred {
-                badge(text: "Preferido", color: .green)
+                ZSStatusChip(text: "Preferido", tone: .success)
             } else if !mic.isConnected {
-                badge(text: "Desconectado", color: .secondary)
+                ZSStatusChip(text: "Desconectado", tone: .neutral)
             }
+
+            Button {
+                microphoneManager.setBlocked(mic.id, blocked: !isBlocked)
+            } label: {
+                Image(systemName: "nosign")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isBlocked ? Color.red : Color.secondary.opacity(0.6))
+            }
+            .buttonStyle(.borderless)
+            .help(isBlocked ? "Desbloquear — volta a poder ser usado" : "Bloquear — nunca usar este microfone")
         }
         .padding(.vertical, 2)
     }
 
-    private func iconName(for mic: MicrophoneInfo, isActive: Bool) -> String {
+    private func iconName(for mic: MicrophoneInfo, isActive: Bool, isBlocked: Bool) -> String {
+        if isBlocked { return "mic.slash.fill" }
         if isActive { return "mic.fill" }
-        if !mic.isConnected { return "mic.slash" }
-        return "mic"
+        if !mic.isConnected { return "mic.slash.fill" }
+        return "mic.fill"
     }
 
-    private func iconColor(for mic: MicrophoneInfo, isActive: Bool) -> Color {
+    private func iconColor(for mic: MicrophoneInfo, isActive: Bool, isBlocked: Bool) -> Color {
+        if isBlocked { return .red }
         if isActive { return .red }
-        if !mic.isConnected { return .secondary }
-        return .primary
-    }
-
-    private func badge(text: String, color: Color) -> some View {
-        Text(text)
-            .font(.caption2)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
+        if !mic.isConnected { return Color(nsColor: .tertiaryLabelColor) }
+        return .gray
     }
 
     /// ID do microfone que será usado na próxima gravação: ativo (durante gravação)
-    /// ou o primeiro conectado da lista ordenada.
+    /// ou o primeiro candidato resolvido (respeita bloqueados e o modo padrão
+    /// do sistema).
     private var preferredMicrophoneID: String? {
         if let activeID = microphoneManager.activeMicrophoneID {
             return activeID
         }
-        return microphoneManager.microphones.first(where: \.isConnected)?.id
+        guard !microphoneManager.useSystemDefault else { return nil }
+        return microphoneManager.connectedMicrophones().first?.id
     }
 }

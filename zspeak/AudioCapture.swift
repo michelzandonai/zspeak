@@ -80,13 +80,30 @@ final class AtomicInt: @unchecked Sendable {
 /// reativa do SwiftUI — mas `WaveformView` usa `TimelineView(.periodic)` e
 /// pull, o que é mais barato que tracking.
 final class AudioLevelMonitor: @unchecked Sendable {
+    /// Pico (|amostra|) a partir do qual o buffer conta como clipado.
+    static let clipPeakThreshold: Float = 0.985
+    /// Buffers que o aviso de clipping permanece aceso após o último pico
+    /// (~1,5 s com callbacks de 512 frames a 48 kHz).
+    static let clipHoldBufferCount = 140
+
     private var _level: Float = 0
+    private var _clipHold: Int = 0
     private var lock = os_unfair_lock()
 
     /// Atualizado pelo tap (render thread). Não aloca, não faz hop.
     func update(_ newLevel: Float) {
+        update(newLevel, peak: 0)
+    }
+
+    /// Variante com pico do buffer — alimenta a detecção de clipping.
+    func update(_ newLevel: Float, peak: Float) {
         os_unfair_lock_lock(&lock)
         _level = newLevel
+        if peak >= Self.clipPeakThreshold {
+            _clipHold = Self.clipHoldBufferCount
+        } else if _clipHold > 0 {
+            _clipHold -= 1
+        }
         os_unfair_lock_unlock(&lock)
     }
 
@@ -97,8 +114,18 @@ final class AudioLevelMonitor: @unchecked Sendable {
         return _level
     }
 
+    /// Houve clipping nos últimos instantes? (aviso "mic muito alto" na UI)
+    func isClippingRecently() -> Bool {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return _clipHold > 0
+    }
+
     func reset() {
-        update(0)
+        os_unfair_lock_lock(&lock)
+        _level = 0
+        _clipHold = 0
+        os_unfair_lock_unlock(&lock)
     }
 }
 
@@ -439,7 +466,21 @@ actor AudioCapture {
             } else {
                 isRecordingToMain.set(true)
                 engine = AVAudioEngine()
-                try startEngine(deviceUID: deviceUID, baseMeta: baseMeta)
+                do {
+                    try startEngine(deviceUID: deviceUID, baseMeta: baseMeta)
+                } catch {
+                    // -10868 intermitente: logo após trocar o default do HAL o
+                    // device ainda está reconfigurando e o AUGraph inicializa
+                    // com formato inconsistente. Um único retry com engine
+                    // NOVO depois do HAL assentar resolve os casos reais
+                    // ("mic específico às vezes não capta"); persistindo, o
+                    // erro propaga e a orquestração cai para o próximo mic.
+                    logger.error("start: engine falhou (\(String(describing: error), privacy: .public)) — retry único após 250ms")
+                    engine.stop()
+                    try await Task.sleep(nanoseconds: 250_000_000)
+                    engine = AVAudioEngine()
+                    try startEngine(deviceUID: deviceUID, baseMeta: baseMeta)
+                }
                 let tEngineStart = engineStartTimestamp ?? CFAbsoluteTimeGetCurrent()
                 logger.info("start: cold path \(String(format: "%.1f", (tEngineStart - callTime) * 1000), privacy: .public)ms")
             }
@@ -491,6 +532,7 @@ actor AudioCapture {
         engine = AVAudioEngine()
         let inputNode = engine.inputNode
         inputNode.removeTap(onBus: 0)
+        applyVoiceProcessingIfRequested(to: inputNode)
 
         let hwFormat = inputNode.outputFormat(forBus: 0)
         guard hwFormat.channelCount > 0, hwFormat.sampleRate > 0 else {
@@ -584,6 +626,7 @@ actor AudioCapture {
 
         let inputNode = engine.inputNode
         inputNode.removeTap(onBus: 0)
+        applyVoiceProcessingIfRequested(to: inputNode)
 
         let hwFormat = inputNode.outputFormat(forBus: 0)
 
@@ -604,6 +647,35 @@ actor AudioCapture {
         try engine.start()
         PerfSignposter.end(iStart, metadata: baseMeta)
         engineStartTimestamp = CFAbsoluteTimeGetCurrent()
+    }
+
+    /// Chave em UserDefaults para ligar o Voice Processing nativo da Apple
+    /// (AEC + supressão de ruído + AGC) no input. Default DESLIGADO: em
+    /// ambiente silencioso o processamento pode "lavar" a voz e piorar o ASR —
+    /// ligue e meça com o benchmark antes de adotar:
+    /// `defaults write com.zspeak.app voiceProcessingEnabled -bool YES`.
+    static let voiceProcessingDefaultsKey = "voiceProcessingEnabled"
+
+    static func isVoiceProcessingRequested(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: voiceProcessingDefaultsKey)
+    }
+
+    /// Aplica o Voice Processing quando solicitado. Precisa rodar ANTES de ler
+    /// o formato do input (o processamento muda o formato do node). Erro não é
+    /// fatal — a captura segue crua, como sempre foi.
+    private func applyVoiceProcessingIfRequested(to inputNode: AVAudioInputNode) {
+        guard Self.isVoiceProcessingRequested() else { return }
+        do {
+            try inputNode.setVoiceProcessingEnabled(true)
+            logger.info("Voice Processing habilitado no input")
+        } catch {
+            logger.error("Voice Processing indisponível: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Houve clipping na captação nos últimos instantes? (UI: "mic muito alto")
+    nonisolated func isInputClipping() -> Bool {
+        audioLevelMonitor.isClippingRecently()
     }
 
     /// Instala o tap que alimenta `samplesBuffer` e atualiza `audioLevelMonitor`.
@@ -647,7 +719,11 @@ actor AudioCapture {
                     var sumOfSquares: Float = 0
                     vDSP_svesq(channelData, 1, &sumOfSquares, vDSP_Length(frameLength))
                     let rms = sqrt(sumOfSquares / Float(frameLength))
-                    levelMonitor.update(AudioLevelNormalizer.normalizedRMS(rms))
+                    // Pico do buffer alimenta o aviso de clipping ("mic muito
+                    // alto") — distorção na captação não tem conserto depois.
+                    var peak: Float = 0
+                    vDSP_maxmgv(channelData, 1, &peak, vDSP_Length(frameLength))
+                    levelMonitor.update(AudioLevelNormalizer.normalizedRMS(rms), peak: peak)
                 }
             }
 
@@ -909,13 +985,27 @@ actor AudioCapture {
         logger.debug("overrideSystemDefaultInput: default atual=\(String(describing: current)) alvo=\(deviceID) uid=\(uniqueID, privacy: .public)")
 
         if let current, current == deviceID {
-            // Já é o default — não precisa restaurar nada
-            originalDefaultInputDeviceID = nil
+            // Já é o default — nada a trocar. NÃO limpa `originalDefaultInputDeviceID`:
+            // no retry pós -10868 a troca já aconteceu na 1ª tentativa e limpar
+            // aqui perderia o default original do usuário (stop nunca restauraria).
             return
         }
 
         try setDefaultInputDeviceID(deviceID)
         originalDefaultInputDeviceID = current
+
+        // A troca do default propaga ASSÍNCRONO no HAL. Criar o AVAudioEngine
+        // antes dela assentar liga o inputNode no device ANTIGO — a gravação
+        // "funciona" mas capta o mic errado (ou silêncio). Espera curta até o
+        // HAL refletir o novo default (tipicamente < 30 ms; teto de 300 ms).
+        let deadline = CFAbsoluteTimeGetCurrent() + 0.3
+        while currentDefaultInputDeviceID() != deviceID, CFAbsoluteTimeGetCurrent() < deadline {
+            usleep(10_000)
+        }
+        if currentDefaultInputDeviceID() != deviceID {
+            logger.error("overrideSystemDefaultInput: HAL não refletiu o novo default em 300ms (uid=\(uniqueID, privacy: .public)) — engine pode nascer no device antigo")
+        }
+
         logger.debug("overrideSystemDefaultInput: default trocado para deviceID=\(deviceID); original=\(String(describing: current)) salvo para restauração")
     }
 

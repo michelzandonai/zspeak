@@ -71,8 +71,15 @@ final class OverlayModel {
         }
         return microphoneName
     }
-    /// Closure para ler audioLevel direto do AudioCapture (evita pipeline redundante)
-    var getAudioLevel: (@Sendable () async -> Float)?
+    /// Closure para ler audioLevel direto do AudioCapture. SÍNCRONA de
+    /// propósito: o `AudioLevelMonitor` já é thread-safe e a amostragem roda a
+    /// cada 45 ms — um hop async aqui faz a leitura disputar o executor global
+    /// com o ASR do preview ao vivo e a waveform congela enquanto o usuário fala.
+    var getAudioLevel: (@Sendable () -> Float)?
+    /// Closure para ler o flag de clipping do mic (aviso "mic muito alto").
+    var getMicClipping: (@Sendable () -> Bool)?
+    /// Atualizado pelo loop de amostragem da WaveformView; lido pelo MetaRow.
+    var micClippingActive: Bool = false
     /// Usado apenas por snapshots para congelar a fase da animacao.
     var waveformAnimationPhaseOverride: TimeInterval?
     /// Usado apenas por snapshots para renderizar a waveform em estado ativo.
@@ -153,6 +160,8 @@ final class OverlayModel {
 struct OverlayView: View {
     let model: OverlayModel
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var state: AppState.RecordingState { model.state }
 
     /// Descrição do estado atual para leitores de tela (VoiceOver).
@@ -193,8 +202,10 @@ struct OverlayView: View {
                     .frame(height: 44)
                     .frame(maxWidth: .infinity)
                     .accessibilityLabel("Forma de onda do áudio capturado")
+                    .transition(.opacity.combined(with: .scale(scale: 0.88, anchor: .center)))
 
                 RecordingMetaRow(model: model)
+                    .transition(.opacity)
             }
 
             if state == .recording || state == .processing {
@@ -202,6 +213,7 @@ struct OverlayView: View {
                     text: model.liveTranscriptionPreview,
                     state: state
                 )
+                .transition(.opacity)
             }
 
             if model.promptModeEnabled && state != .recording && state != .processing {
@@ -234,6 +246,10 @@ struct OverlayView: View {
             }
             }
         }
+        // Estados trocam com fade/scale suave em vez de corte seco — o painel
+        // já anima o frame (KVO em preferredContentSize); o conteúdo acompanha.
+        // Aplicado antes do .frame(width:) para a largura não participar.
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: state)
         .padding(.horizontal, model.selectionTranslationPresentation == .compactLookup ? 11 : 16)
         .padding(.vertical, model.selectionTranslationPresentation == .compactLookup ? 9 : 13)
         .frame(width: overlayWidth)
@@ -441,6 +457,20 @@ private struct RecordingMetaRow: View {
                 .foregroundStyle(OverlayTheme.textTertiary)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Preparando microfone")
+            } else if model.micClippingActive {
+                // Clipping na captação: distorção não tem conserto depois —
+                // avisa na hora para o usuário afastar/reduzir o mic.
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .accessibilityHidden(true)
+                    Text("Mic muito alto — reduza o ganho")
+                        .font(.caption2)
+                        .lineLimit(1)
+                }
+                .foregroundStyle(OverlayTheme.recordingAccent)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Microfone muito alto, reduza o ganho de entrada")
             } else {
                 // Nome do mic ativo — reativo via MicrophoneManager. Trunca no
                 // meio se o nome do device for muito longo. Dynamic Type limitado
@@ -738,19 +768,24 @@ private struct TranscriptionPreviewBlock: View {
     }
 }
 
+/// Texto ao vivo com revelação progressiva "sem regressão visual": correções
+/// que o ASR faz em trechos já exibidos são aplicadas no lugar (troca
+/// instantânea, sem varredura de deleção/redigitação) e apenas o texto
+/// genuinamente novo é datilografado no fim. Evita o efeito de o texto
+/// "sumir e voltar" a cada preview.
 private struct ProgressiveTranscriptText: View {
     let text: String
     let animate: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var stableText: String = ""
-    @State private var displayedRevision: ProgressiveTextReveal.Revision = .plain("")
+    @State private var displayedText: String = ""
     @State private var targetText: String = ""
     @State private var revealTask: Task<Void, Never>?
 
     var body: some View {
-        Text(attributedDisplayedText)
+        Text(displayedText)
             .font(.body)
+            .foregroundStyle(.white.opacity(0.95))
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
             .onAppear {
@@ -771,22 +806,6 @@ private struct ProgressiveTranscriptText: View {
             }
     }
 
-    private var attributedDisplayedText: AttributedString {
-        var result = AttributedString()
-        append(displayedRevision.prefix, color: .white.opacity(0.95), to: &result)
-        append(displayedRevision.removed, color: .red.opacity(0.84), to: &result)
-        append(displayedRevision.inserted, color: .green.opacity(0.86), to: &result)
-        append(displayedRevision.suffix, color: .white.opacity(0.95), to: &result)
-        return result
-    }
-
-    private func append(_ text: String, color: Color, to result: inout AttributedString) {
-        guard !text.isEmpty else { return }
-        var part = AttributedString(text)
-        part.foregroundColor = color
-        result += part
-    }
-
     @MainActor
     private func updateRevealTarget(_ target: String) {
         targetText = target
@@ -794,8 +813,7 @@ private struct ProgressiveTranscriptText: View {
         guard animate, !reduceMotion else {
             revealTask?.cancel()
             revealTask = nil
-            stableText = target
-            displayedRevision = .plain(target)
+            displayedText = target
             return
         }
 
@@ -808,213 +826,55 @@ private struct ProgressiveTranscriptText: View {
     @MainActor
     private func revealCurrentTarget() async {
         defer {
-            let shouldContinue = !Task.isCancelled && stableText != targetText && animate && !reduceMotion
+            let shouldContinue = !Task.isCancelled && displayedText != targetText && animate && !reduceMotion
             revealTask = nil
             if shouldContinue {
                 updateRevealTarget(targetText)
             }
         }
 
-        // Target já aguardado por descontinuidade de texto inteiro. Sem essa
-        // marca, um target final que encolhe muito o texto (ex.: preview longo
-        // errado → resultado final curto) faria o loop dormir e recomputar a
-        // mesma revisão para sempre — o overlay nunca mostraria o texto final.
-        var discontinuityWaitedTarget: String?
-
-        revealLoop: while stableText != targetText, !Task.isCancelled {
+        revealLoop: while displayedText != targetText, !Task.isCancelled {
             let nextTarget = targetText
-            var revision = ProgressiveTextReveal.revision(
-                current: stableText,
+            let step = ProgressiveTextReveal.revealStep(
+                current: displayedText,
                 target: nextTarget
             )
 
-            if !revision.removed.isEmpty {
-                let wholeTextDelay = ProgressiveTextReveal.wholeTextDiscontinuityDelayMilliseconds(
-                    for: revision
-                )
-                if wholeTextDelay > 0, discontinuityWaitedTarget != nextTarget {
-                    try? await Task.sleep(for: .milliseconds(Int64(wholeTextDelay)))
-                    guard !Task.isCancelled else { break }
+            // Correções interiores trocam no lugar — o texto já visto nunca
+            // é apagado e redigitado na frente do usuário.
+            if displayedText != step.base {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    displayedText = step.base
+                }
+            }
 
-                    if targetText != nextTarget {
-                        continue revealLoop
-                    }
-
-                    let retryDelay = ProgressiveTextReveal.wholeTextDiscontinuityRetryDelayMilliseconds
-                    if retryDelay > 0 {
-                        try? await Task.sleep(for: .milliseconds(Int64(retryDelay)))
-                    }
-                    guard !Task.isCancelled else { break }
-                    // Espera única por target: se ele continuar o mesmo na
-                    // próxima volta (era o resultado final), anima a revisão
-                    // em vez de esperar indefinidamente.
-                    discontinuityWaitedTarget = nextTarget
+            // A cauda genuinamente nova é datilografada progressivamente.
+            while displayedText != nextTarget, !Task.isCancelled {
+                if targetText != nextTarget {
                     continue revealLoop
                 }
 
-                let stabilizationDelay = ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(
-                    for: revision
-                )
-                if stabilizationDelay > 0 {
-                    try? await Task.sleep(for: .milliseconds(Int64(stabilizationDelay)))
-                    guard !Task.isCancelled else { break }
-                    guard targetText == nextTarget else { continue revealLoop }
-                }
-
-                let insertedTarget = revision.inserted
-                revision.inserted = ""
-
-                withAnimation(.easeOut(duration: 0.10)) {
-                    displayedRevision = revision
-                }
-
-                while !revision.removed.isEmpty, !Task.isCancelled {
-                    let batchSize = ProgressiveTextReveal.deletionBatchSize(
-                        remainingCharacterCount: revision.removed.count
-                    )
-                    revision.removed = ProgressiveTextReveal.deletingText(
-                        revision.removed,
-                        maxCharacters: batchSize
-                    )
-
-                    withAnimation(.easeOut(duration: 0.16)) {
-                        displayedRevision = revision
-                    }
-
-                    let delay = ProgressiveTextReveal.deletionFrameDelayMilliseconds(
-                        remainingCharacterCount: revision.removed.count
-                    )
-                    if delay > 0 {
-                        try? await Task.sleep(for: .milliseconds(Int64(delay)))
-                    } else {
-                        await Task.yield()
-                    }
-
-                    if targetText != nextTarget {
-                        continue revealLoop
-                    }
-                }
-
-                while revision.inserted != insertedTarget, !Task.isCancelled {
-                    let remaining = max(0, insertedTarget.count - revision.inserted.count)
-                    let batchSize = ProgressiveTextReveal.batchSize(
-                        remainingCharacterCount: remaining
-                    )
-                    revision.inserted = ProgressiveTextReveal.nextText(
-                        current: revision.inserted,
-                        target: insertedTarget,
-                        maxCharacters: batchSize
-                    )
-                    let duration = ProgressiveTextReveal.animationDuration(
-                        remainingCharacterCount: remaining
-                    )
-
-                    withAnimation(.smooth(duration: duration)) {
-                        displayedRevision = revision
-                    }
-
-                    let delay = ProgressiveTextReveal.frameDelayMilliseconds(
-                        remainingCharacterCount: max(0, insertedTarget.count - revision.inserted.count)
-                    )
-                    if delay > 0 {
-                        try? await Task.sleep(for: .milliseconds(Int64(delay)))
-                    } else {
-                        await Task.yield()
-                    }
-
-                    if targetText != nextTarget {
-                        continue revealLoop
-                    }
-                }
-            } else if !revision.inserted.isEmpty {
-                let insertedTarget = revision.inserted
-                revision.inserted = ""
-                displayedRevision = revision
-
-                while revision.inserted != insertedTarget, !Task.isCancelled {
-                    let remaining = max(0, insertedTarget.count - revision.inserted.count)
-                    let batchSize = ProgressiveTextReveal.batchSize(
-                        remainingCharacterCount: remaining
-                    )
-                    revision.inserted = ProgressiveTextReveal.nextText(
-                        current: revision.inserted,
-                        target: insertedTarget,
-                        maxCharacters: batchSize
-                    )
-                    let duration = ProgressiveTextReveal.animationDuration(
-                        remainingCharacterCount: remaining
-                    )
-
-                    withAnimation(.smooth(duration: duration)) {
-                        displayedRevision = revision
-                    }
-
-                    let delay = ProgressiveTextReveal.frameDelayMilliseconds(
-                        remainingCharacterCount: max(0, insertedTarget.count - revision.inserted.count)
-                    )
-                    if delay > 0 {
-                        try? await Task.sleep(for: .milliseconds(Int64(delay)))
-                    } else {
-                        await Task.yield()
-                    }
-
-                    if targetText != nextTarget {
-                        continue revealLoop
-                    }
-                }
-            } else if revision.targetText != stableText {
-                let remaining = ProgressiveTextReveal.remainingCharacterCount(
-                    current: stableText,
-                    target: nextTarget
-                )
+                let remaining = max(0, nextTarget.count - displayedText.count)
                 let batchSize = ProgressiveTextReveal.batchSize(
                     remainingCharacterCount: remaining
                 )
-                let duration = ProgressiveTextReveal.animationDuration(
-                    remainingCharacterCount: remaining
-                )
-                let current = ProgressiveTextReveal.nextText(
-                    current: stableText,
+                // Sem withAnimation por passo: a cadencia (~30-50/s) ja da a
+                // sensacao de digitacao; transacoes animadas por passo
+                // disputavam o MainActor com a waveform de 60fps.
+                displayedText = ProgressiveTextReveal.nextText(
+                    current: displayedText,
                     target: nextTarget,
                     maxCharacters: batchSize
                 )
 
-                withAnimation(.smooth(duration: duration)) {
-                    stableText = current
-                    displayedRevision = .plain(current)
-                }
-
-                let remainingAfterStep = ProgressiveTextReveal.remainingCharacterCount(
-                    current: current,
-                    target: nextTarget
-                )
                 let delay = ProgressiveTextReveal.frameDelayMilliseconds(
-                    remainingCharacterCount: remainingAfterStep
+                    remainingCharacterCount: max(0, nextTarget.count - displayedText.count)
                 )
                 if delay > 0 {
                     try? await Task.sleep(for: .milliseconds(Int64(delay)))
                 } else {
                     await Task.yield()
                 }
-                continue revealLoop
-            }
-
-            if !Task.isCancelled {
-                guard targetText == nextTarget else { continue revealLoop }
-                if !revision.inserted.isEmpty {
-                    try? await Task.sleep(for: .milliseconds(260))
-                    guard targetText == nextTarget else { continue revealLoop }
-                }
-                stableText = nextTarget
-                withAnimation(.easeOut(duration: 0.18)) {
-                    displayedRevision = .plain(nextTarget)
-                }
-            }
-        }
-
-        if !Task.isCancelled, stableText == targetText {
-            withAnimation(.easeOut(duration: 0.14)) {
-                displayedRevision = .plain(stableText)
             }
         }
     }
@@ -1776,47 +1636,85 @@ struct TextInputBlock: View {
     }
 }
 
-/// HUD de voz inspirado no padrão mobile do ChatGPT: barras discretas com
-/// movimento idle suave e resposta ao nível real do microfone. O relógio de
-/// gravação vive no chip de estado do header (OverlayStatusChip).
+/// HUD de voz com histórico rolante (estilo Voice Memos): cada barra é uma
+/// amostra real do nível de voz; novas amostras entram pela direita e a linha
+/// desliza continuamente para a esquerda, com fade nas bordas e cauda que
+/// esmaece. Silêncio vira uma linha de pontos com respiração sutil. O relógio
+/// de gravação vive no chip de estado do header (OverlayStatusChip).
 struct WaveformView: View {
     let model: OverlayModel
 
-    private let barCount = 44
-    private let sampleCount = 44
-    private let barWidth: CGFloat = 4
-    private let barSpacing: CGFloat = 3
-    private let minimumBarHeight: CGFloat = 4
-    private let maximumBarHeight: CGFloat = 30
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let barCount = 52
+    private let barWidth: CGFloat = 3
+    private let barSpacing: CGFloat = 3.5
+    private let minimumBarHeight: CGFloat = 3
+    private let maximumBarHeight: CGFloat = 34
     private let waveformHeight: CGFloat = 40
     private let recordingColor = Color.white
-    private let renderPeriod: TimeInterval = 1.0 / 60.0
+    /// Cadência de amostragem — 52 barras ≈ 2,3 s de histórico visível.
+    private let samplePeriod: TimeInterval = 0.045
 
-    @State private var history: [Float] = Array(repeating: 0, count: 44)
+    @State private var history: [Float] = []
     @State private var smoothedLevel: Float = 0
+    /// Amostra anterior — par da atual na interpolação contínua do glow.
+    @State private var previousSmoothedLevel: Float = 0
+    @State private var lastSampleAt: TimeInterval = Date.timeIntervalSinceReferenceDate
     @State private var sampleTask: Task<Void, Never>?
     @State private var animationStartTime: TimeInterval = Date.timeIntervalSinceReferenceDate
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: renderPeriod)) { context in
-            let phase = model.waveformAnimationPhaseOverride ?? max(
-                0,
-                context.date.timeIntervalSinceReferenceDate - animationStartTime
-            )
-            Canvas { canvas, size in
-                drawWaveform(
-                    in: &canvas,
-                    size: size,
-                    phase: phase
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+            let now = context.date.timeIntervalSinceReferenceDate
+            let isFrozen = model.waveformAnimationPhaseOverride != nil
+            let progress: CGFloat = isFrozen
+                ? 0
+                : CGFloat(min(max((now - lastSampleAt) / samplePeriod, 0), 1))
+            // Nível contínuo a 60fps: interpola a amostra anterior e a atual
+            // no mesmo relógio da rolagem — glow e respiração fluem em vez de
+            // pular a cada amostra. Snapshots usam o override determinístico.
+            let glowLevel: CGFloat = model.waveformLevelOverride.map { CGFloat($0) }
+                ?? CGFloat(WaveformDynamics.interpolatedLevel(
+                    previous: previousSmoothedLevel,
+                    current: smoothedLevel,
+                    progress: Float(progress)
+                ))
+
+            ZStack {
+                // Glow ambiente que respira com a voz — profundidade sem
+                // depender de shadow por barra.
+                Capsule()
+                    .fill(recordingColor)
+                    .frame(
+                        width: waveformWidth * (0.42 + 0.34 * glowLevel),
+                        height: 12 + 12 * glowLevel
+                    )
+                    .blur(radius: 16)
+                    .opacity(0.05 + 0.15 * Double(glowLevel))
+
+                Canvas { canvas, size in
+                    drawWaveform(
+                        in: &canvas,
+                        size: size,
+                        now: now,
+                        progress: progress,
+                        liveLevel: glowLevel,
+                        attack: isFrozen ? 0 : max(0, smoothedLevel - previousSmoothedLevel)
+                    )
+                }
+                .frame(width: waveformWidth, height: waveformHeight)
+                .mask(edgeFade)
+                // Respiração de conjunto: a linha inteira ganha um leve
+                // alongamento vertical com o volume da voz.
+                .scaleEffect(x: 1, y: 1 + 0.05 * glowLevel, anchor: .center)
+                .shadow(
+                    color: recordingColor.opacity(0.05 + Double(glowLevel) * 0.12),
+                    radius: 3 + glowLevel * 5,
+                    x: 0,
+                    y: 0
                 )
             }
-            .frame(width: waveformWidth, height: waveformHeight)
-            .shadow(
-                color: recordingColor.opacity(0.10 + Double(smoothedLevel) * 0.18),
-                radius: 5 + CGFloat(smoothedLevel) * 8,
-                x: 0,
-                y: 0
-            )
         }
         .onAppear {
             animationStartTime = Date.timeIntervalSinceReferenceDate
@@ -1827,17 +1725,47 @@ struct WaveformView: View {
         }
     }
 
+    private var pitch: CGFloat { barWidth + barSpacing }
+
     private var waveformWidth: CGFloat {
         CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barSpacing
     }
 
+    /// Fade horizontal nas bordas: barras nascem suaves à direita e morrem
+    /// suaves à esquerda — esconde a entrada/saída de amostras da rolagem.
+    private var edgeFade: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .black, location: 0.07),
+                .init(color: .black, location: 0.93),
+                .init(color: .clear, location: 1),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    /// Loop de amostragem em GRADE AGENDADA: dorme até o próximo deadline
+    /// absoluto (`lastSampleAt + período`) em vez de "período após o trabalho".
+    /// O padrão antigo acumulava atraso a cada ciclo e o relógio da rolagem
+    /// (progress = (now - lastSampleAt)/período, clampado em 1) congelava um
+    /// instante a CADA amostra — a micro-trava percebida durante a fala.
+    /// `lastSampleAt` avança em múltiplos exatos do período (timestamp
+    /// agendado, não o horário real da execução), então a rolagem nunca satura.
     @MainActor
     private func startSampling() {
         guard sampleTask == nil else { return }
+        lastSampleAt = Date.timeIntervalSinceReferenceDate
         sampleTask = Task { @MainActor in
             while !Task.isCancelled {
-                await updateAudioLevel()
-                try? await Task.sleep(for: .milliseconds(33))
+                let now = Date.timeIntervalSinceReferenceDate
+                let nextDeadline = lastSampleAt + samplePeriod
+                if nextDeadline > now {
+                    try? await Task.sleep(for: .seconds(nextDeadline - now))
+                }
+                guard !Task.isCancelled else { break }
+                appendPendingSamples()
             }
         }
     }
@@ -1849,58 +1777,142 @@ struct WaveformView: View {
     }
 
     @MainActor
-    private func updateAudioLevel() async {
-        let level = await model.getAudioLevel?() ?? 0
-        smoothedLevel = WaveformDynamics.nextDisplayLevel(
-            rawLevel: level,
-            previousLevel: smoothedLevel
+    private func appendPendingSamples() {
+        let now = Date.timeIntervalSinceReferenceDate
+        let slots = WaveformDynamics.pendingSampleSlots(
+            scheduledLastSampleAt: lastSampleAt,
+            now: now,
+            samplePeriod: samplePeriod,
+            maximumSlots: barCount + 1
         )
-        history = WaveformDynamics.appending(smoothedLevel, to: history, capacity: sampleCount)
+        guard slots > 0 else { return }
+
+        let level = model.getAudioLevel?() ?? 0
+        for _ in 0..<slots {
+            previousSmoothedLevel = smoothedLevel
+            smoothedLevel = WaveformDynamics.nextDisplayLevel(
+                rawLevel: level,
+                previousLevel: smoothedLevel
+            )
+            // +1 de capacidade: uma amostra extra fora da tela para o deslize
+            // contínuo não descartar a barra que ainda está saindo pela esquerda.
+            history = WaveformDynamics.appending(smoothedLevel, to: history, capacity: barCount + 1)
+        }
+
+        if slots >= barCount + 1 {
+            // Stall maior que a janela visível: reancora a grade no presente
+            // em vez de correr atrás de slots que já saíram da tela.
+            lastSampleAt = now
+        } else {
+            lastSampleAt += Double(slots) * samplePeriod
+        }
+
+        // Aviso de clipping pega carona no mesmo loop de amostragem.
+        let clipping = model.getMicClipping?() ?? false
+        if model.micClippingActive != clipping {
+            model.micClippingActive = clipping
+        }
     }
 
-    private func drawWaveform(in context: inout GraphicsContext, size: CGSize, phase: TimeInterval) {
-        let level = model.waveformLevelOverride ?? smoothedLevel
-        let centerY = size.height / 2
+    private func drawWaveform(
+        in context: inout GraphicsContext,
+        size: CGSize,
+        now: TimeInterval,
+        progress: CGFloat,
+        liveLevel: CGFloat,
+        attack: Float
+    ) {
+        // Snapshots congelam via phase override; previews sem áudio usam o
+        // histórico sintético determinístico.
+        let phase = model.waveformAnimationPhaseOverride ?? max(0, now - animationStartTime)
 
-        for index in 0..<barCount {
-            let energy = WaveformDynamics.chatGPTWaveformBarEnergy(
-                index: index,
-                count: barCount,
-                level: level,
-                history: history,
+        let rawSamples: [Float]
+        if let levelOverride = model.waveformLevelOverride {
+            rawSamples = WaveformDynamics.syntheticSpeechHistory(
+                count: barCount + 1,
+                level: levelOverride,
                 phase: phase
             )
-            let height = WaveformDynamics.chatGPTWaveformBarHeight(
-                index: index,
-                count: barCount,
+        } else {
+            rawSamples = history
+        }
+        // Perfil suavizado: vizinhas se conectam como onda, sem serrilhado.
+        let samples = WaveformDynamics.smoothedProfile(rawSamples)
+
+        let rightmostX = size.width - barWidth
+        let centerY = size.height / 2
+
+        for distance in 0...barCount {
+            let x = WaveformDynamics.scrollingBarX(
+                distanceFromNewest: distance,
+                sampleProgress: progress,
+                pitch: pitch,
+                rightmostX: rightmostX
+            )
+            guard x > -barWidth, x < size.width + barWidth else { continue }
+
+            let sampleIndex = samples.count - 1 - distance
+            var level = sampleIndex >= 0 ? min(max(samples[sampleIndex], 0), 1) : 0
+
+            // "Caneta" ao vivo: a barra mais recente acompanha o nível
+            // interpolado em tempo real e congela exatamente no valor
+            // amostrado quando envelhece — altura contínua, sem pop de
+            // entrada. Snapshots (override) mantêm o perfil sintético.
+            if distance == 0, model.waveformLevelOverride == nil {
+                level = Float(liveLevel)
+            }
+
+            // Linha de base respira de leve no silêncio (determinística por
+            // slot+phase; desativada com Reduce Motion).
+            if !reduceMotion {
+                level = max(level, WaveformDynamics.idleBreathLevel(slot: distance, phase: phase))
+            }
+
+            let height = WaveformDynamics.scrollingBarHeight(
                 level: level,
-                history: history,
-                phase: phase,
                 minimumHeight: minimumBarHeight,
                 maximumHeight: maximumBarHeight
             )
-            let opacity = WaveformDynamics.chatGPTWaveformBarOpacity(
-                index: index,
-                count: barCount,
-                energy: energy
+
+            let position = 1 - (CGFloat(distance) + progress) / CGFloat(barCount)
+            let opacity = min(
+                WaveformDynamics.scrollingBarOpacity(level: level, positionProgress: position)
+                    + WaveformDynamics.recencyBoost(distanceFromNewest: distance)
+                    + WaveformDynamics.onsetBoost(attack: attack, distanceFromNewest: distance),
+                0.98
             )
-            let x = CGFloat(index) * (barWidth + barSpacing)
+
             let rect = CGRect(
                 x: x,
                 y: centerY - height / 2,
                 width: barWidth,
                 height: height
             )
-            var bar = Path()
-            bar.addRoundedRect(
-                in: rect,
-                cornerSize: CGSize(width: barWidth / 2, height: barWidth / 2)
+            let bar = Path(roundedRect: rect, cornerRadius: barWidth / 2)
+
+            // Temperatura de cor: cauda antiga esfria (branco-azulado), o
+            // presente é branco puro — reforça a leitura de "agora" à direita.
+            let coolness = 1 - position
+            let tint = Color(
+                red: 1 - 0.20 * coolness,
+                green: 1 - 0.16 * coolness,
+                blue: 1 - 0.05 * coolness
             )
+
+            // Gradiente vertical por barra: núcleo brilhante, pontas suaves —
+            // profundidade de "energia" em vez de retângulo chapado.
             context.fill(
                 bar,
-                with: .color(recordingColor.opacity(opacity))
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: tint.opacity(opacity * 0.62), location: 0),
+                        .init(color: tint.opacity(opacity), location: 0.5),
+                        .init(color: tint.opacity(opacity * 0.62), location: 1),
+                    ]),
+                    startPoint: CGPoint(x: rect.midX, y: rect.minY),
+                    endPoint: CGPoint(x: rect.midX, y: rect.maxY)
+                )
             )
         }
     }
-
 }

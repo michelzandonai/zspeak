@@ -135,8 +135,11 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
             let text = try await transcribePreview(Self.prepareForPreview(chunk))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !Task.isCancelled, !text.isEmpty {
+                // Só acumula — publicar aqui encolheria o texto na tela (a
+                // janela corrente sumiria até o próximo preview), causando o
+                // efeito "apaga tudo e reescreve" no overlay. O preview
+                // pendente publica confirmado + janela de uma vez.
                 confirmedText = Self.joined(confirmedText, text)
-                publish(windowText: "")
             }
         } catch is CancellationError {
             // Sem problema: o batch final cobre o áudio completo.

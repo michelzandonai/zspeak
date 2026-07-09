@@ -1,7 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// Página "Sobre" — logo, versão, informações de processamento e links.
+/// Página "Sobre" — identidade do app centrada no topo e informações em
+/// sections agrupadas, no padrão dos Ajustes do Sistema.
 struct AboutPage: View {
 
     private var appVersion: String {
@@ -12,74 +13,81 @@ struct AboutPage: View {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
     }
 
+    /// True quando o processo atual tem um ícone próprio declarado no bundle.
+    private var bundleHasIcon: Bool {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") != nil
+            || Bundle.main.object(forInfoDictionaryKey: "CFBundleIconName") != nil
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                ZSPageHeader(
-                    title: "zspeak",
-                    subtitle: "Transcrição local para devs · versão \(appVersion) (\(buildNumber))",
-                    systemImage: "waveform.badge.mic",
-                    tone: .accent
-                ) {
-                    ZSStatusChip(text: "100% local", tone: .success, systemImage: "lock.fill")
-                }
-
-                LazyVGrid(columns: aboutColumns, alignment: .leading, spacing: 16) {
-                    ZSSectionCard {
-                        sectionTitle("Tecnologia", systemImage: "cpu")
-                        LabeledContent("Modelo ASR", value: "Parakeet TDT 0.6B V3")
-                        LabeledContent("Motor", value: "FluidAudio (CoreML / ANE)")
-                        LabeledContent("Processamento", value: "No dispositivo")
+        Form {
+            Section {
+                VStack(spacing: 10) {
+                    // Ícone real do bundle; squircle como fallback quando o
+                    // processo não roda de um .app com ícone (ex.: testes).
+                    if bundleHasIcon {
+                        Image(nsImage: NSApplication.shared.applicationIconImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 72, height: 72)
+                    } else {
+                        ZSSettingsIcon(systemImage: "waveform.badge.mic", color: .blue, size: 64)
                     }
 
-                    ZSSectionCard {
-                        sectionTitle("Plataforma", systemImage: "macbook")
-                        LabeledContent("Sistema", value: "macOS 14+")
-                        LabeledContent("Arquitetura", value: "Apple Silicon")
-                        LabeledContent("IDE", value: "Xcode 15+")
+                    VStack(spacing: 2) {
+                        Text("zspeak")
+                            .font(.title.weight(.bold))
+                        Text("Transcrição local para devs")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                     }
 
-                    ZSSectionCard {
-                        sectionTitle("Privacidade", systemImage: "lock.shield")
-                        LabeledContent("Rede", value: "Sem envio de áudio")
-                        LabeledContent("Chaves", value: "Sem API keys")
-                        LabeledContent("Modelo", value: "Baixado no Mac")
-                    }
-
-                    ZSSectionCard {
-                        sectionTitle("Links", systemImage: "link")
-                        Button {
-                            if let url = URL(string: "https://github.com/michelzandonai/zspeak") {
-                                NSWorkspace.shared.open(url)
-                            }
-                        } label: {
-                            Label("Abrir repositório no GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
-                        }
-
-                        Button {
-                            // TODO: implementar em onda futura
-                        } label: {
-                            Label("Verificar atualizações", systemImage: "arrow.triangle.2.circlepath")
-                        }
-                        .disabled(true)
+                    HStack(spacing: 8) {
+                        Text("Versão \(appVersion) (\(buildNumber))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ZSStatusChip(text: "100% local", tone: .success, systemImage: "lock.fill")
                     }
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
-            .padding(ZSDesign.pagePadding)
+
+            Section("Tecnologia") {
+                LabeledContent("Modelo ASR", value: "Parakeet TDT 0.6B V3")
+                LabeledContent("Motor", value: "FluidAudio (CoreML / ANE)")
+                LabeledContent("Processamento", value: "No dispositivo")
+            }
+
+            Section("Plataforma") {
+                LabeledContent("Sistema", value: "macOS 14+")
+                LabeledContent("Arquitetura", value: "Apple Silicon")
+            }
+
+            Section("Privacidade") {
+                LabeledContent("Rede", value: "Sem envio de áudio")
+                LabeledContent("Chaves", value: "Sem API keys")
+                LabeledContent("Modelo", value: "Baixado no Mac")
+            }
+
+            Section {
+                HStack {
+                    Label("Repositório", systemImage: "chevron.left.forwardslash.chevron.right")
+                    Spacer()
+                    Button("Abrir no GitHub") {
+                        if let url = URL(string: "https://github.com/michelzandonai/zspeak") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .controlSize(.small)
+                }
+            } header: {
+                Text("Links")
+            }
         }
-        .background(ZSDesign.pageBackground)
+        .formStyle(.grouped)
         .navigationTitle("Sobre")
-    }
-
-    private func sectionTitle(_ title: String, systemImage: String) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(.headline)
-            .foregroundStyle(.primary)
-    }
-
-    private var aboutColumns: [GridItem] {
-        [
-            GridItem(.adaptive(minimum: 280), spacing: 16, alignment: .top),
-        ]
     }
 }

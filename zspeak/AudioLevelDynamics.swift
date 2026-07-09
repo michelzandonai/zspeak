@@ -17,10 +17,15 @@ enum AudioLevelNormalizer {
 }
 
 /// Modela a dinâmica visual da waveform do overlay.
+///
+/// Design "histórico rolante" (estilo Voice Memos): cada barra é uma amostra
+/// real do nível de voz; amostras novas entram pela direita e a linha desliza
+/// continuamente para a esquerda. O perfil natural da fala (sílabas/pausas)
+/// gera a variação visual — nada de envelope artificial que satura em bloco.
 enum WaveformDynamics {
     private static let noiseGate: Float = 0.04
-    private static let attackFactor: Float = 0.72
-    private static let releaseFactor: Float = 0.30
+    private static let attackFactor: Float = 0.85
+    private static let releaseFactor: Float = 0.45
 
     static func nextDisplayLevel(rawLevel: Float, previousLevel: Float) -> Float {
         let clamped = min(max(rawLevel, 0), 1)
@@ -47,84 +52,122 @@ enum WaveformDynamics {
         return next
     }
 
-    static func chatGPTWaveformHistoryLevel(
-        index: Int,
-        count: Int,
-        level: Float,
-        history: [Float]
-    ) -> Float {
-        let clampedLevel = min(max(level, 0), 1)
-        guard count > 1, history.count > 1 else { return clampedLevel }
-
-        let clampedIndex = min(max(index, 0), count - 1)
-        let progress = CGFloat(clampedIndex) / CGFloat(count - 1)
-        let position = progress * CGFloat(history.count - 1)
-        let lowerIndex = min(max(Int(floor(position)), 0), history.count - 1)
-        let upperIndex = min(lowerIndex + 1, history.count - 1)
-        let fraction = Float(position - CGFloat(lowerIndex))
-        let lower = min(max(history[lowerIndex], 0), 1)
-        let upper = min(max(history[upperIndex], 0), 1)
-        let interpolated = lower + (upper - lower) * fraction
-
-        return min(max(max(interpolated, clampedLevel * 0.18), 0), 1)
+    /// Posição X da barra que está `distanceFromNewest` amostras atrás da mais
+    /// recente, com deslize contínuo durante o intervalo entre amostras
+    /// (`sampleProgress` 0→1). Propriedade de continuidade: x(d, 1) == x(d+1, 0),
+    /// então a rolagem nunca salta quando uma amostra nova chega.
+    static func scrollingBarX(
+        distanceFromNewest: Int,
+        sampleProgress: CGFloat,
+        pitch: CGFloat,
+        rightmostX: CGFloat
+    ) -> CGFloat {
+        let clampedProgress = min(max(sampleProgress, 0), 1)
+        return rightmostX - (CGFloat(distanceFromNewest) + clampedProgress) * pitch
     }
 
-    static func chatGPTWaveformBarEnergy(
-        index: Int,
-        count: Int,
+    /// Altura da barra a partir do nível amostrado (0–1). A curva côncava
+    /// preserva dinâmica em fala média sem colar as barras no teto.
+    static func scrollingBarHeight(
         level: Float,
-        history: [Float],
-        phase: TimeInterval
-    ) -> Float {
-        let safeCount = max(count, 1)
-        let clampedIndex = min(max(index, 0), safeCount - 1)
-        let clampedLevel = min(max(level, 0), 1)
-        let progress = safeCount == 1 ? CGFloat(0.5) : CGFloat(clampedIndex) / CGFloat(safeCount - 1)
-        let centerEnvelope = Float(0.48 + pow(sin(progress * .pi), 0.78) * 0.52)
-        let historyLevel = chatGPTWaveformHistoryLevel(
-            index: clampedIndex,
-            count: safeCount,
-            level: clampedLevel,
-            history: history
-        )
-        let primaryBreath = (sin(phase * 2.1 + Double(clampedIndex) * 0.74) + 1) * 0.5
-        let secondaryBreath = (sin(phase * 1.35 - Double(clampedIndex) * 1.31) + 1) * 0.5
-        let idleMotion = Float(0.050 + primaryBreath * 0.055 + secondaryBreath * 0.030)
-        let historyAccent = max(historyLevel - clampedLevel * 0.30, 0) * 0.34
-        let speechMotion = pow(max(historyLevel, clampedLevel * 0.52), 0.74) * centerEnvelope + historyAccent
-
-        return min(max(idleMotion + speechMotion, 0), 1)
-    }
-
-    static func chatGPTWaveformBarHeight(
-        index: Int,
-        count: Int,
-        level: Float,
-        history: [Float],
-        phase: TimeInterval,
         minimumHeight: CGFloat,
         maximumHeight: CGFloat
     ) -> CGFloat {
-        let energy = CGFloat(chatGPTWaveformBarEnergy(
-            index: index,
-            count: count,
-            level: level,
-            history: history,
-            phase: phase
-        ))
+        let clamped = CGFloat(min(max(level, 0), 1))
         let minimum = max(0, minimumHeight)
         let maximum = max(minimum, maximumHeight)
-
-        return minimum + energy * (maximum - minimum)
+        let shaped = pow(clamped, 0.66)
+        return minimum + shaped * (maximum - minimum)
     }
 
-    static func chatGPTWaveformBarOpacity(index: Int, count: Int, energy: Float) -> Double {
-        let safeCount = max(count, 1)
-        let clampedIndex = min(max(index, 0), safeCount - 1)
-        let progress = safeCount == 1 ? CGFloat(0.5) : CGFloat(clampedIndex) / CGFloat(safeCount - 1)
-        let centerEnvelope = Double(0.30 + pow(sin(progress * .pi), 0.85) * 0.70)
-        let clampedEnergy = Double(min(max(energy, 0), 1))
+    /// Opacidade da barra: recente e alta = brilhante; a cauda antiga esmaece
+    /// para a esquerda. `positionProgress`: 0 = borda esquerda, 1 = direita.
+    static func scrollingBarOpacity(level: Float, positionProgress: CGFloat) -> Double {
+        let clampedLevel = Double(min(max(level, 0), 1))
+        let position = Double(min(max(positionProgress, 0), 1))
+        return min(0.25 + position * 0.42 + clampedLevel * 0.33, 0.97)
+    }
 
-        return min(0.34 + clampedEnergy * 0.46 + centerEnvelope * 0.18, 0.96)
+    /// Respiração sutil da linha de base no silêncio — os pontos ondulam de
+    /// leve para o overlay não parecer congelado enquanto ninguém fala.
+    /// Determinística em função de (slot, phase); amplitude máxima ~0.08.
+    static func idleBreathLevel(slot: Int, phase: TimeInterval) -> Float {
+        let primary = (sin(phase * 1.9 + Double(slot) * 0.53) + 1) * 0.5
+        let secondary = (sin(phase * 1.15 - Double(slot) * 0.87) + 1) * 0.5
+        return Float(0.015 + primary * 0.045 + secondary * 0.02)
+    }
+
+    /// Suavização 3-tap leve (0.18/0.64/0.18) do perfil exibido: amostras
+    /// vizinhas se conectam como onda em vez de pente serrilhado, preservando
+    /// o contraste dos picos. Só afeta a exibição — o histórico fica intacto.
+    static func smoothedProfile(_ samples: [Float]) -> [Float] {
+        guard samples.count > 2 else { return samples }
+        var result = samples
+        for index in 1..<(samples.count - 1) {
+            result[index] = samples[index - 1] * 0.18
+                + samples[index] * 0.64
+                + samples[index + 1] * 0.18
+        }
+        return result
+    }
+
+    /// Realce "cabeça de cometa": as barras mais recentes ganham um boost de
+    /// brilho que decai em ~5 posições — dá a sensação de a voz estar sendo
+    /// "escrita" agora na borda direita.
+    static func recencyBoost(distanceFromNewest: Int) -> Double {
+        let falloff = 1 - Double(distanceFromNewest) / 5
+        return max(0, falloff) * 0.25
+    }
+
+    /// Lampejo transiente no ataque da fala: quando o nível sobe rápido entre
+    /// duas amostras, a cabeça da onda ganha um brilho extra que decai em ~5
+    /// barras — o início de cada sílaba "acende" a escrita.
+    static func onsetBoost(attack: Float, distanceFromNewest: Int) -> Double {
+        let clampedAttack = Double(min(max(attack, 0), 1))
+        let falloff = max(0, 1 - Double(distanceFromNewest) / 5)
+        return clampedAttack * falloff * 0.5
+    }
+
+    /// Quantas amostras o sampler deve registrar neste tick para manter a
+    /// grade de tempo consistente. O relógio da rolagem assume UMA amostra a
+    /// cada `samplePeriod` exato; se o loop dormir "período + trabalho" (ou
+    /// acordar atrasado por pressão no MainActor), o atraso acumula e o
+    /// `sampleProgress` fica saturado em 1 — a rolagem congela um instante a
+    /// CADA amostra (micro-trava visível quando as barras são altas, i.e.
+    /// falando). Com a grade agendada, um tick atrasado registra os slots
+    /// devidos e o timestamp avança em múltiplos exatos do período.
+    static func pendingSampleSlots(
+        scheduledLastSampleAt: TimeInterval,
+        now: TimeInterval,
+        samplePeriod: TimeInterval,
+        maximumSlots: Int
+    ) -> Int {
+        guard samplePeriod > 0, maximumSlots > 0, now > scheduledLastSampleAt else { return 0 }
+        let slots = Int((now - scheduledLastSampleAt) / samplePeriod)
+        return min(slots, maximumSlots)
+    }
+
+    /// Nível contínuo entre duas amostras: interpola a anterior e a atual no
+    /// mesmo relógio da rolagem (sampleProgress 0→1). Elementos ambientes
+    /// (glow, respiração) fluem a 60fps em vez de pular a cada amostra.
+    static func interpolatedLevel(previous: Float, current: Float, progress: Float) -> Float {
+        let clampedProgress = min(max(progress, 0), 1)
+        let clampedPrevious = min(max(previous, 0), 1)
+        let clampedCurrent = min(max(current, 0), 1)
+        return clampedPrevious + (clampedCurrent - clampedPrevious) * clampedProgress
+    }
+
+    /// Perfil determinístico de "fala" para snapshots/previews, onde não há
+    /// áudio real: modulação curta (sílabas) sob um envelope longo (frases),
+    /// escalado pelo nível forçado.
+    static func syntheticSpeechHistory(count: Int, level: Float, phase: TimeInterval) -> [Float] {
+        guard count > 0 else { return [] }
+        let clampedLevel = Double(min(max(level, 0), 1))
+        return (0..<count).map { index in
+            let syllable = abs(sin(Double(index) * 0.82 + phase * 2.6))
+            let envelope = 0.55 + 0.45 * sin(Double(index) * 0.21 - phase * 1.3)
+            let value = clampedLevel * (0.16 + 0.84 * syllable * envelope)
+            return Float(min(max(value, 0), 1))
+        }
     }
 }

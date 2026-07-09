@@ -74,6 +74,10 @@ final class RecordingController {
     ///   transcrição bruta; deixa o Modo Prompt inserir apenas o resultado da LLM.
     /// - `persistTranscription`: persiste o record no histórico e retorna o UUID gerado.
     var applyVocabularyReplacements: (@MainActor (String) -> String)?
+    /// Trim de fala pré-ASR. `nil` (default) usa o gate RMS (`SpeechSampleTrimmer`);
+    /// o AppState injeta o caminho VAD Silero, que internamente já cai para RMS
+    /// quando o modelo está indisponível ou não encontra fala confiável.
+    var trimSpeechForASR: (@Sendable ([Float]) async -> SpeechTrimResult)?
     var shouldDeferInsertionAfterTranscription: (@MainActor () -> Bool)?
     var persistTranscription: (@MainActor (_ text: String, _ modelName: String, _ duration: Double, _ targetAppName: String?, _ samples: [Float]?) -> UUID?)?
     /// Chamado no início de cada gravação. O `AppState` usa para cancelar uma
@@ -139,9 +143,11 @@ final class RecordingController {
     /// Reprepara o engine após inicialização/stop mantendo o hot window ativo.
     func warmUpAudioCapture() async {
         guard microphoneManager.isPermissionGranted else { return }
-        let preferredUID = microphoneManager.connectedMicrophones().first?.id
+        // Mesmo candidato da próxima gravação (respeita bloqueados); lista
+        // vazia = nenhum mic permitido — nada a aquecer.
+        guard let firstCandidate = microphoneManager.recordingCandidateUIDs().first else { return }
         do {
-            try await audioCapture.warmUp(deviceUID: preferredUID)
+            try await audioCapture.warmUp(deviceUID: firstCandidate)
         } catch {
             logger.info("warmUpAudioCapture: falhou (\(error.localizedDescription)) — start() usará cold path")
         }
@@ -151,9 +157,14 @@ final class RecordingController {
         await audioCapture.coolDown()
     }
 
-    /// Leitura direta do nível de áudio (WaveformView).
-    nonisolated func currentAudioLevel() async -> Float {
+    /// Leitura direta e síncrona do nível de áudio (WaveformView, pull a 45 ms).
+    nonisolated func currentAudioLevel() -> Float {
         audioCapture.currentAudioLevel()
+    }
+
+    /// Clipping recente na captação (aviso "mic muito alto" no overlay).
+    nonisolated func isInputClipping() -> Bool {
+        audioCapture.isInputClipping()
     }
 
     /// Exposto para benchmarks e pipelines externos (ex: `AudioFileTranscriber`).
@@ -256,55 +267,91 @@ final class RecordingController {
             }
         }
 
-        // Fluxo otimizado: preferido + default. Se o preferido falhar, não
-        // iteramos todos os candidatos (cada retry custa 100–300 ms de
-        // engine.start()). Caímos direto para o default do sistema.
+        // Fluxo otimizado: no máximo 2 candidatos (cada retry custa 100–300 ms
+        // de engine.start()), resolvidos pelo MicrophoneManager respeitando os
+        // BLOQUEADOS (um mic bloqueado nunca é usado — nem como default do
+        // sistema). Cada tentativa tem watchdog de primeiro sample: engine que
+        // "inicia" mas não entrega áudio (device zumbi, race do HAL) cai para
+        // o próximo candidato em vez de prender o app em "Preparando...".
         recordingTask = Task {
             let onSamples = prepareLiveTranscriptionIfNeeded(sessionID: sessionID)
-            let candidatos = microphoneManager.connectedMicrophones()
-            let preferredUID = candidatos.first?.id
+            let candidates = microphoneManager.recordingCandidateUIDs()
 
-            // Tentativa 1: mic preferido (ou default se lista vazia)
-            if let uid = preferredUID {
+            guard !candidates.isEmpty else {
+                logger.error("startRecording: nenhum microfone permitido (todos bloqueados/desconectados)")
+                await cancelLiveTranscription()
+                guard recordingSessionID == sessionID else { return }
+                state = .idle
+                recordingSessionID = nil
+                errorMessage = "Nenhum microfone disponível — todos os conectados estão bloqueados"
+                return
+            }
+
+            for (index, uid) in candidates.enumerated() {
+                let isLast = index == candidates.count - 1
+                let label = uid ?? "system-default"
                 microphoneManager.activeMicrophoneID = uid
+
                 do {
                     try await audioCapture.start(
                         deviceUID: uid,
                         onFirstSample: onFirstSample,
                         onSamples: onSamples
                     )
-                    let elapsed = (CFAbsoluteTimeGetCurrent() - tStartRec) * 1000
-                    logger.info("t=\(String(format: "%.0f", elapsed), privacy: .public)ms audioCapture.start OK (preferred=\(uid, privacy: .public))")
-                    return
                 } catch {
-                    logger.error("startRecording: preferido \(uid, privacy: .public) falhou (\(String(describing: error), privacy: .public)) — caindo para default")
+                    logger.error("startRecording: \(label, privacy: .public) falhou (\(String(describing: error), privacy: .public))\(isLast ? "" : " — tentando próximo candidato", privacy: .public)")
                     if recordingSessionID == sessionID {
                         _ = await audioCapture.stop()
                     }
+                    if Task.isCancelled { return }
+                    if isLast { break }
+                    continue
                 }
-                if Task.isCancelled { return }
+
+                let elapsed = (CFAbsoluteTimeGetCurrent() - tStartRec) * 1000
+                logger.info("t=\(String(format: "%.0f", elapsed), privacy: .public)ms audioCapture.start OK (\(label, privacy: .public))")
+
+                // Watchdog: engine subiu, mas o áudio chegou? `onFirstSample`
+                // move .preparing → .recording; sem samples até o prazo, o
+                // device é zumbi — derruba e tenta o próximo.
+                if await waitForFirstSample(sessionID: sessionID) {
+                    return
+                }
+                guard recordingSessionID == sessionID, !Task.isCancelled else { return }
+                logger.error("startRecording: \(label, privacy: .public) iniciou mas não entregou samples em \(Int(Self.firstSampleTimeoutSeconds * 1000), privacy: .public)ms\(isLast ? "" : " — tentando próximo candidato", privacy: .public)")
+                _ = await audioCapture.stop()
+                await audioCapture.coolDown()
+                if isLast { break }
             }
 
-            // Tentativa 2 (última): default do sistema
+            // Todos os candidatos falharam
             microphoneManager.activeMicrophoneID = nil
-            do {
-                try await audioCapture.start(
-                    deviceUID: nil,
-                    onFirstSample: onFirstSample,
-                    onSamples: onSamples
-                )
-                let elapsed = (CFAbsoluteTimeGetCurrent() - tStartRec) * 1000
-                logger.info("t=\(String(format: "%.0f", elapsed), privacy: .public)ms audioCapture.start OK (system default)")
-            } catch {
-                logger.error("startRecording: default falhou → \(String(describing: error), privacy: .public)")
-                microphoneManager.activeMicrophoneID = nil
-                await cancelLiveTranscription()
-                guard recordingSessionID == sessionID else { return }
-                state = .idle
-                recordingSessionID = nil
-                errorMessage = "Não foi possível iniciar gravação em nenhum microfone disponível"
-            }
+            await cancelLiveTranscription()
+            guard recordingSessionID == sessionID else { return }
+            state = .idle
+            recordingSessionID = nil
+            errorMessage = "Não foi possível iniciar gravação em nenhum microfone disponível"
         }
+    }
+
+    /// Prazo para o primeiro sample chegar após `start()` OK (cold path real
+    /// fica em ~100–400 ms; folga para devices Bluetooth acordando).
+    static let firstSampleTimeoutSeconds: TimeInterval = 2.0
+
+    /// Espera o primeiro sample (state sai de .preparing) até o timeout.
+    /// Retorna true se a gravação engatou (ou a sessão mudou/foi parada pelo
+    /// usuário — nada mais a fazer aqui); false = timeout de device mudo.
+    private func waitForFirstSample(sessionID: UUID) async -> Bool {
+        let deadline = CFAbsoluteTimeGetCurrent() + Self.firstSampleTimeoutSeconds
+        while CFAbsoluteTimeGetCurrent() < deadline {
+            if Task.isCancelled { return true }
+            guard recordingSessionID == sessionID else { return true }
+            // .recording = primeiro sample chegou; .processing/.idle = o
+            // usuário parou/cancelou no meio do preparo — segue o fluxo normal.
+            if state != .preparing { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return state != .preparing
     }
 
     private func stopRecording() {
@@ -338,7 +385,12 @@ final class RecordingController {
                 // Gate de duração sobre a FALA aparada, não sobre o raw: o
                 // pre-roll de 0,5 s de silêncio não deve contar como "áudio
                 // suficiente", nem um "ok" real de 0,4 s ser descartado.
-                let trimResult = SpeechSampleTrimmer.trimForASR(samples)
+                let trimResult: SpeechTrimResult
+                if let vadTrim = trimSpeechForASR {
+                    trimResult = await vadTrim(samples)
+                } else {
+                    trimResult = SpeechSampleTrimmer.trimForASR(samples)
+                }
                 guard trimResult.samples.count >= Self.minimumSpeechSampleCount else {
                     state = .idle
                     clearLiveTranscriptionState()
@@ -434,7 +486,11 @@ final class RecordingController {
                         await self?.handleLiveTranscriptionUpdate(update, sessionID: sessionID)
                     }
                 }
-                let pumpTask = Task { [pipe, liveSession] in
+                // `.utility`: os previews (CoreML/decoder TDT) herdam esta
+                // prioridade e deixam de competir de igual pra igual com a UI
+                // (waveform a 60 fps) e com a transcrição final. Preview é
+                // best-effort por definição — pode ceder CPU.
+                let pumpTask = Task(priority: .utility) { [pipe, liveSession] in
                     for await samples in pipe.stream {
                         await liveSession.append(samples)
                     }

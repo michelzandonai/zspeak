@@ -239,4 +239,125 @@ struct MicrophoneManagerTests {
         #expect(filtered.contains("USBMic:001"))
         #expect(!filtered.contains(aggregateID))
     }
+
+    // MARK: - Bloqueio de microfones
+
+    /// UserDefaults isolado por teste — sem corrida com testes paralelos nem
+    /// vazamento de bloqueios para o app real do usuário.
+    private func isolatedManager(_ suiteName: String) -> MicrophoneManager {
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return MicrophoneManager(skipBundlePermissionCheck: true, defaults: defaults)
+    }
+
+    @Test("connectedMicrophones exclui bloqueados")
+    func connectedMicrophones_excluiBloqueados() {
+        let manager = isolatedManager("mic-tests-blocked-1")
+        manager.useSystemDefault = false
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-A", name: "Mic A", isConnected: true),
+            MicrophoneInfo(id: "mic-B", name: "Mic B", isConnected: true),
+            MicrophoneInfo(id: "mic-C", name: "Mic C", isConnected: true),
+        ]
+        manager.setBlocked("mic-A", blocked: true)
+
+        #expect(manager.connectedMicrophones().map(\.id) == ["mic-B", "mic-C"])
+        #expect(manager.isBlocked("mic-A"))
+
+        manager.setBlocked("mic-A", blocked: false)
+        #expect(manager.connectedMicrophones().map(\.id) == ["mic-A", "mic-B", "mic-C"])
+    }
+
+    @Test("Bloqueados persistem em UserDefaults entre instâncias")
+    func bloqueadosPersistemEntreInstancias() {
+        let suiteName = "mic-tests-blocked-2"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let manager = MicrophoneManager(skipBundlePermissionCheck: true, defaults: defaults)
+        manager.setBlocked("mic-persistente", blocked: true)
+
+        let recarregado = MicrophoneManager(skipBundlePermissionCheck: true, defaults: defaults)
+        #expect(recarregado.isBlocked("mic-persistente"))
+    }
+
+    @Test("Candidatos: padrão do sistema não bloqueado usa só o default")
+    func candidatos_padraoDoSistemaLivre() {
+        let manager = isolatedManager("mic-tests-blocked-3")
+        manager.useSystemDefault = true
+        manager.systemDefaultUIDProvider = { "mic-default" }
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-A", name: "Mic A", isConnected: true)
+        ]
+
+        #expect(manager.recordingCandidateUIDs() == [nil])
+    }
+
+    @Test("Candidatos: padrão do sistema BLOQUEADO redireciona para o primeiro permitido")
+    func candidatos_padraoBloqueadoRedireciona() {
+        let manager = isolatedManager("mic-tests-blocked-4")
+        manager.useSystemDefault = true
+        manager.systemDefaultUIDProvider = { "mic-bloqueado" }
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-bloqueado", name: "Ruim", isConnected: true),
+            MicrophoneInfo(id: "mic-bom", name: "Bom", isConnected: true),
+        ]
+        manager.setBlocked("mic-bloqueado", blocked: true)
+
+        #expect(manager.recordingCandidateUIDs() == ["mic-bom"])
+    }
+
+    @Test("Candidatos: ordem de prioridade tenta preferido e cai para o default livre")
+    func candidatos_prioridadeComFallbackDefault() {
+        let manager = isolatedManager("mic-tests-blocked-5")
+        manager.useSystemDefault = false
+        manager.systemDefaultUIDProvider = { "mic-default" }
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-A", name: "Mic A", isConnected: true),
+            MicrophoneInfo(id: "mic-B", name: "Mic B", isConnected: true),
+        ]
+
+        #expect(manager.recordingCandidateUIDs() == ["mic-A", nil])
+    }
+
+    @Test("Candidatos: default bloqueado usa o segundo permitido como fallback")
+    func candidatos_defaultBloqueadoFallbackSegundo() {
+        let manager = isolatedManager("mic-tests-blocked-6")
+        manager.useSystemDefault = false
+        manager.systemDefaultUIDProvider = { "mic-default" }
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-A", name: "Mic A", isConnected: true),
+            MicrophoneInfo(id: "mic-B", name: "Mic B", isConnected: true),
+            MicrophoneInfo(id: "mic-default", name: "Default", isConnected: true),
+        ]
+        manager.setBlocked("mic-default", blocked: true)
+
+        #expect(manager.recordingCandidateUIDs() == ["mic-A", "mic-B"])
+    }
+
+    @Test("Candidatos: todos bloqueados retorna vazio — captura deve falhar com mensagem")
+    func candidatos_todosBloqueadosRetornaVazio() {
+        let manager = isolatedManager("mic-tests-blocked-7")
+        manager.useSystemDefault = true
+        manager.systemDefaultUIDProvider = { "mic-A" }
+        manager.microphones = [
+            MicrophoneInfo(id: "mic-A", name: "Mic A", isConnected: true),
+            MicrophoneInfo(id: "mic-B", name: "Mic B", isConnected: true),
+        ]
+        manager.setBlocked("mic-A", blocked: true)
+        manager.setBlocked("mic-B", blocked: true)
+
+        #expect(manager.recordingCandidateUIDs().isEmpty)
+    }
+
+    /// O provider padrão do UID do "system default" consulta o HAL (CoreAudio),
+    /// não o AVCaptureDevice — é ao default do HAL que o AVAudioEngine conecta
+    /// com uid=nil, e os dois podem divergir (ex.: fone BT vira default no HAL).
+    @Test("halDefaultInputUID retorna UID do device de entrada padrão do HAL")
+    func halDefaultInputUIDConsultaHAL() {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+        let uid = MicrophoneManager.halDefaultInputUID()
+        // Máquina de dev sempre tem ao menos o mic embutido como entrada.
+        #expect(uid?.isEmpty == false, "HAL deveria expor um device de entrada padrão")
+    }
 }

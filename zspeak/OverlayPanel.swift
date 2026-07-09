@@ -6,7 +6,14 @@ import SwiftUI
 final class OverlayPanel: NSPanel {
 
     private static let xKey = "overlayPanelX"
-    private static let yKey = "overlayPanelY"
+    /// Legado: origem inferior-esquerda. Mantido só para migração — a altura
+    /// do painel varia por estado, então restaurar a base movia o overlay a
+    /// cada relaunch (o init usa 80pt e o conteúdo cresce ancorado no topo).
+    private static let legacyYKey = "overlayPanelY"
+    /// Âncora persistida: topo do painel (`frame.maxY`). O topo é o que fica
+    /// fixo em todos os resizes programáticos (`adjustToPreferredSize`), então
+    /// é a única coordenada estável entre estados e relaunches.
+    private static let topYKey = "overlayPanelTopY"
 
     private var hostingController: NSHostingController<OverlayView>?
     private var sizeObservation: NSKeyValueObservation?
@@ -14,6 +21,26 @@ final class OverlayPanel: NSPanel {
     private var currentAnchorRect: NSRect?
     private enum Orientation { case above, below }
     private var lockedOrientation: Orientation?
+
+    /// Canto superior esquerdo vigente do overlay — FONTE ÚNICA da posição.
+    /// Todo posicionamento programático (resize, show, hide) deriva o frame
+    /// daqui em vez de ler `frame` (que pode estar no meio de uma animação);
+    /// o usuário atualiza a âncora ao arrastar o painel (didMove). Isso impede
+    /// que offsets transitórios (rise-in do show, drift do hide) ou relayouts
+    /// durante o fade "vazem" para a posição e façam o overlay migrar um pouco
+    /// a cada gravação.
+    private var anchorTopLeft: NSPoint = .zero
+    /// > 0 enquanto uma animação transitória (rise-in/drift) está em voo —
+    /// didMove desses moves não pode adotar o deslocamento na âncora. Contador
+    /// (e não Bool) para sobreviver a show/hide sobrepostos.
+    private var transientAnimationCount = 0
+
+    /// Seam testável do "Reduce Motion" do sistema: no xctest headless o
+    /// NSWorkspace reporta true e os caminhos animados de show/hide nunca
+    /// executariam — os testes de regressão forçam false para exercitá-los.
+    var prefersReducedMotion: () -> Bool = {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
 
     init() {
         super.init(
@@ -40,13 +67,22 @@ final class OverlayPanel: NSPanel {
         // Permite arrastar pelo fundo
         isMovableByWindowBackground = true
 
-        // Restaura posição salva ou usa default
+        // Restaura a âncora salva ou usa o default (inferior central).
         let defaults = UserDefaults.standard
-        if defaults.object(forKey: Self.xKey) != nil, defaults.object(forKey: Self.yKey) != nil {
+        let hasTopY = defaults.object(forKey: Self.topYKey) != nil
+        let hasLegacyY = defaults.object(forKey: Self.legacyYKey) != nil
+        if defaults.object(forKey: Self.xKey) != nil, hasTopY || hasLegacyY {
             let x = CGFloat(defaults.double(forKey: Self.xKey))
-            let y = CGFloat(defaults.double(forKey: Self.yKey))
-            setFrameOrigin(NSPoint(x: x, y: y))
-            clampToVisibleScreen()
+            let topY: CGFloat
+            if hasTopY {
+                topY = CGFloat(defaults.double(forKey: Self.topYKey))
+            } else {
+                // Migração do formato antigo (origem inferior-esquerda).
+                topY = CGFloat(defaults.double(forKey: Self.legacyYKey)) + frame.height
+            }
+            anchorTopLeft = NSPoint(x: x, y: topY)
+            clampAnchorToVisibleScreen(for: frame.size)
+            setFrameOrigin(derivedOrigin(for: frame.size))
         } else {
             positionAtBottomCenter()
         }
@@ -72,19 +108,37 @@ final class OverlayPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     @objc private func handleDidMove(_ note: Notification) {
+        // Só drags do usuário (e o próprio clamp) atualizam a âncora. Moves
+        // transitórios (rise-in/drift) são bloqueados pelo contador; resizes
+        // programáticos preservam o topo, então adotá-los aqui é inócuo.
+        guard !ignoresPositionPersistence, transientAnimationCount == 0 else { return }
+        anchorTopLeft = NSPoint(x: frame.origin.x, y: frame.maxY)
+        persistAnchor()
+    }
+
+    /// Origem (inferior-esquerda) derivada da âncora para um painel de `size`.
+    private func derivedOrigin(for size: NSSize) -> NSPoint {
+        NSPoint(x: anchorTopLeft.x, y: anchorTopLeft.y - size.height)
+    }
+
+    /// Salva a âncora superior esquerda em UserDefaults.
+    private func persistAnchor() {
         guard !ignoresPositionPersistence else { return }
         let defaults = UserDefaults.standard
-        defaults.set(Double(frame.origin.x), forKey: Self.xKey)
-        defaults.set(Double(frame.origin.y), forKey: Self.yKey)
+        defaults.set(Double(anchorTopLeft.x), forKey: Self.xKey)
+        defaults.set(Double(anchorTopLeft.y), forKey: Self.topYKey)
+        defaults.removeObject(forKey: Self.legacyYKey)
     }
 
     /// Posiciona o painel na parte inferior central da tela principal
     private func positionAtBottomCenter() {
         guard let screen = NSScreen.main else { return }
         let screenFrame = screen.visibleFrame
-        let x = screenFrame.midX - frame.width / 2
-        let y = screenFrame.minY + 80
-        setFrameOrigin(NSPoint(x: x, y: y))
+        anchorTopLeft = NSPoint(
+            x: screenFrame.midX - frame.width / 2,
+            y: screenFrame.minY + 80 + frame.height
+        )
+        setFrameOrigin(derivedOrigin(for: frame.size))
     }
 
     /// Configura o conteúdo SwiftUI UMA VEZ com o modelo observável.
@@ -112,67 +166,78 @@ final class OverlayPanel: NSPanel {
     }
 
     /// Ajusta o frame do painel para match exato com `preferredContentSize` do SwiftUI.
-    /// Mantém a base do painel ancorada (cresce para cima em vez de para baixo).
+    /// O frame alvo deriva SEMPRE da âncora (topo fixo, cresce/encolhe para
+    /// baixo) — nunca do `frame` corrente, que pode estar no meio de uma
+    /// animação e propagaria o deslocamento transitório para a posição final.
     private func adjustToPreferredSize(animated: Bool) {
         guard let controller = hostingController else { return }
         let size = controller.preferredContentSize
         guard size.width > 0, size.height > 0 else { return }
-        // Evita chamadas redundantes
-        guard abs(frame.width - size.width) > 0.5 || abs(frame.height - size.height) > 0.5 else {
-            return
+
+        let newFrame: NSRect
+        if let currentAnchorRect {
+            newFrame = NSRect(
+                origin: frameOriginNear(anchorRect: currentAnchorRect, size: size, useLock: true),
+                size: size
+            )
+        } else {
+            if clampAnchorToVisibleScreen(for: size) {
+                persistAnchor()
+            }
+            newFrame = NSRect(origin: derivedOrigin(for: size), size: size)
         }
 
-        var newFrame = frame
-        let heightDelta = size.height - newFrame.size.height
-        newFrame.origin.y -= heightDelta
-        newFrame.size = size
-        if let currentAnchorRect {
-            newFrame.origin = frameOriginNear(anchorRect: currentAnchorRect, size: size, useLock: true)
+        // Evita chamadas redundantes
+        guard abs(frame.width - newFrame.width) > 0.5
+            || abs(frame.height - newFrame.height) > 0.5
+            || abs(frame.origin.x - newFrame.origin.x) > 0.5
+            || abs(frame.origin.y - newFrame.origin.y) > 0.5 else {
+            return
         }
 
         if animated && alphaValue > 0 && isVisible {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.12
                 animator().setFrame(newFrame, display: true)
-                if currentAnchorRect == nil {
-                    clampToVisibleScreen()
-                }
             }
         } else {
             setFrame(newFrame, display: true)
-            if currentAnchorRect == nil {
-                clampToVisibleScreen()
-            }
         }
     }
 
-    /// Garante que o painel nunca fique salvo fora da área visível do monitor.
-    /// Isso cobre mudanças de monitor/resolução e restores antigos com `y`
-    /// negativo que deixam o overlay invisível.
-    private func clampToVisibleScreen() {
-        guard let screen = nearestScreen() ?? NSScreen.main else { return }
+    /// Clampa a ÂNCORA à área visível do monitor mais próximo para um painel
+    /// de `size`. Cobre mudanças de monitor/resolução e restores antigos fora
+    /// da tela. Retorna true se a âncora precisou mudar.
+    @discardableResult
+    private func clampAnchorToVisibleScreen(for size: NSSize) -> Bool {
+        let derivedFrame = NSRect(origin: derivedOrigin(for: size), size: size)
+        guard let screen = nearestScreen(to: derivedFrame) ?? NSScreen.main else { return false }
 
         let visible = screen.visibleFrame.insetBy(dx: 12, dy: 12)
-        var origin = frame.origin
+        var anchor = anchorTopLeft
 
-        let maxX = visible.maxX - frame.width
-        let maxY = visible.maxY - frame.height
+        anchor.x = min(max(anchor.x, visible.minX), max(visible.minX, visible.maxX - size.width))
+        anchor.y = min(max(anchor.y, visible.minY + size.height), visible.maxY)
 
-        origin.x = min(max(origin.x, visible.minX), maxX)
-        origin.y = min(max(origin.y, visible.minY), maxY)
-
-        guard abs(origin.x - frame.origin.x) > 0.5 || abs(origin.y - frame.origin.y) > 0.5 else { return }
-
-        setFrameOrigin(origin)
-        if !ignoresPositionPersistence {
-            let defaults = UserDefaults.standard
-            defaults.set(Double(origin.x), forKey: Self.xKey)
-            defaults.set(Double(origin.y), forKey: Self.yKey)
+        guard abs(anchor.x - anchorTopLeft.x) > 0.5 || abs(anchor.y - anchorTopLeft.y) > 0.5 else {
+            return false
         }
+        anchorTopLeft = anchor
+        return true
     }
 
-    private func nearestScreen() -> NSScreen? {
-        let center = NSPoint(x: frame.midX, y: frame.midY)
+    /// Garante que o painel esteja na posição derivada da âncora (clampada).
+    private func clampToVisibleScreen() {
+        if clampAnchorToVisibleScreen(for: frame.size) {
+            persistAnchor()
+        }
+        let target = derivedOrigin(for: frame.size)
+        guard abs(target.x - frame.origin.x) > 0.5 || abs(target.y - frame.origin.y) > 0.5 else { return }
+        setFrameOrigin(target)
+    }
+
+    private func nearestScreen(to rect: NSRect) -> NSScreen? {
+        let center = NSPoint(x: rect.midX, y: rect.midY)
 
         if let containing = NSScreen.screens.first(where: { $0.visibleFrame.contains(center) }) {
             return containing
@@ -219,9 +284,32 @@ final class OverlayPanel: NSPanel {
             } else {
                 self.clampToVisibleScreen()
             }
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.1
+
+            // Entrada "rise-in": nasce 10pt abaixo e sobe com fade até a
+            // posição final. Com Reduce Motion, só o fade.
+            let reduceMotion = self.prefersReducedMotion()
+            guard !reduceMotion else {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.1
+                    self.animator().alphaValue = 1
+                }
+                return
+            }
+
+            // O deslocamento é transitório — o contador impede que didMove o
+            // adote na âncora (didMove dispara também em moves programáticos).
+            let target = self.frame.origin
+            self.transientAnimationCount += 1
+            self.setFrameOrigin(NSPoint(x: target.x, y: target.y - 10))
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.26
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 self.animator().alphaValue = 1
+                self.animator().setFrameOrigin(target)
+            }) { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.transientAnimationCount -= 1
+                }
             }
         }
     }
@@ -236,7 +324,11 @@ final class OverlayPanel: NSPanel {
         guard currentAnchorRect != nil || ignoresPositionPersistence else { return }
         currentAnchorRect = nil
         ignoresPositionPersistence = false
+        // Adota a posição em que o modo ancorado deixou o painel — o overlay
+        // permanece onde a tradução o posicionou (comportamento histórico).
+        anchorTopLeft = NSPoint(x: frame.origin.x, y: frame.maxY)
         clampToVisibleScreen()
+        persistAnchor()
     }
 
     private func positionNear(anchorRect: NSRect) {
@@ -281,17 +373,34 @@ final class OverlayPanel: NSPanel {
         return NSScreen.screens.first { $0.visibleFrame.contains(point) }
     }
 
-    /// Esconde o painel com animação
+    /// Esconde o painel com fade + leve drift para baixo (espelho da entrada).
     func hide() {
+        let reduceMotion = prefersReducedMotion()
+        // Drift transitório + relayouts durante o fade não podem tocar a âncora.
+        transientAnimationCount += 1
+
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.1
+            context.duration = reduceMotion ? 0.1 : 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             self.animator().alphaValue = 0
+            if !reduceMotion {
+                self.animator().setFrameOrigin(
+                    NSPoint(x: self.frame.origin.x, y: self.frame.origin.y - 8)
+                )
+            }
         }) { [weak self] in
             MainActor.assumeIsolated {
-                self?.currentAnchorRect = nil
-                self?.lockedOrientation = nil
-                self?.ignoresPositionPersistence = false
-                self?.orderOut(nil)
+                guard let self else { return }
+                self.currentAnchorRect = nil
+                self.lockedOrientation = nil
+                self.orderOut(nil)
+                self.ignoresPositionPersistence = false
+                // Reposiciona a partir da âncora: o conteúdo pode ter mudado
+                // de altura durante o fade (relayout para idle), então
+                // restaurar a origem capturada antes do fade deslocaria o
+                // topo — era a causa do overlay "descer" a cada gravação.
+                self.setFrameOrigin(self.derivedOrigin(for: self.frame.size))
+                self.transientAnimationCount -= 1
             }
         }
     }

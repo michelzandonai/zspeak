@@ -95,18 +95,11 @@ struct CorrectionPromptsView: View {
 
     var body: some View {
         Form {
-            Section {
-                ZSFormHero(
-                    title: "Correção LLM",
-                    subtitle: "Escolha o modelo local e gerencie prompts de pós-processamento.",
-                    systemImage: "sparkles",
-                    tone: .accent
-                )
-            }
-
             // Toggle global
             Section {
-                Toggle("Correção LLM ativa", isOn: Bindable(appState).llmCorrectionEnabled)
+                Toggle(isOn: Bindable(appState).llmCorrectionEnabled) {
+                    ZSRowLabel("Correção LLM ativa", systemImage: "sparkles", color: .purple, subtitle: "Pós-processa a transcrição com o prompt ativo")
+                }
             }
 
             // Modelo LLM compacto
@@ -149,8 +142,8 @@ struct CorrectionPromptsView: View {
             }
         }
         .formStyle(.grouped)
-        .zsFormPage()
         .navigationTitle("Correção LLM")
+        .navigationSubtitle("Modelo local e prompts de pós-processamento")
         .toolbar {
             ToolbarItemGroup {
                 Menu {
@@ -571,10 +564,7 @@ struct CorrectionPromptsView: View {
     private var modelRow: some View {
         let selectedModel = LLMModelOption.model(for: selectedModelID)
         HStack(spacing: 10) {
-            Image(systemName: modelStateIcon)
-                .foregroundStyle(modelStateColor)
-                .font(.title3)
-                .frame(width: 24)
+            ZSSettingsIcon(systemImage: "cpu.fill", color: modelStateColor, size: 24)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(selectedModel.displayName)
@@ -915,17 +905,12 @@ struct CorrectionPromptsView: View {
         } label: {
             HStack(spacing: 8) {
                 Text(prompt.name.isEmpty ? "(sem nome)" : prompt.name)
-                    .font(.body)
+                    .font(.body.weight(.medium))
                     .foregroundStyle(prompt.name.isEmpty ? .secondary : .primary)
                     .lineLimit(1)
                 Spacer()
                 if prompt.isActive {
-                    Text("Ativo")
-                        .font(.caption2.weight(.medium))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.green.opacity(0.2)))
-                        .foregroundStyle(.green)
+                    ZSStatusChip(text: "Ativo", tone: .success, systemImage: "checkmark")
                 }
             }
         }

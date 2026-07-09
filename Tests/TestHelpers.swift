@@ -101,6 +101,38 @@ private actor RealAudioDeviceLock {
     }
 }
 
+// MARK: - Exclusão mútua de harnesses de UI sensíveis ao MainActor
+
+/// Mutex global dos harnesses que animam NSWindows reais ou medem timing do
+/// MainActor (fluidez): em paralelo eles distorcem as medições um do outro —
+/// o ticker de fluidez chegou a registrar 1 tick em 3s enquanto outro teste
+/// animava frames de painel. `.serialized` só serializa DENTRO da suíte;
+/// suítes diferentes precisam deste lock. Mesmo padrão do RealAudioDeviceLock:
+/// `await UIHarnessLock.shared.acquire()` no início do teste +
+/// `defer { Task { await UIHarnessLock.shared.release() } }`.
+actor UIHarnessLock {
+    static let shared = UIHarnessLock()
+    private var isHeld = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !isHeld {
+            isHeld = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            isHeld = false
+        } else {
+            // O lock passa direto para o próximo da fila (permanece held)
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 /// Executa `body` com acesso exclusivo ao dispositivo de áudio real.
 /// Todo teste que dispara captura real (direta ou via AppState.toggleRecording
 /// com modelo pronto) deve envolver o corpo inteiro com este helper.

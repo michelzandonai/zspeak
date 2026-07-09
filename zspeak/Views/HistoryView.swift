@@ -90,19 +90,10 @@ struct HistoryView: View {
 
     var body: some View {
         Form {
-            Section {
-                ZSFormHero(
-                    title: "Histórico",
-                    subtitle: "Revise, copie e ouça transcrições recentes com contexto do app de destino.",
-                    systemImage: "clock.arrow.circlepath",
-                    tone: .info
-                )
-            }
-
             if store.records.isEmpty {
                 emptyState
             } else {
-                searchSection
+                statsSection
 
                 let filteredTotal = filteredRecords.count
 
@@ -133,8 +124,9 @@ struct HistoryView: View {
             retentionSection
         }
         .formStyle(.grouped)
-        .zsFormPage()
         .navigationTitle("Histórico")
+        .navigationSubtitle("Transcrições recentes com áudio e destino")
+        .searchable(text: $searchText, placement: .toolbar, prompt: "Buscar no texto das transcrições")
         .onDisappear { stopAudio() }
         .onChange(of: store.records.count) { _, newCount in
             // Mantém o contador saudável se o usuário apagar itens
@@ -183,10 +175,12 @@ struct HistoryView: View {
     @ViewBuilder
     private var retentionSection: some View {
         Section {
-            Picker("Manter no histórico", selection: $retentionLimit) {
+            Picker(selection: $retentionLimit) {
                 ForEach(TranscriptionStoreRetention.options, id: \.self) { limit in
                     Text(TranscriptionStoreRetention.label(for: limit)).tag(limit)
                 }
+            } label: {
+                ZSRowLabel("Manter no histórico", systemImage: "internaldrive.fill", color: .gray)
             }
             .onChange(of: retentionLimit) { _, _ in
                 store.applyRetentionLimit()
@@ -198,29 +192,49 @@ struct HistoryView: View {
         }
     }
 
-    // MARK: - Busca
+    // MARK: - Resumo
 
+    /// Grid de métricas rápidas do histórico: volume total, tempo falado e
+    /// atividade de hoje.
     @ViewBuilder
-    private var searchSection: some View {
+    private var statsSection: some View {
         Section {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Buscar no texto das transcrições", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .accessibilityLabel("Buscar no histórico")
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Limpar busca")
-                }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                ZSMetricTile(
+                    title: "Transcrições",
+                    value: "\(store.records.count)",
+                    systemImage: "text.bubble.fill",
+                    tone: .info
+                )
+                ZSMetricTile(
+                    title: "Tempo falado",
+                    value: formattedTotalDuration,
+                    systemImage: "waveform",
+                    tone: .accent
+                )
+                ZSMetricTile(
+                    title: "Hoje",
+                    value: "\(todayCount)",
+                    systemImage: "sun.max.fill",
+                    tone: .warning
+                )
             }
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
         }
+    }
+
+    private var todayCount: Int {
+        store.records.filter { Calendar.current.isDateInToday($0.timestamp) }.count
+    }
+
+    /// Duração somada de todas as gravações, em formato humano curto.
+    private var formattedTotalDuration: String {
+        let total = store.records.reduce(0) { $0 + $1.duration }
+        if total < 60 { return String(format: "%.0fs", total) }
+        let minutes = Int(total) / 60
+        if minutes < 60 { return "\(minutes) min" }
+        return "\(minutes / 60)h \(minutes % 60)min"
     }
 
     // MARK: - Rodapé de paginação
@@ -256,41 +270,69 @@ struct HistoryView: View {
     private func recordRow(_ record: TranscriptionRecord) -> some View {
         let isExpanded = expandedRecordId == record.id
         let isHovered = hoveredRecordId == record.id
+        let isPlaying = playingRecordId == record.id
 
-        VStack(alignment: .leading, spacing: 4) {
-            // Texto principal (tap expande)
-            Text(record.text)
-                .lineLimit(isExpanded ? nil : 2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        expandedRecordId = isExpanded ? nil : record.id
+        HStack(alignment: .top, spacing: 10) {
+            // Play/stop circular em destaque quando o registro tem áudio
+            if record.audioFileName != nil {
+                Button {
+                    if isPlaying {
+                        stopAudio()
+                    } else {
+                        playAudio(for: record)
                     }
+                } label: {
+                    Image(systemName: isPlaying ? "stop.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 26))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(isPlaying ? Color.red : Color.accentColor)
                 }
-
-            // Badge "Corrigido de" — caption2, opacidade 0.7
-            if let sourceID = record.sourceRecordID,
-               let original = store.recordsByID[sourceID] {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.uturn.backward")
-                    Text("Corrigido de: \(original.text.prefix(40))\(original.text.count > 40 ? "…" : "")")
-                        .lineLimit(1)
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .opacity(0.7)
+                .buttonStyle(.plain)
+                .help(isPlaying ? "Parar áudio" : "Ouvir áudio")
+                .accessibilityLabel(isPlaying ? "Parar áudio" : "Ouvir áudio")
+            } else {
+                Image(systemName: "text.alignleft")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 26, height: 26)
             }
 
-            // Metadata + ações na mesma linha compacta
-            HStack(spacing: 8) {
-                metadataLine(record)
-                Spacer(minLength: 8)
-                actionButtons(record)
+            VStack(alignment: .leading, spacing: 4) {
+                // Texto principal (tap expande)
+                Text(record.text)
+                    .lineLimit(isExpanded ? nil : 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            expandedRecordId = isExpanded ? nil : record.id
+                        }
+                    }
+
+                // Badge "Corrigido de" — caption2, opacidade 0.7
+                if let sourceID = record.sourceRecordID,
+                   let original = store.recordsByID[sourceID] {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.uturn.backward")
+                        Text("Corrigido de: \(original.text.prefix(40))\(original.text.count > 40 ? "…" : "")")
+                            .lineLimit(1)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .opacity(0.7)
+                }
+
+                // Metadata + ações na mesma linha compacta
+                HStack(spacing: 8) {
+                    metadataLine(record)
+                    Spacer(minLength: 8)
+                    actionButtons(record)
+                        .opacity(isHovered ? 1 : 0.55)
+                }
+                .padding(.top, 2)
             }
-            .padding(.top, 2)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
         .padding(.horizontal, 4)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -337,20 +379,6 @@ struct HistoryView: View {
             }
             .help("Copiar texto")
             .accessibilityLabel("Copiar texto da transcrição")
-
-            if record.audioFileName != nil {
-                Button {
-                    if playingRecordId == record.id {
-                        stopAudio()
-                    } else {
-                        playAudio(for: record)
-                    }
-                } label: {
-                    Image(systemName: playingRecordId == record.id ? "stop.fill" : "play.fill")
-                }
-                .help(playingRecordId == record.id ? "Parar áudio" : "Ouvir áudio")
-                .accessibilityLabel(playingRecordId == record.id ? "Parar áudio" : "Ouvir áudio")
-            }
 
             Button(role: .destructive) {
                 recordToDelete = record

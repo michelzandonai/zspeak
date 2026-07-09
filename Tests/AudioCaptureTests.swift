@@ -265,6 +265,33 @@ private func percentile(_ values: [Double], _ p: Double) -> Double {
 // (que só vale dentro da suíte), cada teste segura o mutex global
 // `withRealAudioDevice` para não disputar o device com OUTRAS suítes
 // (IntegrationTests etc.) rodando em paralelo.
+/// Device confiável para testes de hardware: embutido ou USB com fio.
+/// Mic Bluetooth/Continuity dormindo falha o AUGraph de verdade (-10868) —
+/// não é a race que estes testes cobrem; em produção esse caso é tratado
+/// pelo retry + watchdog + fallback de candidato do RecordingController.
+private func isReliableCaptureUID(_ uid: String) -> Bool {
+    uid.contains("BuiltIn") || uid.contains("AppleUSBAudioEngine")
+}
+
+/// UID para testes que precisam de captura FUNCIONANDO no caminho "default":
+/// nil (usa o default do sistema) quando o default do HAL é confiável; senão
+/// o uid de um device confiável conectado. Evita que a suíte inteira falhe
+/// quando um fone Bluetooth vira o default do sistema (aconteceu: realme Buds
+/// dormindo como default derrubou todos os testes de start(nil) com -10868).
+private func reliableSystemCaptureUID() -> String? {
+    if let defaultUID = MicrophoneManager.halDefaultInputUID(), isReliableCaptureUID(defaultUID) {
+        return nil
+    }
+    let session = AVCaptureDevice.DiscoverySession(
+        deviceTypes: [.microphone, .external],
+        mediaType: .audio,
+        position: .unspecified
+    )
+    return session.devices
+        .first(where: { $0.isConnected && isReliableCaptureUID($0.uniqueID) })?
+        .uniqueID
+}
+
 @Suite(
     "AudioCapture - Hardware real",
     .serialized,
@@ -294,7 +321,10 @@ struct AudioCaptureHardwareTests {
             position: .unspecified
         )
         let realDevices = session.devices.filter { !$0.uniqueID.hasPrefix("CADefaultDeviceAggregate") }
-        guard let mic = realDevices.first else { return }
+        // Preferir device confiável: o primeiro da lista pode ser o mic
+        // Continuity/iPhone, que falha o AUGraph de verdade quando dormindo.
+        guard let mic = realDevices.first(where: { isReliableCaptureUID($0.uniqueID) })
+            ?? realDevices.first else { return }
 
         try await withRealAudioDevice {
             let capture = AudioCapture()
@@ -314,6 +344,71 @@ struct AudioCaptureHardwareTests {
         }
     }
 
+    /// Regressão do "mic específico não capta / inconsistente": a troca do
+    /// default do HAL propaga assíncrono e o engine podia nascer preso ao
+    /// device antigo (silêncio). Alterna default ↔ device específico por
+    /// vários ciclos exigindo primeiro sample em TODOS.
+    @Test("Alternar default ↔ device específico entrega áudio em todos os ciclos")
+    func alternarDevices_capturaConsistente() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
+
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        let realDevices = session.devices.filter { !$0.uniqueID.hasPrefix("CADefaultDeviceAggregate") }
+        // Preferir um device que NÃO seja o default atual — é a troca que
+        // exercita a race de propagação do HAL. Mas precisa ser um device
+        // CONFIÁVEL (embutido): mic Bluetooth/Continuity dormindo falha o
+        // AUGraph de verdade (não é a race) e flakaria o teste — em produção
+        // esse caso é coberto pelo retry + watchdog + fallback de candidato.
+        let defaultUID = MicrophoneManager.halDefaultInputUID()
+        let nonDefault = realDevices.filter { $0.uniqueID != defaultUID }
+        guard let mic = nonDefault.first(where: { $0.uniqueID.contains("BuiltIn") })
+            ?? realDevices.first(where: { $0.uniqueID.contains("BuiltIn") })
+            ?? realDevices.first else {
+            return
+        }
+        // Lado "default": nil quando o default do HAL é confiável; senão um
+        // device confiável — o objetivo é a race de propagação, não validar
+        // um fone BT dormindo que falha o AUGraph de verdade.
+        let defaultSide = reliableSystemCaptureUID()
+
+        try await withRealAudioDevice {
+            for cycle in 0..<3 {
+                for uid in [defaultSide, mic.uniqueID] {
+                    let capture = AudioCapture()
+                    // Mesmo contrato da orquestração (RecordingController):
+                    // start pode falhar transitório com o HAL em disputa (o
+                    // próprio app zspeak rodando durante a suíte também troca
+                    // o default) — um retry após assentar; persistindo, falha.
+                    do {
+                        try await capture.start(deviceUID: uid)
+                    } catch {
+                        await capture.coolDown()
+                        try await Task.sleep(nanoseconds: 400_000_000)
+                        try await capture.start(deviceUID: uid)
+                    }
+
+                    let deadline = CFAbsoluteTimeGetCurrent() + 2.0
+                    while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
+                        try await Task.sleep(nanoseconds: 20_000_000)
+                    }
+                    let gotSamples = await capture.firstSampleTimestamp != nil
+
+                    _ = await capture.stop()
+                    await capture.coolDown()
+
+                    #expect(
+                        gotSamples,
+                        "ciclo \(cycle) uid=\(uid ?? "system-default") não entregou nenhum sample em 2s"
+                    )
+                }
+            }
+        }
+    }
+
     // MARK: - Regressão: latência entre engine.start() e primeiro sample (#primeiras-palavras-perdidas)
 
     /// Mede a latência intrínseca do HAL: do `engine.start()` retornar até o
@@ -324,9 +419,19 @@ struct AudioCaptureHardwareTests {
     func latencia_primeiroSample_apos_engineStart() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
+        let uid = reliableSystemCaptureUID()
         try await withRealAudioDevice {
             let capture = AudioCapture()
-            try await capture.start(deviceUID: nil)
+            do {
+                try await capture.start(deviceUID: uid)
+            } catch {
+                // -10868 intermitente quando este teste roda logo após o de
+                // troca de device default: o HAL ainda está reconfigurando o
+                // input. Um retry após assentar resolve; persistindo, é real.
+                await capture.coolDown()
+                try await Task.sleep(nanoseconds: 400_000_000)
+                try await capture.start(deviceUID: uid)
+            }
 
             let deadline = CFAbsoluteTimeGetCurrent() + 2.0
             while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
@@ -361,14 +466,15 @@ struct AudioCaptureHardwareTests {
     func latencia_total_comWarmUp_fastPath() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
+        let uid = reliableSystemCaptureUID()
         try await withRealAudioDevice {
             let capture = AudioCapture()
 
             // Pré-aquece com o mesmo deviceUID que usaremos no start
-            try await capture.warmUp(deviceUID: nil)
+            try await capture.warmUp(deviceUID: uid)
 
             // Agora mede start() até first sample
-            try await capture.start(deviceUID: nil)
+            try await capture.start(deviceUID: uid)
 
             let deadline = CFAbsoluteTimeGetCurrent() + 2.0
             while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
@@ -398,9 +504,10 @@ struct AudioCaptureHardwareTests {
     func latencia_total_semWarmUp_coldPath() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
+        let uid = reliableSystemCaptureUID()
         try await withRealAudioDevice {
             let capture = AudioCapture()
-            try await capture.start(deviceUID: nil)
+            try await capture.start(deviceUID: uid)
 
             let deadline = CFAbsoluteTimeGetCurrent() + 2.0
             while await capture.firstSampleTimestamp == nil && CFAbsoluteTimeGetCurrent() < deadline {
@@ -428,10 +535,11 @@ struct AudioCaptureHardwareTests {
     func warmUp_abreHotWindow() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
+        let uid = reliableSystemCaptureUID()
         try await withRealAudioDevice {
             let capture = AudioCapture()
 
-            try await capture.warmUp(deviceUID: nil)
+            try await capture.warmUp(deviceUID: uid)
             #expect(await capture.isHot == true,
                     "isHot deveria refletir hot window ativo")
             #expect(await capture.isCapturing == true,
@@ -446,10 +554,11 @@ struct AudioCaptureHardwareTests {
     func coolDown_descartaPrepare() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
+        let uid = reliableSystemCaptureUID()
         try await withRealAudioDevice {
             let capture = AudioCapture()
 
-            try await capture.warmUp(deviceUID: nil)
+            try await capture.warmUp(deviceUID: uid)
             #expect(await capture.isHot == true)
 
             await capture.coolDown()
@@ -462,14 +571,15 @@ struct AudioCaptureHardwareTests {
     func warmUp_idempotente() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
+        let uid = reliableSystemCaptureUID()
         try await withRealAudioDevice {
             let capture = AudioCapture()
 
-            try await capture.warmUp(deviceUID: nil)
+            try await capture.warmUp(deviceUID: uid)
             #expect(await capture.isHot == true)
 
             // Segunda chamada com mesmo deviceUID não deve lançar.
-            try await capture.warmUp(deviceUID: nil)
+            try await capture.warmUp(deviceUID: uid)
             #expect(await capture.isHot == true)
 
             await capture.coolDown()
@@ -482,12 +592,13 @@ struct AudioCaptureHardwareTests {
     func start_aposWarmUp_fastPathMenor() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else { return }
 
+        let uid = reliableSystemCaptureUID()
         try await withRealAudioDevice {
             // Warm — tempo apenas de promover hot window para gravação ativa.
             let warm = AudioCapture()
-            try await warm.warmUp(deviceUID: nil)
+            try await warm.warmUp(deviceUID: uid)
             let t0warm = CFAbsoluteTimeGetCurrent()
-            try await warm.start(deviceUID: nil)
+            try await warm.start(deviceUID: uid)
             let t1warm = CFAbsoluteTimeGetCurrent()
             _ = await warm.stop()
             await warm.coolDown()
@@ -496,7 +607,7 @@ struct AudioCaptureHardwareTests {
             // Cold — engine criado do zero + installTap + prepare + start
             let cold = AudioCapture()
             let t0cold = CFAbsoluteTimeGetCurrent()
-            try await cold.start(deviceUID: nil)
+            try await cold.start(deviceUID: uid)
             let t1cold = CFAbsoluteTimeGetCurrent()
             _ = await cold.stop()
             await cold.coolDown()

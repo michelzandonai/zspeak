@@ -5,19 +5,63 @@ enum ProgressiveTextReveal {
     /// Numero maximo de frames para concluir um salto grande de texto.
     static let targetFrameBudget = 36
 
-    struct Revision: Equatable {
-        var prefix: String
-        var removed: String
-        var inserted: String
-        var suffix: String
+    /// Resultado de um passo de revelação: `base` é aplicada de imediato
+    /// (correções interiores trocam no lugar, sem varredura de deleção) e
+    /// `tail` é o texto genuinamente novo, digitado progressivamente.
+    struct RevealStep: Equatable {
+        var base: String
+        var tail: String
+    }
 
-        var sourceText: String { prefix + removed + suffix }
-        var targetText: String { prefix + inserted + suffix }
-        var isPlain: Bool { removed.isEmpty && inserted.isEmpty }
-
-        static func plain(_ text: String) -> Revision {
-            Revision(prefix: text, removed: "", inserted: "", suffix: "")
+    /// Divide o `target` entre o que troca no lugar e o que é digitado.
+    ///
+    /// Previews consecutivos do ASR reescrevem palavras já exibidas
+    /// (pontuação, capitalização, correções). Animar essas reescritas como
+    /// deleção+redigitação fazia o texto "sumir e voltar" no overlay. Aqui o
+    /// diff é ancorado por palavras: tudo até a última palavra em comum é
+    /// aplicado de uma vez; só a cauda realmente nova é datilografada.
+    static func revealStep(current: String, target: String) -> RevealStep {
+        // Caso comum: o alvo apenas acrescenta texto ao que já está na tela.
+        if target.hasPrefix(current) {
+            return RevealStep(base: current, tail: String(target.dropFirst(current.count)))
         }
+
+        // Limita o diff de palavras à região divergente (após o prefixo comum,
+        // recuado ao início da palavra) — barato mesmo com texto longo.
+        let anchorLength = wordAnchorLength(current: current, target: target)
+        let anchor = String(target.prefix(anchorLength))
+        let currentRemainder = String(current.dropFirst(anchorLength))
+        let targetRemainder = String(target.dropFirst(anchorLength))
+
+        var base: String
+        var tail: String
+        if let matchEnd = lastCommonWordEnd(current: currentRemainder, target: targetRemainder) {
+            base = anchor + String(targetRemainder.prefix(matchEnd))
+            tail = String(targetRemainder.dropFirst(matchEnd))
+        } else if anchorLength > 0 {
+            // Sem palavra em comum depois da âncora: mantém a âncora e digita
+            // o trecho reescrito.
+            base = anchor
+            tail = targetRemainder
+        } else {
+            // Reescrita completa: trocar de uma vez é mais fluido do que
+            // apagar e redigitar um texto praticamente igual.
+            base = target
+            tail = ""
+        }
+
+        // Aproveita o que já está na tela: se a cauda apenas completa o texto
+        // atual (ex.: "volta" → "voltando"), digita só o restante.
+        if current.count > base.count, current.hasPrefix(base) {
+            let currentTail = String(current.dropFirst(base.count))
+            let shared = commonPrefix(currentTail, tail)
+            if !shared.isEmpty {
+                base += shared
+                tail = String(tail.dropFirst(shared.count))
+            }
+        }
+
+        return RevealStep(base: base, tail: tail)
     }
 
     static func commonPrefix(_ lhs: String, _ rhs: String) -> String {
@@ -34,27 +78,6 @@ enum ProgressiveTextReveal {
         }
 
         return result
-    }
-
-    static func revision(current: String, target: String) -> Revision {
-        let prefix = commonPrefix(current, target)
-        let currentTail = Array(current.dropFirst(prefix.count))
-        let targetTail = Array(target.dropFirst(prefix.count))
-        let maxSuffixLength = min(currentTail.count, targetTail.count)
-        var suffixLength = 0
-
-        while suffixLength < maxSuffixLength,
-              currentTail[currentTail.count - 1 - suffixLength] == targetTail[targetTail.count - 1 - suffixLength] {
-            suffixLength += 1
-        }
-
-        let removedEnd = currentTail.count - suffixLength
-        let insertedEnd = targetTail.count - suffixLength
-        let removed = String(currentTail.prefix(max(0, removedEnd)))
-        let inserted = String(targetTail.prefix(max(0, insertedEnd)))
-        let suffix = suffixLength > 0 ? String(currentTail.suffix(suffixLength)) : ""
-
-        return Revision(prefix: prefix, removed: removed, inserted: inserted, suffix: suffix)
     }
 
     /// Ponto de partida para uma nova animacao.
@@ -78,112 +101,24 @@ enum ProgressiveTextReveal {
         return max(1, Int(ceil(Double(remainingCharacterCount) / Double(targetFrameBudget))))
     }
 
-    static func deletionBatchSize(remainingCharacterCount: Int) -> Int {
-        guard remainingCharacterCount > 0 else { return 0 }
-        switch remainingCharacterCount {
-        case ...16:
-            return 1
-        case ...64:
-            return 2
-        default:
-            return 3
-        }
-    }
-
-    /// Pausa curta antes de apagar blocos grandes.
-    ///
-    /// Resultados parciais do ASR podem substituir um trecho amplo por poucos
-    /// milissegundos e logo voltar para quase o mesmo texto. A estabilizacao
-    /// evita que o overlay apague visualmente uma area grande cedo demais.
-    static func deletionStabilizationDelayMilliseconds(for revision: Revision) -> UInt64 {
-        let removedCount = revision.removed.count
-        guard removedCount >= 18 else { return 0 }
-
-        let sourceCount = max(1, revision.sourceText.count)
-        let removedRatio = Double(removedCount) / Double(sourceCount)
-        let isDominantDeletion = removedCount > revision.inserted.count + 8
-
-        guard isDominantDeletion || removedRatio >= 0.25 else { return 0 }
-
-        switch removedCount {
-        case ...36:
-            return 999
-        case ...80:
-            return 1_400
-        default:
-            return 1_800
-        }
-    }
-
-    /// Detecta quando um preview parcial parece ter descartado quase todo o
-    /// texto ja capturado. Nesses casos o overlay deve esperar a proxima
-    /// revisao completa em vez de animar um apagao visual.
-    static func isWholeTextDiscontinuity(_ revision: Revision) -> Bool {
-        let sourceCount = revision.sourceText.count
-        guard sourceCount >= 48, revision.removed.count >= 36 else { return false }
-
-        let removedRatio = Double(revision.removed.count) / Double(sourceCount)
-        let targetRatio = Double(revision.targetText.count) / Double(sourceCount)
-        let insertedRatio = Double(revision.inserted.count) / Double(max(1, revision.removed.count))
-
-        return removedRatio >= 0.72 && targetRatio <= 0.58 && insertedRatio <= 0.58
-    }
-
-    static func wholeTextDiscontinuityDelayMilliseconds(for revision: Revision) -> UInt64 {
-        guard isWholeTextDiscontinuity(revision) else { return 0 }
-
-        switch revision.sourceText.count {
-        case ...120:
-            return 2_000
-        case ...260:
-            return 2_800
-        default:
-            return 3_600
-        }
-    }
-
-    static let wholeTextDiscontinuityRetryDelayMilliseconds: UInt64 = 1_000
-
     /// Intervalo entre frames da revelacao. Saltos longos usam uma cadencia mais
     /// rapida para o overlay alcancar o ASR sem parecer atrasado.
+    ///
+    /// Cadencia limitada a ~30-50 passos/s: cada passo e uma mutacao de estado
+    /// + relayout de texto no MainActor, que compete com a waveform de 60fps.
+    /// A cadencia antiga (8-13ms ≈ 80-125 passos/s, cada um numa transacao
+    /// animada) monopolizava o MainActor enquanto o usuario falava e a
+    /// waveform engasgava.
     static func frameDelayMilliseconds(remainingCharacterCount: Int) -> UInt64 {
         switch remainingCharacterCount {
         case ...0:
             return 0
         case ...24:
-            return 13
+            return 32
         case ...96:
-            return 10
+            return 26
         default:
-            return 8
-        }
-    }
-
-    static func deletionFrameDelayMilliseconds(remainingCharacterCount: Int) -> UInt64 {
-        switch remainingCharacterCount {
-        case ...0:
-            return 0
-        case ...16:
-            return 28
-        case ...64:
-            return 22
-        default:
-            return 16
-        }
-    }
-
-    /// Duracao da animacao visual de cada passo. Mantem letras curtas suaves e
-    /// reduz o peso visual quando chega um trecho maior de uma vez.
-    static func animationDuration(remainingCharacterCount: Int) -> Double {
-        switch remainingCharacterCount {
-        case ...0:
-            return 0
-        case ...24:
-            return 0.065
-        case ...96:
-            return 0.052
-        default:
-            return 0.040
+            return 20
         }
     }
 
@@ -196,9 +131,100 @@ enum ProgressiveTextReveal {
         return String(target.prefix(nextCount))
     }
 
-    static func deletingText(_ text: String, maxCharacters: Int) -> String {
-        guard !text.isEmpty else { return "" }
-        let nextCount = max(0, text.count - max(1, maxCharacters))
-        return String(text.prefix(nextCount))
+    // MARK: - Diff por palavras
+
+    private struct WordToken {
+        /// Forma normalizada (caixa/acentos/pontuação ignorados) usada no match.
+        let normalized: String
+        /// Distância (em Characters) do início do texto até o fim da palavra.
+        let endOffset: Int
+    }
+
+    /// Distância (em Characters) até o fim da última palavra do `target` que
+    /// também aparece, na mesma ordem, no texto atual — via LCS por palavras.
+    private static func lastCommonWordEnd(current: String, target: String) -> Int? {
+        let currentWords = tokens(in: current)
+        let targetWords = tokens(in: target)
+        guard !currentWords.isEmpty, !targetWords.isEmpty else { return nil }
+
+        func matches(_ i: Int, _ j: Int) -> Bool {
+            let lhs = currentWords[i].normalized
+            return !lhs.isEmpty && lhs == targetWords[j].normalized
+        }
+
+        var table = [[Int]](
+            repeating: [Int](repeating: 0, count: targetWords.count + 1),
+            count: currentWords.count + 1
+        )
+        for i in stride(from: currentWords.count - 1, through: 0, by: -1) {
+            for j in stride(from: targetWords.count - 1, through: 0, by: -1) {
+                if matches(i, j) {
+                    table[i][j] = table[i + 1][j + 1] + 1
+                } else {
+                    table[i][j] = max(table[i + 1][j], table[i][j + 1])
+                }
+            }
+        }
+
+        var i = 0
+        var j = 0
+        var lastMatchEnd: Int?
+        while i < currentWords.count, j < targetWords.count {
+            if matches(i, j) {
+                lastMatchEnd = targetWords[j].endOffset
+                i += 1
+                j += 1
+            } else if table[i + 1][j] >= table[i][j + 1] {
+                i += 1
+            } else {
+                j += 1
+            }
+        }
+
+        return lastMatchEnd
+    }
+
+    /// Comprimento (em Characters) do prefixo comum recuado até o início da
+    /// palavra corrente — evita ancorar o diff no meio de uma palavra.
+    private static func wordAnchorLength(current: String, target: String) -> Int {
+        let prefix = commonPrefix(current, target)
+        guard !prefix.isEmpty else { return 0 }
+        guard let lastSpace = prefix.lastIndex(where: { $0.isWhitespace }) else { return 0 }
+        return prefix.distance(from: prefix.startIndex, to: prefix.index(after: lastSpace))
+    }
+
+    private static func tokens(in text: String) -> [WordToken] {
+        var result: [WordToken] = []
+        var currentWord = ""
+        var offset = 0
+
+        for character in text {
+            offset += 1
+            if character.isWhitespace {
+                if !currentWord.isEmpty {
+                    result.append(WordToken(normalized: normalized(currentWord), endOffset: offset - 1))
+                    currentWord = ""
+                }
+            } else {
+                currentWord.append(character)
+            }
+        }
+        if !currentWord.isEmpty {
+            result.append(WordToken(normalized: normalized(currentWord), endOffset: offset))
+        }
+
+        return result
+    }
+
+    /// Normaliza uma palavra para o match: ignora caixa, acentos e pontuação.
+    /// Assim "crítico?" ≡ "critico." — flutuações de pontuação entre previews
+    /// não derrubam a âncora.
+    private static func normalized(_ word: String) -> String {
+        word
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
     }
 }

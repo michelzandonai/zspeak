@@ -19,6 +19,15 @@ struct AppStateTests {
         #expect(appState.errorMessage == nil)
     }
 
+    @Test("Init instala o trim VAD no RecordingController")
+    func testVADTrimHookWired() {
+        let appState = AppState(skipBundlePermissionCheck: true)
+
+        // O closure em si cai para RMS quando o modelo Silero não está
+        // disponível — aqui só protegemos o wiring feito no init.
+        #expect(appState.recordingController.trimSpeechForASR != nil)
+    }
+
     // MARK: - Toggle sem pre-requisitos
 
     @Test("Toggle sem modelo pronto deve setar errorMessage")

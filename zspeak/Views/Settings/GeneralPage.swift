@@ -22,6 +22,8 @@ struct GeneralPage: View {
     @AppStorage("pasteMode") private var pasteModeRaw: String = PasteMode.instant.rawValue
     @AppStorage("playRecordingSounds") private var playRecordingSounds: Bool = false
     @AppStorage("showOverlayLatency") private var showOverlayLatency: Bool = false
+    // Mesma chave/default de TrayLivePreview.isEnabled (ausente = ligado).
+    @AppStorage(TrayLivePreview.enabledDefaultsKey) private var trayModeEnabled: Bool = true
 
     private var pasteMode: Binding<PasteMode> {
         Binding(
@@ -33,28 +35,21 @@ struct GeneralPage: View {
     var body: some View {
         Form {
             Section {
-                ZSFormHero(
-                    title: "Geral",
-                    subtitle: "Defina inicialização, inserção de texto e feedback do fluxo de gravação.",
-                    systemImage: "gearshape",
-                    tone: .neutral
-                )
-            }
-
-            Section {
-                LaunchAtLogin.Toggle("Iniciar com o sistema")
+                LaunchAtLogin.Toggle {
+                    ZSRowLabel("Iniciar com o sistema", systemImage: "power", color: .green)
+                }
             } footer: {
                 Text("Abre o zspeak automaticamente quando você faz login no macOS.")
             }
 
             Section {
-                Picker("Após a transcrição", selection: pasteMode) {
+                Picker(selection: pasteMode) {
                     ForEach(PasteMode.allCases) { mode in
                         Text(mode.label).tag(mode)
                     }
+                } label: {
+                    ZSRowLabel("Após a transcrição", systemImage: "doc.on.clipboard.fill", color: .blue)
                 }
-                .pickerStyle(.inline)
-                .labelsHidden()
             } header: {
                 Text("Inserção de texto")
             } footer: {
@@ -62,19 +57,38 @@ struct GeneralPage: View {
             }
 
             Section {
-                Toggle("Tocar som no início e no fim da gravação", isOn: $playRecordingSounds)
+                Toggle(isOn: $trayModeEnabled) {
+                    ZSRowLabel(
+                        "Modo tray",
+                        systemImage: "menubar.dock.rectangle",
+                        color: .indigo,
+                        subtitle: "Transcrição ao vivo abaixo da barra de menu"
+                    )
+                }
+            } header: {
+                Text("Durante a gravação")
+            } footer: {
+                Text("Ligado: o texto aparece num painel discreto sob a barra de menu, com indicador de estado no item do tray. Desligado: volta o overlay flutuante com a animação de voz.")
+            }
+
+            Section {
+                Toggle(isOn: $playRecordingSounds) {
+                    ZSRowLabel("Som ao gravar", systemImage: "speaker.wave.2.fill", color: .pink, subtitle: "Bip no início e no fim da gravação")
+                }
             } footer: {
                 Text("Usa o bip padrão do sistema como feedback sonoro — útil quando o overlay está fora da visão.")
             }
 
             Section {
-                Toggle("Mostrar latência no overlay", isOn: $showOverlayLatency)
+                Toggle(isOn: $showOverlayLatency) {
+                    ZSRowLabel("Mostrar latência no overlay", systemImage: "gauge.with.needle", color: .orange, subtitle: "Tempo entre hotkey e primeiro sample")
+                }
             } footer: {
-                Text("Exibe o tempo entre apertar a hotkey e o primeiro sample capturado. Útil para debug.")
+                Text("Útil para debug de performance da captura.")
             }
         }
         .formStyle(.grouped)
-        .zsFormPage()
         .navigationTitle("Geral")
+        .navigationSubtitle("Inicialização, inserção de texto e feedback")
     }
 }

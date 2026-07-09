@@ -132,6 +132,9 @@ struct VisualSnapshotTests {
         let model = OverlayModel()
         model.state = .preparing
         model.focusedAppName = "Cursor"
+        // Congela a rolagem/respiração da waveform — sem o override, o offset
+        // contínuo varia entre runs e o snapshot fica não-determinístico.
+        model.waveformAnimationPhaseOverride = 0.42
 
         try SnapshotTestHelpers.assertSnapshot(
             named: "overlay-preparing",
@@ -318,6 +321,15 @@ struct VisualSnapshotTests {
                 initialExpandedIDs: [entryID]
             ),
             size: CGSize(width: 980, height: 760)
+        )
+    }
+
+    @Test("Modal de novo termo do vocabulário permanece estável")
+    func testVocabularyNewTermSheetSnapshot() throws {
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-vocabulary-new-term",
+            of: NewVocabularyTermSheet { _, _, _, _ in },
+            size: CGSize(width: 440, height: 440)
         )
     }
 

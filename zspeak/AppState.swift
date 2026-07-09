@@ -159,6 +159,8 @@ final class AppState {
     private let textInserter: TextInserter
     private let llmManager: LLMCorrectionManager
     private let selectedTextReader: SelectedTextReader
+    /// Trim de fala pré-ASR via Silero VAD, com fallback interno para RMS.
+    private let speechVADTrimmer = VADSpeechTrimmer()
 
     // MARK: - Init
 
@@ -199,9 +201,22 @@ final class AppState {
         )
 
         // Nova gravação invalida a correção LLM em voo: o replace dela
-        // apagaria o texto recém-colado da gravação nova.
+        // apagaria o texto recém-colado da gravação nova. Também reconfigura o
+        // biasing nativo para as categorias do app em foco (fire-and-forget).
         self.recordingController.onRecordingWillStart = { [weak self] in
             self?.llmCoordinator.cancelActiveCorrection()
+            self?.reapplyVocabularyForFocusedApp()
+        }
+
+        // Pipeline pré-ASR: high-pass (antes do VAD — rumble falseia a
+        // detecção de fala) → trim Silero VAD com fallback RMS → normalização
+        // de loudness (depois do trim — RMS calculado só sobre a fala, sem
+        // diluição pelo silêncio do pre-roll).
+        self.recordingController.trimSpeechForASR = { [speechVADTrimmer] samples in
+            let filtered = SpeechSignalConditioner.highPassIfEnabled(samples)
+            let trimmed = await speechVADTrimmer.trimForASR(filtered)
+                ?? SpeechSampleTrimmer.trimForASR(filtered)
+            return SpeechSignalConditioner.normalizingLoudnessIfEnabled(trimmed)
         }
 
         // Propagação bidirecional de erro: controller → façade.
@@ -252,11 +267,39 @@ final class AppState {
     }
 
     private func wireVocabularyHook() {
-        let replacer: @MainActor (String) -> String = { [weak self] text in
-            self?.vocabularyStore?.applyReplacements(to: text) ?? text
+        // Gravação por mic: o vocabulário respeita o app de DESTINO do paste
+        // (salvo no início da gravação) — jargão dev só participa quando o
+        // texto vai para terminal/IDE. Depois do vocabulário roda o ITN PT-BR;
+        // capitalização de frase fica DESLIGADA em apps de dev ("git status"
+        // não pode virar "Git status" no terminal).
+        recordingController.applyVocabularyReplacements = { [weak self] text in
+            let categories = FocusedAppContext.categories(
+                forBundleID: TextInserter.previousApp?.bundleIdentifier
+            )
+            var result = text
+            if let store = self?.vocabularyStore {
+                result = store.applyReplacements(to: result, categories: categories)
+            }
+            if TextNormalizationSettings.isEnabled() {
+                result = PTBRTextNormalizer.normalize(result, options: .init(
+                    convertNumbers: true,
+                    capitalizeSentences: !categories.contains(.dev)
+                ))
+            }
+            return result
         }
-        recordingController.applyVocabularyReplacements = replacer
-        fileCoordinator.applyVocabularyReplacements = replacer
+        // Transcrição de arquivo: sem app de destino definido — vocabulário
+        // completo (comportamento histórico) e capitalização ligada.
+        fileCoordinator.applyVocabularyReplacements = { [weak self] text in
+            var result = self?.vocabularyStore?.applyReplacements(to: text) ?? text
+            if TextNormalizationSettings.isEnabled() {
+                result = PTBRTextNormalizer.normalize(result, options: .init(
+                    convertNumbers: true,
+                    capitalizeSentences: true
+                ))
+            }
+            return result
+        }
     }
 
     private func wireActivePromptProvider() {
@@ -300,6 +343,10 @@ final class AppState {
         await recordingController.initialize()
         guard isModelReady else { return }
 
+        // Aquece o Silero VAD em background (download pequeno na 1ª vez).
+        // Falha não bloqueia nada: o trim cai para o caminho RMS.
+        await speechVADTrimmer.prepare()
+
         // Reaplica o vocabulário persistido em background logo após o modelo
         // principal ficar pronto. Se o rescoring nativo falhar, o fallback em
         // Swift continua ativo no pipeline.
@@ -321,8 +368,16 @@ final class AppState {
 
     // MARK: - Audio level (UI)
 
-    nonisolated func currentAudioLevel() async -> Float {
-        await recordingController.currentAudioLevel()
+    /// Leitura SÍNCRONA (sem hop de executor) — a waveform faz pull a cada
+    /// 45 ms e qualquer `await` aqui disputa o pool cooperativo com o ASR do
+    /// preview ao vivo, congelando a animação durante a fala.
+    nonisolated func currentAudioLevel() -> Float {
+        recordingController.currentAudioLevel()
+    }
+
+    /// Clipping recente na captação (aviso "mic muito alto" no overlay).
+    nonisolated func isMicClipping() -> Bool {
+        recordingController.isInputClipping()
     }
 
     // MARK: - Transcrição bruta (benchmark / arquivo)
@@ -339,6 +394,12 @@ final class AppState {
         numSpeakers: Int? = nil,
         onProgress: @escaping @MainActor (FileTranscriptionPhase) -> Void
     ) async throws -> FileTranscriptionResult {
+        // Uma gravação anterior pode ter estreitado o biasing para o app em
+        // foco; arquivo não tem app de destino — volta ao vocabulário completo.
+        // Guard de assinatura no Transcriber torna isso barato quando já está.
+        if isModelReady, let store = vocabularyStore {
+            try? await transcriber.configureVocabulary(store.buildVocabularyContext())
+        }
         let outcome = try await fileCoordinator.transcribeFile(
             url: url,
             mode: mode,
@@ -409,5 +470,20 @@ final class AppState {
 
         let context = vocabularyStore?.buildVocabularyContext()
         try await transcriber.configureVocabulary(context)
+    }
+
+    /// Reconfigura o biasing nativo do decoder para as categorias do app em
+    /// foco no momento do start da gravação. Fire-and-forget: fora do caminho
+    /// crítico de latência; o guard de assinatura no `Transcriber` faz disso um
+    /// no-op quando as categorias não mudaram desde a última gravação.
+    private func reapplyVocabularyForFocusedApp() {
+        guard isModelReady, let store = vocabularyStore else { return }
+        let categories = FocusedAppContext.categories(
+            forBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        )
+        let context = store.buildVocabularyContext(categories: categories)
+        Task { [transcriber] in
+            try? await transcriber.configureVocabulary(context)
+        }
     }
 }

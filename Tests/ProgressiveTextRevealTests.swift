@@ -45,89 +45,111 @@ struct ProgressiveTextRevealTests {
 
     @Test("Ajusta a cadencia conforme o tamanho do salto")
     func adaptsFrameCadence() {
-        #expect(ProgressiveTextReveal.frameDelayMilliseconds(remainingCharacterCount: 12) == 13)
-        #expect(ProgressiveTextReveal.frameDelayMilliseconds(remainingCharacterCount: 72) == 10)
-        #expect(ProgressiveTextReveal.frameDelayMilliseconds(remainingCharacterCount: 140) == 8)
-        #expect(ProgressiveTextReveal.animationDuration(remainingCharacterCount: 12) == 0.065)
-        #expect(ProgressiveTextReveal.animationDuration(remainingCharacterCount: 140) == 0.040)
+        #expect(ProgressiveTextReveal.frameDelayMilliseconds(remainingCharacterCount: 12) == 32)
+        #expect(ProgressiveTextReveal.frameDelayMilliseconds(remainingCharacterCount: 72) == 26)
+        #expect(ProgressiveTextReveal.frameDelayMilliseconds(remainingCharacterCount: 140) == 20)
     }
 
-    @Test("Separa apenas o trecho editado preservando sufixo comum")
-    func revisionKeepsStableSuffix() {
-        let revision = ProgressiveTextReveal.revision(
-            current: "Eu quero fazer o comit dela",
-            target: "Eu quero fazer o commit dela"
-        )
-
-        #expect(revision.prefix == "Eu quero fazer o com")
-        #expect(revision.removed == "")
-        #expect(revision.inserted == "m")
-        #expect(revision.suffix == "it dela")
-        #expect(revision.targetText == "Eu quero fazer o commit dela")
+    // Regressão de jank: a cadencia de digitacao nunca pode voltar aos ~80-125
+    // passos/s (delay < 20ms) — cada passo é relayout no MainActor e disputa
+    // com a waveform de 60fps enquanto o usuário fala.
+    @Test("Cadencia da digitacao fica abaixo de ~50 passos por segundo")
+    func typingCadenceStaysBelowMainActorBudget() {
+        for remaining in [1, 24, 25, 96, 97, 500] {
+            #expect(ProgressiveTextReveal.frameDelayMilliseconds(remainingCharacterCount: remaining) >= 20)
+        }
     }
 
-    @Test("Mantem trecho removido visivel para apagar em passos")
-    func revisionKeepsRemovedTextForSlowDeletion() {
-        let revision = ProgressiveTextReveal.revision(
-            current: "Hoje preciso ajustar o cub",
-            target: "Hoje preciso ajustar o Kubernetes"
-        )
-        let firstStep = ProgressiveTextReveal.deletingText(revision.removed, maxCharacters: 1)
-        let batch = ProgressiveTextReveal.deletionBatchSize(remainingCharacterCount: revision.removed.count)
+    // MARK: - revealStep (correção no lugar + digitação só da cauda nova)
 
-        #expect(revision.prefix == "Hoje preciso ajustar o ")
-        #expect(revision.removed == "cub")
-        #expect(revision.inserted == "Kubernetes")
-        #expect(firstStep == "cu")
-        #expect(batch == 1)
-        #expect(ProgressiveTextReveal.deletionFrameDelayMilliseconds(remainingCharacterCount: 3) == 28)
+    @Test("Append puro digita apenas o acréscimo")
+    func revealStepTypesOnlyAppendedTail() {
+        let step = ProgressiveTextReveal.revealStep(
+            current: "Hoje preciso",
+            target: "Hoje preciso ajustar o deploy"
+        )
+
+        #expect(step.base == "Hoje preciso")
+        #expect(step.tail == " ajustar o deploy")
     }
 
-    @Test("Espera estabilizacao antes de apagar blocos grandes")
-    func delaysLargeDeletionUntilTargetStabilizes() {
-        let smallRevision = ProgressiveTextReveal.Revision(
-            prefix: "Hoje ",
-            removed: "abc",
-            inserted: "xyz",
-            suffix: ""
-        )
-        let largeRevision = ProgressiveTextReveal.Revision(
-            prefix: "Hoje ",
-            removed: String(repeating: "a", count: 42),
-            inserted: "",
-            suffix: ""
-        )
-        let smallDeletionRevision = ProgressiveTextReveal.Revision(
-            prefix: "Hoje ",
-            removed: String(repeating: "a", count: 30),
-            inserted: "",
-            suffix: ""
+    // Regressão do bug "apaga tudo e reescreve": uma correção de pontuação no
+    // meio do texto não pode derrubar o restante — troca no lugar e digita só
+    // a palavra nova do fim.
+    @Test("Correção interior troca no lugar sem redigitar o resto")
+    func revealStepAppliesInteriorCorrectionInPlace() {
+        let step = ProgressiveTextReveal.revealStep(
+            current: "Tem um problema crítico? Quero resolver",
+            target: "Tem um problema crítico. Quero resolver agora"
         )
 
-        #expect(ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(for: smallRevision) == 0)
-        #expect(ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(for: smallDeletionRevision) == 999)
-        #expect(ProgressiveTextReveal.deletionStabilizationDelayMilliseconds(for: largeRevision) == 1_400)
+        #expect(step.base == "Tem um problema crítico. Quero resolver")
+        #expect(step.tail == " agora")
     }
 
-    @Test("Segura apagao de texto inteiro ate chegar revisao completa")
-    func holdsWholeTextDiscontinuityUntilCompleteRevision() {
-        let collapsedPreview = ProgressiveTextReveal.Revision(
-            prefix: "",
-            removed: String(repeating: "a", count: 160),
-            inserted: "ok",
-            suffix: ""
-        )
-        let completeReplacement = ProgressiveTextReveal.Revision(
-            prefix: "",
-            removed: String(repeating: "a", count: 160),
-            inserted: String(repeating: "b", count: 150),
-            suffix: ""
+    @Test("Palavra parcial completada continua a digitação de onde parou")
+    func revealStepContinuesPartialWord() {
+        let step = ProgressiveTextReveal.revealStep(
+            current: "ele fica sumindo e volt",
+            target: "ele fica sumindo e voltando"
         )
 
-        #expect(ProgressiveTextReveal.isWholeTextDiscontinuity(collapsedPreview))
-        #expect(ProgressiveTextReveal.wholeTextDiscontinuityDelayMilliseconds(for: collapsedPreview) == 2_800)
-        #expect(ProgressiveTextReveal.wholeTextDiscontinuityRetryDelayMilliseconds == 1_000)
-        #expect(!ProgressiveTextReveal.isWholeTextDiscontinuity(completeReplacement))
-        #expect(ProgressiveTextReveal.wholeTextDiscontinuityDelayMilliseconds(for: completeReplacement) == 0)
+        #expect(step.base == "ele fica sumindo e volt")
+        #expect(step.tail == "ando")
+    }
+
+    @Test("Palavra parcial trocada reaproveita o prefixo já digitado")
+    func revealStepReusesTypedPrefixOfReplacedWord() {
+        let step = ProgressiveTextReveal.revealStep(
+            current: "quero volta",
+            target: "quero voltando"
+        )
+
+        #expect(step.base == "quero volta")
+        #expect(step.tail == "ndo")
+    }
+
+    @Test("Target que encolhe no fim trunca de imediato, sem redigitar")
+    func revealStepTruncatesDroppedTailInstantly() {
+        let step = ProgressiveTextReveal.revealStep(
+            current: "quero voltar agora xpt",
+            target: "quero voltar agora"
+        )
+
+        #expect(step.base == "quero voltar agora")
+        #expect(step.tail == "")
+    }
+
+    @Test("Reescrita completa troca de uma vez em vez de apagar e redigitar")
+    func revealStepSwapsWholeRewriteInstantly() {
+        let step = ProgressiveTextReveal.revealStep(
+            current: "texto antigo qualquer",
+            target: "frase nova sem relação"
+        )
+
+        #expect(step.base == "frase nova sem relação")
+        #expect(step.tail == "")
+    }
+
+    @Test("Texto inicial vazio é digitado por inteiro")
+    func revealStepTypesFirstTextFromScratch() {
+        let step = ProgressiveTextReveal.revealStep(
+            current: "",
+            target: "primeira frase"
+        )
+
+        #expect(step.base == "")
+        #expect(step.tail == "primeira frase")
+    }
+
+    @Test("Match de palavras ignora caixa, acentos e pontuação")
+    func revealStepMatchesWordsIgnoringCasePunctuation() {
+        let step = ProgressiveTextReveal.revealStep(
+            current: "Vou revisar o codigo, depois abro o PR",
+            target: "Vou revisar o código. Depois abro o PR e aviso"
+        )
+
+        #expect(step.base == "Vou revisar o código. Depois abro o PR")
+        #expect(step.tail == " e aviso")
     }
 }

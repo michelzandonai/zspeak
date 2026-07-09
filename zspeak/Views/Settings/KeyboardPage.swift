@@ -15,23 +15,16 @@ struct KeyboardPage: View {
 
         Form {
             Section {
-                ZSFormHero(
-                    title: "Atalhos de Teclado",
-                    subtitle: "Configure a tecla principal e os atalhos globais dos modos inteligentes.",
-                    systemImage: "keyboard",
-                    tone: .accent
-                )
-            }
-
-            Section {
                 shortcutPreview
             }
 
             Section {
-                Picker("Tecla", selection: $keyManager.selectedKey) {
+                Picker(selection: $keyManager.selectedKey) {
                     ForEach(ActivationKey.allCases) { key in
                         Text(key.rawValue).tag(key)
                     }
+                } label: {
+                    ZSRowLabel("Tecla", systemImage: "command", color: .gray)
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -52,9 +45,9 @@ struct KeyboardPage: View {
             }
 
             Section {
-                KeyboardShortcuts.Recorder("Modo Prompt LLM:", name: .togglePromptMode)
-                KeyboardShortcuts.Recorder("Modo Tradução:", name: .toggleSelectionLookupMode)
-                KeyboardShortcuts.Recorder("Traduzir seleção:", name: .translateSelection)
+                recorderRow("Modo Prompt", systemImage: "sparkles", color: .purple, name: .togglePromptMode)
+                recorderRow("Modo Tradução", systemImage: "character.bubble.fill", color: .indigo, name: .toggleSelectionLookupMode)
+                recorderRow("Traduzir seleção", systemImage: "globe", color: .blue, name: .translateSelection)
             } header: {
                 Text("LLM")
             } footer: {
@@ -62,33 +55,49 @@ struct KeyboardPage: View {
             }
 
             Section {
-                Toggle("Escape cancela gravação", isOn: $keyManager.escapeToCancel)
+                Toggle(isOn: $keyManager.escapeToCancel) {
+                    ZSRowLabel("Escape cancela gravação", systemImage: "escape", color: .red, subtitle: "Interrompe sem transcrever")
+                }
             } footer: {
                 Text("Permite interromper uma gravação em andamento sem transcrever, pressionando ESC.")
             }
         }
         .formStyle(.grouped)
-        .zsFormPage()
         .navigationTitle("Atalhos de Teclado")
+        .navigationSubtitle("Tecla principal e atalhos globais dos modos LLM")
+    }
+
+    /// Row de recorder com ícone squircle: label nosso à esquerda, recorder
+    /// nativo do KeyboardShortcuts à direita.
+    private func recorderRow(
+        _ title: String,
+        systemImage: String,
+        color: Color,
+        name: KeyboardShortcuts.Name
+    ) -> some View {
+        HStack {
+            ZSRowLabel(title, systemImage: systemImage, color: color)
+            Spacer()
+            KeyboardShortcuts.Recorder(for: name)
+        }
     }
 
     // MARK: - Preview do atalho atual
 
     private var shortcutPreview: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "keyboard")
-                .font(.title2)
-                .foregroundStyle(Color.accentColor)
+        HStack(spacing: 12) {
+            ZSSettingsIcon(systemImage: "keyboard.fill", color: .gray, size: 24)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Atalho atual")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 6) {
-                    shortcutBadge(text: activationKeyManager.selectedKey.rawValue)
-                    Text("para")
+                    keycap(activationKeyManager.selectedKey.rawValue)
+                    Text("·")
                         .foregroundStyle(.secondary)
-                    shortcutBadge(text: activationKeyManager.activationMode.rawValue)
+                    Text(activationKeyManager.activationMode.rawValue)
+                        .foregroundStyle(.secondary)
                 }
                 .font(.body)
             }
@@ -98,12 +107,21 @@ struct KeyboardPage: View {
         .padding(.vertical, 4)
     }
 
-    private func shortcutBadge(text: String) -> some View {
+    /// Tecla desenhada como keycap físico: fundo elevado com "degrau" inferior.
+    private func keycap(_ text: String) -> some View {
         Text(text)
-            .font(.body.monospaced())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+            .font(.system(.body, design: .rounded).weight(.medium))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(ZSDesign.raisedBackground)
+                    .shadow(color: .black.opacity(0.35), radius: 0, y: 1.5)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.12))
+            )
     }
 
     private func modeDescription(for mode: ActivationMode) -> String {

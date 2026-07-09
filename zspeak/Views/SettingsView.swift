@@ -36,16 +36,33 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .overview: "square.grid.2x2"
+        case .overview: "square.grid.2x2.fill"
         case .history: "clock.arrow.circlepath"
         case .benchmark: "gauge.with.needle"
-        case .vocabulary: "text.book.closed"
+        case .vocabulary: "text.book.closed.fill"
         case .correction: "sparkles"
-        case .keyboard: "keyboard"
+        case .keyboard: "keyboard.fill"
         case .microphone: "mic.fill"
-        case .general: "gearshape"
-        case .permissions: "lock.shield"
-        case .about: "info.circle"
+        case .general: "gearshape.fill"
+        case .permissions: "lock.shield.fill"
+        case .about: "info"
+        }
+    }
+
+    /// Cor do squircle do ícone na sidebar — mesma linguagem dos Ajustes do
+    /// Sistema, onde cada área tem uma cor de identidade fixa.
+    var tint: Color {
+        switch self {
+        case .overview: .blue
+        case .history: .indigo
+        case .benchmark: .orange
+        case .vocabulary: .teal
+        case .correction: .purple
+        case .keyboard: .gray
+        case .microphone: .red
+        case .general: .gray
+        case .permissions: .green
+        case .about: .gray
         }
     }
 
@@ -91,8 +108,12 @@ struct SettingsView: View {
                 ForEach(SettingsPage.Section.allCases, id: \.self) { section in
                     Section(section.rawValue) {
                         ForEach(pages(in: section)) { page in
-                            Label(page.title, systemImage: page.icon)
-                                .tag(page)
+                            Label {
+                                Text(page.title)
+                            } icon: {
+                                ZSSettingsIcon(systemImage: page.icon, color: page.tint, size: 21)
+                            }
+                            .tag(page)
                         }
                     }
                 }

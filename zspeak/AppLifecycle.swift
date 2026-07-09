@@ -229,6 +229,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let audioFileWindowController: AudioFileWindowController
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
+    /// Mini-overlay do modo tray — mostra o conteúdo completo da transcrição
+    /// logo abaixo da barra de menu (o item só comporta a cauda truncada).
+    private let infoPanel = TrayInfoOverlayPanel()
 
     init(
         appState: AppState,
@@ -253,7 +256,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // enquanto o modelo ainda carrega.
         menu.autoenablesItems = false
         statusItem.menu = menu
-        statusItem.length = 42
         updateButton()
         startObserving()
     }
@@ -267,6 +269,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             _ = appState.state
             _ = appState.isModelReady
             _ = appState.microphoneManager.permissionState
+            // Modo compacto: o texto ao vivo aparece no próprio item do tray.
+            _ = appState.liveTranscriptionPreview
+            // Modo Prompt esconde o mini-overlay (overlay grande em cena).
+            _ = promptModeManager.isEnabled
         } onChange: { [weak self] in
             Task { @MainActor in
                 self?.updateButton()
@@ -276,11 +282,41 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func updateButton() {
-        guard let button = statusItem.button else { return }
-        button.title = "ZS"
-        button.image = nil
-        button.imagePosition = .noImage
-        button.toolTip = statusText
+        let trayModeEnabled = TrayLivePreview.isEnabled()
+        let infoOverlayVisible = TrayInfoOverlay.isVisible(
+            state: appState.state,
+            trayModeEnabled: trayModeEnabled,
+            promptModeActive: promptModeManager.isEnabled
+        )
+
+        // Com o mini-overlay em cena o texto já aparece logo abaixo da barra —
+        // o item do tray fica no selo compacto (ZS + indicador de estado) em
+        // vez de expandir e duplicar o conteúdo.
+        let itemPresentation = infoOverlayVisible
+            ? TrayLivePreview.compactBadge(state: appState.state)
+            : TrayLivePreview.presentation(
+                state: appState.state,
+                previewText: appState.liveTranscriptionPreview,
+                enabled: trayModeEnabled,
+                maxWidth: TrayLivePreview.maxWidth()
+            )
+        TrayLivePreview.apply(itemPresentation, to: statusItem)
+        statusItem.button?.toolTip = statusText
+
+        // Mini-overlay sob a barra de menu com o conteúdo COMPLETO.
+        if infoOverlayVisible {
+            infoPanel.present(
+                TrayLivePreview.presentation(
+                    state: appState.state,
+                    previewText: appState.liveTranscriptionPreview,
+                    enabled: trayModeEnabled,
+                    maxWidth: TrayLivePreview.maxWidth()
+                ),
+                anchoredTo: statusItem.button
+            )
+        } else {
+            infoPanel.dismiss()
+        }
     }
 
     private func rebuildMenu() {

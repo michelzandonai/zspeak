@@ -58,6 +58,8 @@ enum PerfSignposter {
         case stopDrain = "stop_drain"
         /// Tempo gasto dentro do ASR Parakeet.
         case asrTranscribe = "asr_transcribe"
+        /// Trim de fala pré-ASR via Silero VAD (custo adicionado no stop).
+        case vadTrim = "vad_trim"
     }
 
     /// Handle de um intervalo aberto. Sendable para atravessar actor boundaries
@@ -143,6 +145,7 @@ enum PerfSignposter {
         case .startToFirstSample: return signposter.beginInterval("start_to_first_sample", id: id)
         case .stopDrain: return signposter.beginInterval("stop_drain", id: id)
         case .asrTranscribe: return signposter.beginInterval("asr_transcribe", id: id)
+        case .vadTrim: return signposter.beginInterval("vad_trim", id: id)
         }
     }
 
@@ -160,6 +163,7 @@ enum PerfSignposter {
         case .startToFirstSample: signposter.endInterval("start_to_first_sample", state)
         case .stopDrain: signposter.endInterval("stop_drain", state)
         case .asrTranscribe: signposter.endInterval("asr_transcribe", state)
+        case .vadTrim: signposter.endInterval("vad_trim", state)
         }
     }
 
@@ -177,6 +181,7 @@ enum PerfSignposter {
         case .startToFirstSample: signposter.emitEvent("start_to_first_sample")
         case .stopDrain: signposter.emitEvent("stop_drain")
         case .asrTranscribe: signposter.emitEvent("asr_transcribe")
+        case .vadTrim: signposter.emitEvent("vad_trim")
         }
     }
 }
