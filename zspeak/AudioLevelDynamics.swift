@@ -18,7 +18,7 @@ enum AudioLevelNormalizer {
 
 /// Modela a dinâmica visual da waveform do overlay.
 ///
-/// Design "histórico rolante": cada barra é uma amostra real do nível de voz.
+/// Design "histórico rolante": cada ponto é uma amostra real do nível de voz.
 /// O perfil da fala (sílabas e pausas) é preservado; a UI não injeta ondas
 /// artificiais que façam a forma deixar de acompanhar quem está falando.
 enum WaveformDynamics {
@@ -202,6 +202,47 @@ enum WaveformDynamics {
             y: next.y - (following.y - current.y) * clampedTension / 6
         )
         return (first, second)
+    }
+
+    /// Seleciona máximos locais do áudio para os brilhos especulares. Como o
+    /// critério acompanha a própria amostra (e não uma posição fixa da grade),
+    /// o brilho desliza junto com o pico em vez de piscar a cada append.
+    static func ribbonHighlightIndices(
+        levels: [Float],
+        threshold: Float = 0.32,
+        maximumCount: Int = 5
+    ) -> [Int] {
+        guard !levels.isEmpty, maximumCount > 0 else { return [] }
+        let clampedThreshold = min(max(threshold, 0), 1)
+        var indices: [Int] = []
+
+        for index in levels.indices {
+            let level = min(max(levels[index], 0), 1)
+            guard level >= clampedThreshold else { continue }
+
+            let previous = index > levels.startIndex
+                ? min(max(levels[index - 1], 0), 1)
+                : -1
+            let next = index < levels.index(before: levels.endIndex)
+                ? min(max(levels[index + 1], 0), 1)
+                : -1
+            let isPeak = level >= previous
+                && level >= next
+                && (level > previous || level > next)
+            if isPeak {
+                indices.append(index)
+            }
+        }
+
+        return Array(indices.suffix(maximumCount))
+    }
+
+    /// Entrada e saída suaves do brilho ao redor do limiar de fala. Evita um
+    /// corte binário de opacidade quando o volume oscila próximo do threshold.
+    static func ribbonHighlightOpacity(level: Float) -> Double {
+        let normalized = min(max((level - 0.32) / 0.50, 0), 1)
+        let smooth = normalized * normalized * (3 - 2 * normalized)
+        return Double(smooth) * 0.72
     }
 
     /// Perfil determinístico de "fala" para snapshots/previews, onde não há

@@ -1686,8 +1686,9 @@ struct WaveformView: View {
     private let waveformHeight: CGFloat = 42
     private let minimumAmplitude: CGFloat = 2
     private let maximumAmplitude: CGFloat = 15.5
-    private let cyan = Color(red: 0.18, green: 0.78, blue: 1.0)
-    private let violet = Color(red: 0.68, green: 0.34, blue: 1.0)
+    private let dimWhite = Color(white: 0.74)
+    private let softWhite = Color(white: 0.90)
+    private let brightWhite = Color.white
     /// Cadência de amostragem — ~2,3 s de fala visível no histórico.
     private let samplePeriod: TimeInterval = 0.045
 
@@ -1700,7 +1701,7 @@ struct WaveformView: View {
     @State private var animationStartTime: TimeInterval = Date.timeIntervalSinceReferenceDate
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 120.0)) { context in
+        TimelineView(.animation(paused: reduceMotion)) { context in
             let now = context.date.timeIntervalSinceReferenceDate
             let isFrozen = model.waveformAnimationPhaseOverride != nil
             let progress: CGFloat = isFrozen
@@ -1722,7 +1723,7 @@ struct WaveformView: View {
                 Capsule()
                     .fill(
                         LinearGradient(
-                            colors: [cyan, Color(red: 0.34, green: 0.62, blue: 1.0), violet],
+                            colors: [dimWhite, brightWhite, softWhite],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
@@ -1734,7 +1735,7 @@ struct WaveformView: View {
                     .blur(radius: 18)
                     .opacity(0.035 + 0.12 * Double(glowLevel))
 
-                Canvas { canvas, size in
+                Canvas(rendersAsynchronously: model.waveformAnimationPhaseOverride == nil) { canvas, size in
                     drawRibbon(
                         in: &canvas,
                         size: size,
@@ -1747,15 +1748,9 @@ struct WaveformView: View {
                 .frame(width: ribbonWidth, height: waveformHeight)
                 .scaleEffect(x: 1, y: 1 + 0.035 * glowLevel, anchor: .center)
                 .shadow(
-                    color: cyan.opacity(0.08 + Double(glowLevel) * 0.16),
-                    radius: 4 + glowLevel * 6,
-                    x: -5,
-                    y: 0
-                )
-                .shadow(
-                    color: violet.opacity(0.08 + Double(glowLevel) * 0.16),
-                    radius: 4 + glowLevel * 6,
-                    x: 5,
+                    color: brightWhite.opacity(0.08 + Double(glowLevel) * 0.18),
+                    radius: 5 + glowLevel * 7,
+                    x: 0,
                     y: 0
                 )
             }
@@ -1926,15 +1921,15 @@ struct WaveformView: View {
         let start = CGPoint(x: 0, y: centerY)
         let end = CGPoint(x: size.width, y: centerY)
 
-        // Camada externa: energia difusa, com o azul evoluindo para violeta
-        // junto da borda mais recente da fala.
+        // Camada externa monocromática: a profundidade vem apenas da
+        // luminosidade, preservando a estética branca e limpa.
         context.fill(
             outerPath,
             with: .linearGradient(
                 Gradient(stops: [
-                    .init(color: cyan.opacity(0.12 + Double(energy) * 0.14), location: 0),
-                    .init(color: Color(red: 0.30, green: 0.57, blue: 1.0).opacity(0.18 + Double(energy) * 0.16), location: 0.53),
-                    .init(color: violet.opacity(0.14 + Double(energy) * 0.18), location: 1),
+                    .init(color: dimWhite.opacity(0.10 + Double(energy) * 0.12), location: 0),
+                    .init(color: softWhite.opacity(0.17 + Double(energy) * 0.18), location: 0.53),
+                    .init(color: brightWhite.opacity(0.12 + Double(energy) * 0.15), location: 1),
                 ]),
                 startPoint: start,
                 endPoint: end
@@ -1943,7 +1938,7 @@ struct WaveformView: View {
         context.stroke(
             outerPath,
             with: .linearGradient(
-                Gradient(colors: [cyan.opacity(0.42), Color(red: 0.40, green: 0.58, blue: 1.0).opacity(0.52), violet.opacity(0.48)]),
+                Gradient(colors: [dimWhite.opacity(0.34), brightWhite.opacity(0.62), softWhite.opacity(0.46)]),
                 startPoint: start,
                 endPoint: end
             ),
@@ -1955,23 +1950,24 @@ struct WaveformView: View {
         context.fill(
             corePath,
             with: .linearGradient(
-                Gradient(colors: [cyan.opacity(0.42), Color(red: 0.58, green: 0.78, blue: 1.0).opacity(0.58), violet.opacity(0.52)]),
+                Gradient(colors: [softWhite.opacity(0.40), brightWhite.opacity(0.68), softWhite.opacity(0.50)]),
                 startPoint: start,
                 endPoint: end
             )
         )
         context.stroke(
             corePath,
-            with: .color(.white.opacity(0.18 + Double(energy) * 0.20)),
+            with: .color(brightWhite.opacity(0.22 + Double(energy) * 0.26)),
             lineWidth: 0.55
         )
 
-        // Pequenos glints são totalmente guiados por trechos de fala fortes:
-        // dão o acabamento de HUD de jogo, mas não criam movimento artificial.
-        let glints = nodes.enumerated().filter {
-            $0.offset.isMultiple(of: 5) && $0.element.level > 0.48
-        }.suffix(5)
-        for (_, node) in glints {
+        // Os glints seguem máximos locais da voz. Assim, cada brilho permanece
+        // preso ao mesmo pico enquanto ele desliza pelo histórico.
+        let highlightIndices = WaveformDynamics.ribbonHighlightIndices(
+            levels: nodes.map(\.level)
+        )
+        for index in highlightIndices {
+            let node = nodes[index]
             let diameter = 1.1 + CGFloat(node.level) * 1.7
             let rect = CGRect(
                 x: node.x - diameter / 2,
@@ -1981,7 +1977,7 @@ struct WaveformView: View {
             )
             context.fill(
                 Path(ellipseIn: rect),
-                with: .color(.white.opacity(0.28 + Double(node.level) * 0.42))
+                with: .color(brightWhite.opacity(WaveformDynamics.ribbonHighlightOpacity(level: node.level)))
             )
         }
     }

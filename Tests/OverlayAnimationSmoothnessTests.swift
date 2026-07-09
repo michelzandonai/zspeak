@@ -6,7 +6,7 @@ import Testing
 
 /// Harness de fluidez do overlay de gravação.
 ///
-/// Hospeda o `OverlayView` REAL (waveform TimelineView a 60fps + loop de
+/// Hospeda o `OverlayView` REAL (waveform sincronizada ao refresh da tela + loop de
 /// amostragem + datilografia do texto ao vivo) numa janela visível e bombeia
 /// o pipeline como numa gravação com fala: nível de voz variando e previews
 /// de transcrição crescendo. Enquanto isso, um ticker em grade de 8ms mede a

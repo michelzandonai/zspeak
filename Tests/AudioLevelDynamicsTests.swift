@@ -222,6 +222,29 @@ struct AudioLevelDynamicsTests {
         #expect(controls.second.x < 20)
     }
 
+    @Test("Brilhos acompanham picos reais ao deslocar o histórico")
+    func ribbonHighlightsFollowShiftedPeaks() {
+        let levels: [Float] = [0.05, 0.65, 0.15, 0.80, 0.12, 0.55, 0.08]
+        let shifted = Array(levels.dropFirst()) + [0.04]
+
+        #expect(WaveformDynamics.ribbonHighlightIndices(levels: levels) == [1, 3, 5])
+        #expect(WaveformDynamics.ribbonHighlightIndices(levels: shifted) == [0, 2, 4])
+        #expect(WaveformDynamics.ribbonHighlightIndices(levels: levels, maximumCount: 2) == [3, 5])
+    }
+
+    @Test("Opacidade do brilho entra suavemente com a energia")
+    func ribbonHighlightOpacityIsContinuous() {
+        let below = WaveformDynamics.ribbonHighlightOpacity(level: 0.30)
+        let entering = WaveformDynamics.ribbonHighlightOpacity(level: 0.40)
+        let strong = WaveformDynamics.ribbonHighlightOpacity(level: 0.75)
+        let saturated = WaveformDynamics.ribbonHighlightOpacity(level: 2)
+
+        #expect(below == 0)
+        #expect(entering > below)
+        #expect(strong > entering)
+        #expect(saturated == 0.72)
+    }
+
     @Test("Histórico sintético de snapshots é determinístico e escala com o nível")
     func syntheticHistoryDeterministic() {
         let first = WaveformDynamics.syntheticSpeechHistory(count: 53, level: 0.56, phase: 0.42)
