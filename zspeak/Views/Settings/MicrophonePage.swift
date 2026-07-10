@@ -48,6 +48,7 @@ struct MicrophonePage: View {
             }
         }
         .formStyle(.grouped)
+        .zsAppSurface()
         .navigationTitle("Microfone")
         .navigationSubtitle("Padrão do sistema, prioridade e bloqueio")
         .animation(.default, value: microphoneManager.useSystemDefault)

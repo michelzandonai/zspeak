@@ -195,6 +195,7 @@ struct BenchmarkView: View {
             }
         }
         .formStyle(.grouped)
+        .zsAppSurface()
         .navigationTitle("Benchmark")
         .navigationSubtitle("Acurácia, WER, CER e latência locais")
         .task {

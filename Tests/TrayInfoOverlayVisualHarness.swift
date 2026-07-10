@@ -31,7 +31,10 @@ struct TrayInfoOverlayVisualHarness {
             ("info-1-ouvindo", TrayLivePreview.presentation(
                 state: .recording, previewText: "", enabled: true, maxWidth: maxWidth)),
             ("info-2-curto", TrayLivePreview.presentation(
-                state: .recording, previewText: "hoje eu preciso ajustar", enabled: true, maxWidth: maxWidth)),
+                state: .recording,
+                previewText: "Vamos ajustar o deploy e revisar o banco.",
+                enabled: true,
+                maxWidth: maxWidth)),
             ("info-3-longo-quebra", TrayLivePreview.presentation(
                 state: .recording, previewText: Self.longPreview, enabled: true, maxWidth: maxWidth)),
             ("info-4-estouro-cauda", TrayLivePreview.presentation(
@@ -78,6 +81,13 @@ struct TrayInfoOverlayVisualHarness {
         model.isShown = true
         model.typingEnabled = false
         model.reduceMotionOverride = true
+        model.elapsedTimeOverride = 12
+        model.waveformLevelsOverride = [
+            0.12, 0.18, 0.24, 0.34, 0.28, 0.22, 0.30, 0.42, 0.58,
+            0.72, 0.54, 0.38, 0.28, 0.36, 0.62, 0.84, 0.64, 0.42,
+            0.30, 0.46, 0.76, 0.92, 0.68, 0.44, 0.32, 0.54, 0.78,
+            0.58, 0.40, 0.30, 0.24, 0.18, 0.14, 0.10,
+        ]
 
         let content = TrayInfoOverlayView(model: model)
             .background(background)

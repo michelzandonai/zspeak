@@ -18,6 +18,7 @@ struct AudioFileWindowContent: View {
     var body: some View {
         AudioFileView(appState: appState, store: store)
             .frame(minWidth: 640, minHeight: 520)
+            .zsAppSurface()
             .navigationTitle("Transcrever arquivo")
     }
 }

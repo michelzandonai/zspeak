@@ -175,6 +175,7 @@ final class SettingsWindowController {
             settingsWindow.title = "Configurações"
             settingsWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             settingsWindow.setContentSize(NSSize(width: 920, height: 640))
+            applyZSpeakChrome(to: settingsWindow)
             settingsWindow.center()
             settingsWindow.isReleasedWhenClosed = false
             settingsWindow.standardWindowButton(.miniaturizeButton)?.isHidden = true
@@ -209,6 +210,7 @@ final class AudioFileWindowController {
             audioFileWindow.title = "Transcrever arquivo"
             audioFileWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             audioFileWindow.setContentSize(NSSize(width: 720, height: 580))
+            applyZSpeakChrome(to: audioFileWindow)
             audioFileWindow.center()
             audioFileWindow.isReleasedWhenClosed = false
             window = audioFileWindow
@@ -229,8 +231,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let audioFileWindowController: AudioFileWindowController
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
-    /// Mini-overlay do modo tray — mostra o conteúdo completo da transcrição
-    /// logo abaixo da barra de menu (o item só comporta a cauda truncada).
+    /// Mini-overlay do modo tray — mostra a cauda recente da transcrição em
+    /// até quatro linhas logo abaixo da barra de menu.
     private let infoPanel = TrayInfoOverlayPanel()
 
     init(
@@ -251,11 +253,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         super.init()
 
         menu.delegate = self
+        menu.appearance = NSAppearance(named: .darkAqua)
         // Sem isto, o AppKit re-habilita itens com action+target e ignora o
         // `isEnabled = false` de "Iniciar Gravação"/"Transcrever arquivo..."
         // enquanto o modelo ainda carrega.
         menu.autoenablesItems = false
         statusItem.menu = menu
+        infoPanel.overlayModel.getAudioLevel = { [weak appState] in
+            appState?.currentAudioLevel() ?? 0
+        }
         updateButton()
         startObserving()
     }
@@ -267,6 +273,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func startObserving() {
         withObservationTracking {
             _ = appState.state
+            _ = appState.recordingStartedAt
             _ = appState.isModelReady
             _ = appState.microphoneManager.permissionState
             // Modo compacto: o texto ao vivo aparece no próprio item do tray.
@@ -303,7 +310,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         TrayLivePreview.apply(itemPresentation, to: statusItem)
         statusItem.button?.toolTip = statusText
 
-        // Mini-overlay sob a barra de menu com o conteúdo COMPLETO.
+        // Mini-overlay sob a barra de menu com a cauda recente do texto.
         if infoOverlayVisible {
             infoPanel.present(
                 TrayLivePreview.presentation(
@@ -312,6 +319,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                     enabled: trayModeEnabled,
                     maxWidth: TrayLivePreview.maxWidth()
                 ),
+                recordingStartedAt: appState.recordingStartedAt,
                 anchoredTo: statusItem.button
             )
         } else {
@@ -513,4 +521,17 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             return "Pronto"
         }
     }
+}
+
+@MainActor
+private func applyZSpeakChrome(to window: NSWindow) {
+    window.appearance = NSAppearance(named: .darkAqua)
+    window.backgroundColor = NSColor(
+        srgbRed: 0.022,
+        green: 0.039,
+        blue: 0.061,
+        alpha: 1
+    )
+    window.titlebarAppearsTransparent = true
+    window.isOpaque = true
 }

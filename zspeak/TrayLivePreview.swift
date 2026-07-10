@@ -6,6 +6,8 @@ import Foundation
 /// mostra a cauda da transcrição ao vivo (truncada pela cabeça — as palavras
 /// mais novas ficam sempre visíveis); fora do ciclo volta ao selo "ZS".
 struct TrayPreviewPresentation: Equatable {
+    /// Estado semântico que dirige status, timer e acessibilidade do painel.
+    var state: AppState.RecordingState
     /// Largura do NSStatusItem (fixa por estado — a barra de menu não fica
     /// "pulando" a cada palavra transcrita).
     var length: CGFloat
@@ -32,10 +34,19 @@ enum TrayLivePreview {
 
     static let idleLength: CGFloat = 42
     /// Selo compacto com indicador de estado (dot/waveform + "ZS").
-    static let compactBadgeLength: CGFloat = 54
+    static let compactBadgeLength: CGFloat = 48
     static let defaultMaxWidth: CGFloat = 220
     /// Piso para valores customizados — abaixo disso nem o placeholder cabe.
     static let minimumMaxWidth: CGFloat = 120
+
+    static func accessibilityLabel(for state: AppState.RecordingState) -> String {
+        switch state {
+        case .idle: return "zspeak, pronto"
+        case .preparing: return "zspeak, preparando microfone"
+        case .recording: return "zspeak, gravando áudio"
+        case .processing: return "zspeak, transcrevendo"
+        }
+    }
 
     static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
         guard defaults.object(forKey: enabledDefaultsKey) != nil else { return true }
@@ -66,16 +77,17 @@ enum TrayLivePreview {
             symbolName = nil
             isRecordingDot = false
         case .preparing:
-            symbolName = "record.circle"
+            symbolName = "circle"
             isRecordingDot = true
         case .recording:
-            symbolName = "record.circle.fill"
+            symbolName = "circle.fill"
             isRecordingDot = true
         case .processing:
             symbolName = "waveform"
             isRecordingDot = false
         }
         return TrayPreviewPresentation(
+            state: state,
             length: symbolName == nil ? idleLength : compactBadgeLength,
             text: "ZS",
             symbolName: symbolName,
@@ -92,6 +104,7 @@ enum TrayLivePreview {
         maxWidth: CGFloat
     ) -> TrayPreviewPresentation {
         let idle = TrayPreviewPresentation(
+            state: .idle,
             length: idleLength,
             text: "ZS",
             symbolName: nil,
@@ -107,6 +120,7 @@ enum TrayLivePreview {
             return idle
         case .preparing:
             return TrayPreviewPresentation(
+                state: .preparing,
                 length: maxWidth,
                 text: "Preparando…",
                 symbolName: "record.circle",
@@ -116,6 +130,7 @@ enum TrayLivePreview {
             )
         case .recording:
             return TrayPreviewPresentation(
+                state: .recording,
                 length: maxWidth,
                 text: text.isEmpty ? "Ouvindo…" : text,
                 symbolName: "record.circle.fill",
@@ -125,6 +140,7 @@ enum TrayLivePreview {
             )
         case .processing:
             return TrayPreviewPresentation(
+                state: .processing,
                 length: maxWidth,
                 text: text.isEmpty ? "Transcrevendo…" : text,
                 symbolName: "waveform",
@@ -155,6 +171,7 @@ enum TrayLivePreview {
         // Truncamento pela CABEÇA: em texto ao vivo, o fim (palavras novas)
         // é o que importa — "…do serviço de transcrição".
         button.lineBreakMode = .byTruncatingHead
+        button.setAccessibilityLabel(accessibilityLabel(for: presentation.state))
 
         let font: NSFont
         if presentation.isLivePreview {
@@ -187,7 +204,8 @@ enum TrayLivePreview {
         if let symbolName = presentation.symbolName {
             let base = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
             if presentation.isRecordingDot {
-                let config = NSImage.SymbolConfiguration(pointSize: 9.5, weight: .bold)
+                let pointSize: CGFloat = presentation.isLivePreview ? 9.5 : 6.5
+                let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .bold)
                     .applying(.init(paletteColors: [.systemRed]))
                 let tinted = base?.withSymbolConfiguration(config)
                 tinted?.isTemplate = false
@@ -197,7 +215,9 @@ enum TrayLivePreview {
                     .init(pointSize: 10, weight: .semibold)
                 )
             }
-            button.imagePosition = .imageLeading
+            // No selo compacto, o dot vem depois de "ZS", como no design
+            // aprovado. No preview legado, o símbolo continua à esquerda.
+            button.imagePosition = presentation.isLivePreview ? .imageLeading : .imageTrailing
         } else {
             button.image = nil
             button.imagePosition = .noImage

@@ -11,26 +11,26 @@ enum OverlayTheme {
     /// Largura compacta do HUD de gravação.
     static let recordingWidth: CGFloat = 410
 
-    static let textPrimary = Color.white.opacity(0.96)
-    static let textSecondary = Color.white.opacity(0.74)
-    static let textTertiary = Color.white.opacity(0.50)
+    static let textPrimary = ZSDesign.textPrimary
+    static let textSecondary = ZSDesign.textSecondary
+    static let textTertiary = ZSDesign.textTertiary
 
-    static let surface = Color(red: 0.035, green: 0.055, blue: 0.085).opacity(0.92)
-    static let surfaceStroke = Color(red: 0.28, green: 0.38, blue: 0.49).opacity(0.72)
+    static let surface = ZSDesign.cardBackground.opacity(0.96)
+    static let surfaceStroke = ZSDesign.hairline
     static let raisedSurface = Color.white.opacity(0.09)
     static let raisedStroke = Color.white.opacity(0.22)
 
     /// Vermelho vivo do estado de gravação (dot pulsante + badge "ao vivo").
-    static let recordingAccent = Color(red: 1.0, green: 0.30, blue: 0.32)
+    static let recordingAccent = ZSDesign.dangerAccent
     /// Azul frio do estado de processamento.
-    static let processingAccent = Color(red: 0.45, green: 0.68, blue: 1.0)
+    static let processingAccent = ZSDesign.accent
 
     /// Fundo azul-grafite do HUD, alinhado à identidade visual da referência.
     static var backgroundGradient: LinearGradient {
         LinearGradient(
             colors: [
-                Color(red: 0.072, green: 0.105, blue: 0.143).opacity(0.99),
-                Color(red: 0.060, green: 0.088, blue: 0.122).opacity(0.99),
+                ZSDesign.raisedBackground.opacity(0.99),
+                ZSDesign.cardBackground.opacity(0.99),
             ],
             startPoint: .top,
             endPoint: .bottom
@@ -41,8 +41,8 @@ enum OverlayTheme {
     static var edgeHighlight: LinearGradient {
         LinearGradient(
             colors: [
-                Color(red: 0.52, green: 0.64, blue: 0.76).opacity(0.92),
-                Color(red: 0.43, green: 0.55, blue: 0.68).opacity(0.86),
+                ZSDesign.neutralAccent.opacity(0.88),
+                ZSDesign.hairline,
             ],
             startPoint: .top,
             endPoint: .bottom

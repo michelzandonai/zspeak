@@ -83,12 +83,29 @@ struct TrayInfoOverlayTests {
 
         #expect(TrayInfoOverlay.width(defaults: defaults) == TrayInfoOverlay.defaultWidth)
 
-        defaults.set(300.0, forKey: TrayInfoOverlay.widthDefaultsKey)
-        #expect(TrayInfoOverlay.width(defaults: defaults) == 300)
+        defaults.set(420.0, forKey: TrayInfoOverlay.widthDefaultsKey)
+        #expect(TrayInfoOverlay.width(defaults: defaults) == 420)
 
         defaults.set(100.0, forKey: TrayInfoOverlay.widthDefaultsKey)
         #expect(TrayInfoOverlay.width(defaults: defaults) == TrayInfoOverlay.minimumWidth)
 
         defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    @Test("Design system traduz estados em rótulos e apoio consistentes")
+    func stateContent() {
+        #expect(TrayInfoOverlay.statusLabel(for: .preparing) == "PREPARANDO")
+        #expect(TrayInfoOverlay.statusLabel(for: .recording) == "AO VIVO")
+        #expect(TrayInfoOverlay.statusLabel(for: .processing) == "TRANSCREVENDO")
+
+        #expect(TrayInfoOverlay.supportingHint(for: .recording) == "Esc para cancelar")
+        #expect(TrayInfoOverlay.supportingHint(for: .processing) == "Finalizando…")
+    }
+
+    @Test("Timer do tray usa minutos e segundos com piso em zero")
+    func elapsedTimeFormatting() {
+        #expect(TrayInfoOverlay.formattedElapsedTime(-1) == "0:00")
+        #expect(TrayInfoOverlay.formattedElapsedTime(12.9) == "0:12")
+        #expect(TrayInfoOverlay.formattedElapsedTime(65) == "1:05")
     }
 }

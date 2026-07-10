@@ -72,9 +72,10 @@ struct TrayLivePreviewTests {
         let recording = TrayLivePreview.compactBadge(state: .recording)
         #expect(recording.length == TrayLivePreview.compactBadgeLength)
         #expect(recording.text == "ZS")
-        #expect(recording.symbolName == "record.circle.fill")
+        #expect(recording.symbolName == "circle.fill")
         #expect(recording.isRecordingDot)
         #expect(!recording.isLivePreview)
+        #expect(recording.state == .recording)
 
         let preparing = TrayLivePreview.compactBadge(state: .preparing)
         #expect(preparing.isRecordingDot)
@@ -83,6 +84,7 @@ struct TrayLivePreviewTests {
         let processing = TrayLivePreview.compactBadge(state: .processing)
         #expect(processing.symbolName == "waveform")
         #expect(!processing.isRecordingDot)
+        #expect(processing.state == .processing)
 
         let idle = TrayLivePreview.compactBadge(state: .idle)
         #expect(idle.length == TrayLivePreview.idleLength)
@@ -96,6 +98,13 @@ struct TrayLivePreviewTests {
         let presentation = TrayLivePreview.presentation(
             state: .recording, previewText: "um\ndois", enabled: true, maxWidth: 220)
         #expect(presentation.text == "um dois")
+    }
+
+    @Test("Item do tray expõe estado textual para VoiceOver")
+    func accessibilityLabels() {
+        #expect(TrayLivePreview.accessibilityLabel(for: .idle) == "zspeak, pronto")
+        #expect(TrayLivePreview.accessibilityLabel(for: .recording) == "zspeak, gravando áudio")
+        #expect(TrayLivePreview.accessibilityLabel(for: .processing) == "zspeak, transcrevendo")
     }
 
     @Test("Defaults: habilitado por padrão, largura com default e piso")

@@ -121,6 +121,7 @@ struct OverviewPage: View {
             }
         }
         .formStyle(.grouped)
+        .zsAppSurface()
         .navigationTitle("Visão Geral")
         .task(id: llmStateTaskID) {
             selectedLLMModel = await appState.selectedLLMModel()

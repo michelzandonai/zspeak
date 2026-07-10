@@ -124,6 +124,7 @@ struct HistoryView: View {
             retentionSection
         }
         .formStyle(.grouped)
+        .zsAppSurface()
         .navigationTitle("Histórico")
         .navigationSubtitle("Transcrições recentes com áudio e destino")
         .searchable(text: $searchText, placement: .toolbar, prompt: "Buscar no texto das transcrições")

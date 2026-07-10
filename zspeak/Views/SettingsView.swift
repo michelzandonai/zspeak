@@ -53,16 +53,16 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     /// Sistema, onde cada área tem uma cor de identidade fixa.
     var tint: Color {
         switch self {
-        case .overview: .blue
-        case .history: .indigo
-        case .benchmark: .orange
-        case .vocabulary: .teal
-        case .correction: .purple
-        case .keyboard: .gray
-        case .microphone: .red
-        case .general: .gray
-        case .permissions: .green
-        case .about: .gray
+        case .overview: ZSDesign.accent
+        case .history: ZSDesign.infoAccent
+        case .benchmark: ZSDesign.warningAccent
+        case .vocabulary: ZSDesign.successAccent
+        case .correction: Color(red: 0.73, green: 0.56, blue: 1.0)
+        case .keyboard: ZSDesign.neutralAccent
+        case .microphone: ZSDesign.dangerAccent
+        case .general: ZSDesign.neutralAccent
+        case .permissions: ZSDesign.successAccent
+        case .about: ZSDesign.infoAccent
         }
     }
 
@@ -79,6 +79,99 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .vocabulary, .correction, .keyboard, .microphone, .general: .configuration
         case .permissions, .about: .system
         }
+    }
+}
+
+/// Sidebar própria do zspeak. Evita que o material translúcido padrão do
+/// `List.sidebar` dilua a identidade azul-grafite em janelas claras.
+struct SettingsSidebar: View {
+    @Binding var selection: SettingsPage
+
+    var body: some View {
+        ZStack {
+            ZSDesign.sidebarBackground.ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    brand
+
+                    ForEach(SettingsPage.Section.allCases, id: \.self) { section in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(section.rawValue.uppercased())
+                                .font(.caption2.weight(.semibold))
+                                .tracking(0.8)
+                                .foregroundStyle(ZSDesign.textTertiary)
+                                .padding(.horizontal, 10)
+
+                            ForEach(pages(in: section)) { page in
+                                navigationButton(for: page)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 14)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private var brand: some View {
+        HStack(spacing: 11) {
+            ZSSettingsIcon(
+                systemImage: "waveform.badge.mic",
+                color: ZSDesign.accent,
+                size: 34
+            )
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("zspeak")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(ZSDesign.textPrimary)
+                Text("Transcrição local")
+                    .font(.caption)
+                    .foregroundStyle(ZSDesign.textSecondary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("zspeak, transcrição local")
+    }
+
+    private func navigationButton(for page: SettingsPage) -> some View {
+        let isSelected = selection == page
+
+        return Button {
+            selection = page
+        } label: {
+            HStack(spacing: 10) {
+                ZSSettingsIcon(systemImage: page.icon, color: page.tint, size: 22)
+                Text(page.title)
+                    .font(.callout.weight(isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? ZSDesign.textPrimary : ZSDesign.textSecondary)
+                Spacer(minLength: 4)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: ZSDesign.compactRadius, style: .continuous)
+                    .fill(isSelected ? ZSDesign.accent.opacity(0.15) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ZSDesign.compactRadius, style: .continuous)
+                    .strokeBorder(isSelected ? ZSDesign.accent.opacity(0.42) : Color.clear, lineWidth: 0.7)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(page.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func pages(in section: SettingsPage.Section) -> [SettingsPage] {
+        SettingsPage.allCases.filter { $0.section == section }
     }
 }
 
@@ -104,26 +197,15 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selectedPage) {
-                ForEach(SettingsPage.Section.allCases, id: \.self) { section in
-                    Section(section.rawValue) {
-                        ForEach(pages(in: section)) { page in
-                            Label {
-                                Text(page.title)
-                            } icon: {
-                                ZSSettingsIcon(systemImage: page.icon, color: page.tint, size: 21)
-                            }
-                            .tag(page)
-                        }
-                    }
-                }
-            }
+            SettingsSidebar(selection: $selectedPage)
             .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
         } detail: {
             detailView(for: selectedPage)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(ZSDesign.pageBackground.ignoresSafeArea())
         }
         .frame(minWidth: 720, idealWidth: 820, minHeight: 480, idealHeight: 560)
-        .tint(.accentColor)
+        .zsAppSurface()
         .onAppear {
             // Sincroniza a aba inicial com o AppStorage que o MenuBar manipula
             if let page = SettingsPage(rawValue: initialPageRaw) {
@@ -135,10 +217,9 @@ struct SettingsView: View {
                 selectedPage = page
             }
         }
-    }
-
-    private func pages(in section: SettingsPage.Section) -> [SettingsPage] {
-        SettingsPage.allCases.filter { $0.section == section }
+        .onChange(of: selectedPage) { _, page in
+            initialPageRaw = page.rawValue
+        }
     }
 
     @ViewBuilder

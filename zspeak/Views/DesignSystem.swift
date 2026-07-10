@@ -1,31 +1,37 @@
 import SwiftUI
 
-/// Primitivos visuais compartilhados entre Settings, janelas auxiliares e
-/// estados ricos. A linguagem segue os Ajustes do Sistema do macOS: forms
-/// agrupados nativos, ícones brancos sobre squircle com gradiente e ênfase
-/// por tint suave — nunca bordas pesadas nem fundos customizados.
+/// Design system global do zspeak.
+///
+/// A paleta nasce do modo tray aprovado: azul-grafite profundo, superfícies
+/// frias elevadas, bordas finas e cores semânticas reservadas a estados. Todos
+/// os fluxos visuais do app consomem estes tokens para não haver diferença de
+/// linguagem entre janela principal, janelas auxiliares, tray e overlays.
 enum ZSDesign {
-    static let radius: CGFloat = 10
-    static let compactRadius: CGFloat = 7
-    static let pagePadding: CGFloat = 20
+    static let radius: CGFloat = 14
+    static let compactRadius: CGFloat = 9
+    static let pagePadding: CGFloat = 22
 
-    /// Fundo de janelas que não usam Form agrupado (ex.: Transcrever Arquivo).
-    static var pageBackground: Color {
-        Color(nsColor: .windowBackgroundColor)
-    }
+    static let pageBackground = Color(red: 0.022, green: 0.039, blue: 0.061)
+    static let sidebarBackground = Color(red: 0.030, green: 0.052, blue: 0.078)
+    static let toolbarBackground = Color(red: 0.038, green: 0.064, blue: 0.095)
+    static let cardBackground = Color(red: 0.052, green: 0.086, blue: 0.130)
+    static let raisedBackground = Color(red: 0.069, green: 0.108, blue: 0.156)
+    static let strongBackground = Color(red: 0.078, green: 0.122, blue: 0.174)
 
-    static var cardBackground: Color {
-        Color(nsColor: .controlBackgroundColor)
-    }
+    static let hairline = Color(red: 0.34, green: 0.43, blue: 0.54).opacity(0.66)
+    static let divider = Color.white.opacity(0.13)
+    static let textPrimary = Color.white.opacity(0.96)
+    static let textSecondary = Color.white.opacity(0.62)
+    static let textTertiary = Color.white.opacity(0.42)
 
-    static var raisedBackground: Color {
-        Color(nsColor: .textBackgroundColor)
-    }
+    static let accent = Color(red: 0.45, green: 0.68, blue: 1.0)
+    static let successAccent = Color(red: 0.33, green: 0.82, blue: 0.62)
+    static let warningAccent = Color(red: 1.0, green: 0.66, blue: 0.24)
+    static let dangerAccent = Color(red: 1.0, green: 0.30, blue: 0.32)
+    static let infoAccent = Color(red: 0.35, green: 0.78, blue: 0.93)
+    static let neutralAccent = Color(red: 0.58, green: 0.65, blue: 0.74)
 
-    /// Contorno sutil de cards: dá definição no modo claro sem virar "caixa".
-    static var hairline: Color {
-        Color.primary.opacity(0.06)
-    }
+    static let cardShadow = Color.black.opacity(0.24)
 }
 
 enum ZSTone {
@@ -38,19 +44,37 @@ enum ZSTone {
 
     var color: Color {
         switch self {
-        case .accent: return .accentColor
-        case .success: return .green
-        case .warning: return .orange
-        case .danger: return .red
-        case .neutral: return .gray
-        case .info: return .blue
+        case .accent: return ZSDesign.accent
+        case .success: return ZSDesign.successAccent
+        case .warning: return ZSDesign.warningAccent
+        case .danger: return ZSDesign.dangerAccent
+        case .neutral: return ZSDesign.neutralAccent
+        case .info: return ZSDesign.infoAccent
         }
     }
 }
 
-/// Ícone no estilo dos Ajustes do Sistema: símbolo branco centrado num
-/// squircle preenchido com gradiente da cor. Usado na sidebar, em rows de
-/// status e em banners.
+/// Chrome compartilhado por páginas com `Form`, `List` ou `ScrollView`.
+/// Mantém o app deliberadamente escuro mesmo quando o macOS usa modo claro.
+private struct ZSAppSurfaceModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(.hidden)
+            .background(ZSDesign.pageBackground.ignoresSafeArea())
+            .foregroundStyle(ZSDesign.textPrimary)
+            .tint(ZSDesign.accent)
+            .preferredColorScheme(.dark)
+    }
+}
+
+extension View {
+    func zsAppSurface() -> some View {
+        modifier(ZSAppSurfaceModifier())
+    }
+}
+
+/// Símbolo semântico sobre uma superfície fria e discreta. A cor identifica o
+/// estado sem competir com o conteúdo, como no indicador "AO VIVO" do tray.
 struct ZSSettingsIcon: View {
     let systemImage: String
     let color: Color
@@ -58,12 +82,16 @@ struct ZSSettingsIcon: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-            .fill(color.gradient)
+            .fill(color.opacity(0.17))
             .frame(width: size, height: size)
             .overlay(
                 Image(systemName: systemImage)
                     .font(.system(size: size * 0.5, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(color)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                    .strokeBorder(color.opacity(0.42), lineWidth: 0.7)
             )
             .accessibilityHidden(true)
     }
@@ -91,10 +119,11 @@ struct ZSRowLabel: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
+                    .foregroundStyle(ZSDesign.textPrimary)
                 if let subtitle {
                     Text(subtitle)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(ZSDesign.textSecondary)
                 }
             }
         }
@@ -129,10 +158,10 @@ struct ZSStatusBanner: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(ZSDesign.textPrimary)
                 Text(subtitle)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(ZSDesign.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -146,12 +175,13 @@ struct ZSStatusBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: ZSDesign.radius, style: .continuous)
-                .fill(tone.color.opacity(0.10))
+                .fill(ZSDesign.cardBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: ZSDesign.radius, style: .continuous)
-                .strokeBorder(tone.color.opacity(0.16))
+                .strokeBorder(tone.color.opacity(0.52), lineWidth: 0.8)
         )
+        .shadow(color: ZSDesign.cardShadow, radius: 10, y: 4)
     }
 }
 
@@ -184,10 +214,10 @@ struct ZSPageHeader<Accessory: View>: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.title2.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(ZSDesign.textPrimary)
                 Text(subtitle)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(ZSDesign.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -230,6 +260,7 @@ struct ZSSectionCard<Content: View>: View {
             RoundedRectangle(cornerRadius: ZSDesign.radius, style: .continuous)
                 .strokeBorder(ZSDesign.hairline)
         )
+        .shadow(color: ZSDesign.cardShadow, radius: 8, y: 3)
     }
 }
 
@@ -251,7 +282,8 @@ struct ZSStatusChip: View {
         .foregroundStyle(tone.color)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(tone.color.opacity(0.12), in: Capsule())
+        .background(ZSDesign.raisedBackground, in: Capsule())
+        .overlay(Capsule().strokeBorder(tone.color.opacity(0.38), lineWidth: 0.7))
     }
 }
 
@@ -279,12 +311,12 @@ struct ZSMetricTile: View {
                 ZSSettingsIcon(systemImage: systemImage, color: color, size: 20)
                 Text(title)
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(ZSDesign.textSecondary)
             }
 
             Text(value)
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(.primary)
+                .foregroundStyle(ZSDesign.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
         }
@@ -298,5 +330,6 @@ struct ZSMetricTile: View {
             RoundedRectangle(cornerRadius: ZSDesign.radius, style: .continuous)
                 .strokeBorder(ZSDesign.hairline)
         )
+        .shadow(color: ZSDesign.cardShadow, radius: 7, y: 3)
     }
 }

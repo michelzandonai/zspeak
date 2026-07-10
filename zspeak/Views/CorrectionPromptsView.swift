@@ -142,6 +142,7 @@ struct CorrectionPromptsView: View {
             }
         }
         .formStyle(.grouped)
+        .zsAppSurface()
         .navigationTitle("Correção LLM")
         .navigationSubtitle("Modelo local e prompts de pós-processamento")
         .toolbar {
@@ -252,12 +253,13 @@ struct CorrectionPromptsView: View {
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: ZSDesign.radius)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(ZSDesign.cardBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: ZSDesign.radius)
-                .stroke(Color.secondary.opacity(0.14))
+                .stroke(ZSDesign.hairline, lineWidth: 0.8)
         )
+        .shadow(color: ZSDesign.cardShadow, radius: 8, y: 3)
         .padding(.vertical, 6)
     }
 
@@ -385,7 +387,14 @@ struct CorrectionPromptsView: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: ZSDesign.radius)
-                .fill(isSelected ? Color.green.opacity(0.12) : Color.gray.opacity(0.08))
+                .fill(isSelected ? ZSDesign.successAccent.opacity(0.13) : ZSDesign.raisedBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ZSDesign.radius)
+                .strokeBorder(
+                    isSelected ? ZSDesign.successAccent.opacity(0.46) : ZSDesign.hairline,
+                    lineWidth: 0.7
+                )
         )
         .contentShape(Rectangle())
         .onTapGesture {

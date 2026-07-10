@@ -3,8 +3,8 @@ import SwiftUI
 
 /// Mini-overlay de informação do "modo tray": faixa discreta logo abaixo da
 /// barra de menu (borda direita alinhada ao item do tray) que mostra o
-/// conteúdo COMPLETO da transcrição ao vivo em fonte pequena, quebrando em
-/// linhas — o item do tray só comporta a cauda. Neste modo o overlay grande
+/// a cauda recente da transcrição ao vivo em até quatro linhas — o item do
+/// tray fica reduzido ao selo de estado. Neste modo o overlay grande
 /// (com a animação de voz) fica suprimido durante o ciclo de ditado.
 ///
 /// Fluidez: a JANELA tem tamanho fixo e nunca anima frame — todo movimento
@@ -14,23 +14,22 @@ enum TrayInfoOverlay {
     /// Tunável sem rebuild:
     /// `defaults write com.zspeak.app trayInfoOverlayWidth -float 520`
     static let widthDefaultsKey = "trayInfoOverlayWidth"
-    static let defaultWidth: CGFloat = 460
+    static let defaultWidth: CGFloat = ZSTrayTheme.panelWidth
     /// Piso para valores customizados — abaixo disso o texto vira coluna.
-    static let minimumWidth: CGFloat = 220
+    static let minimumWidth: CGFloat = ZSTrayTheme.minimumPanelWidth
 
     /// Respiro entre a barra de menu e o pill.
     static let topGap: CGFloat = 6
     /// Margem lateral mínima até as bordas da tela.
     static let edgeMargin: CGFloat = 8
-    /// Altura máxima do pill (≈9 linhas + padding) — o teto de caracteres
-    /// abaixo garante que o texto exibido caiba.
-    static let pillMaxHeight: CGFloat = 150
+    /// Altura máxima da faixa; o frame do painel permanece fixo por ciclo.
+    static let pillMaxHeight: CGFloat = ZSTrayTheme.panelMaxHeight
     /// Folga transparente da janela ao redor do pill — espaço para a sombra
     /// e para o overshoot do spring de entrada, sem clipping.
     static let windowPadding: CGFloat = 16
-    /// Teto de caracteres exibidos (~8 linhas na largura default) — acima
+    /// Teto de caracteres exibidos (~4 linhas na largura default) — acima
     /// disso mantém a CAUDA (palavras mais novas), com reticência à frente.
-    static let maxDisplayCharacters = 560
+    static let maxDisplayCharacters = 260
 
     static func width(defaults: UserDefaults = .standard) -> CGFloat {
         let raw = defaults.double(forKey: widthDefaultsKey)
@@ -74,6 +73,28 @@ enum TrayInfoOverlay {
         return "…" + (wordAligned.isEmpty ? tail : wordAligned)
     }
 
+    static func statusLabel(for state: AppState.RecordingState) -> String {
+        switch state {
+        case .idle: return "PRONTO"
+        case .preparing: return "PREPARANDO"
+        case .recording: return "AO VIVO"
+        case .processing: return "TRANSCREVENDO"
+        }
+    }
+
+    static func supportingHint(for state: AppState.RecordingState) -> String {
+        switch state {
+        case .preparing, .recording: return "Esc para cancelar"
+        case .processing: return "Finalizando…"
+        case .idle: return ""
+        }
+    }
+
+    static func formattedElapsedTime(_ elapsed: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(elapsed.rounded(.down)))
+        return "\(totalSeconds / 60):\(String(format: "%02d", totalSeconds % 60))"
+    }
+
     /// Origem da ÁREA DO PILL: logo abaixo da barra de menu, borda direita
     /// alinhada ao item do tray (sem âncora, ao canto direito da tela), sempre
     /// dentro da área visível. `screenVisibleFrame` já exclui a barra de menu.
@@ -99,6 +120,7 @@ enum TrayInfoOverlay {
 @Observable
 final class TrayInfoOverlayModel {
     var presentation = TrayPreviewPresentation(
+        state: .idle,
         length: 0,
         text: "",
         symbolName: nil,
@@ -115,12 +137,20 @@ final class TrayInfoOverlayModel {
     /// Seam de Reduce Motion (nil = usa o ambiente do sistema) — os testes
     /// forçam um valor para exercitar/congelar os caminhos animados.
     var reduceMotionOverride: Bool?
+    /// Instante do primeiro sample; mesma fonte de verdade do overlay grande.
+    var recordingStartedAt: Date?
+    /// Congela o timer em previews/snapshots.
+    var elapsedTimeOverride: TimeInterval?
+    /// Fonte do nível real do microfone para a fita de áudio.
+    var getAudioLevel: (() -> Float)?
+    /// Perfil visual determinístico para harnesses.
+    var waveformLevelsOverride: [Float]?
+
+    var presentationState: AppState.RecordingState { presentation.state }
 }
 
-/// Conteúdo SwiftUI do mini-overlay: pill de material ancorado no canto
-/// superior direito da janela fixa, com datilografia da transcrição (mesmo
-/// motor ProgressiveTextReveal do overlay grande), dot de gravação pulsando e
-/// waveform animada no processing.
+/// Conteúdo SwiftUI do mini-overlay: faixa de material ancorada no canto
+/// superior direito, com estado, waveform real, timer e transcrição ao vivo.
 struct TrayInfoOverlayView: View {
     let model: TrayInfoOverlayModel
 
@@ -134,7 +164,7 @@ struct TrayInfoOverlayView: View {
         ZStack(alignment: .topTrailing) {
             Color.clear
             if model.isShown {
-                pill
+                traySurface
                     .transition(
                         reduceMotion
                             ? .opacity.animation(.easeOut(duration: 0.12))
@@ -152,20 +182,39 @@ struct TrayInfoOverlayView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
     }
 
-    private var pill: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            statusIcon
-                .frame(width: 11, alignment: .center)
-            textContent
+    private var traySurface: some View {
+        VStack(alignment: .leading, spacing: ZSTrayTheme.sectionSpacing) {
+            statusRail
+
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                textContent
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(TrayInfoOverlay.supportingHint(for: model.presentationState))
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(ZSTrayTheme.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .padding(.horizontal, ZSTrayTheme.horizontalPadding)
+        .padding(.vertical, ZSTrayTheme.verticalPadding)
+        .frame(width: TrayInfoOverlay.width(), alignment: .leading)
+        .frame(minHeight: ZSTrayTheme.minimumPanelHeight, alignment: .center)
+        .background {
+            ZStack {
+                surfaceShape.fill(.regularMaterial)
+                surfaceShape.fill(ZSTrayTheme.surface)
+            }
+        }
         .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5)
+            surfaceShape
+                .strokeBorder(ZSTrayTheme.surfaceStroke, lineWidth: 0.7)
         )
-        .shadow(color: .black.opacity(0.22), radius: 9, x: 0, y: 3)
+        .shadow(color: .black.opacity(0.34), radius: 14, x: 0, y: 5)
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
         // Crossfade suave entre placeholder ("Ouvindo…") e texto real, e no
         // crescimento do pill a cada quebra de linha.
         .animation(
@@ -174,29 +223,112 @@ struct TrayInfoOverlayView: View {
         )
     }
 
-    @ViewBuilder
-    private var statusIcon: some View {
-        if model.presentation.isRecordingDot {
-            TrayPulsingDot(reduceMotion: reduceMotion)
-        } else if model.presentation.symbolName != nil {
-            // Processing: waveform com barras animadas (variable color).
-            Image(systemName: "waveform")
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .symbolEffect(
-                    .variableColor.iterative,
-                    options: .repeating,
-                    isActive: !reduceMotion
-                )
+    private var surfaceShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: ZSTrayTheme.cornerRadius, style: .continuous)
+    }
+
+    private var statusRail: some View {
+        HStack(spacing: ZSTrayTheme.inlineSpacing) {
+            HStack(spacing: 7) {
+                statusGlyph
+                Text(TrayInfoOverlay.statusLabel(for: model.presentationState))
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(0.8)
+            }
+            .foregroundStyle(statusAccent)
+            .fixedSize()
+
+            divider
+
+            ZSTraySignalWaveform(
+                isActive: model.presentationState == .recording,
+                getAudioLevel: model.getAudioLevel,
+                levelsOverride: model.waveformLevelsOverride,
+                reduceMotion: reduceMotion
+            )
+            .frame(maxWidth: .infinity)
+
+            divider
+
+            timerContent
+                .frame(minWidth: 34, alignment: .trailing)
         }
+        .frame(height: 26)
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(ZSTrayTheme.divider)
+            .frame(width: 1, height: 22)
+            .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var statusGlyph: some View {
+        switch model.presentationState {
+        case .recording:
+            TrayPulsingDot(reduceMotion: reduceMotion)
+        case .preparing:
+            ProgressView()
+                .controlSize(.mini)
+                .tint(statusAccent)
+                .accessibilityHidden(true)
+        case .processing:
+            Image(systemName: "waveform")
+                .font(.system(size: 10, weight: .semibold))
+                .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
+                .accessibilityHidden(true)
+        case .idle:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .accessibilityHidden(true)
+        }
+    }
+
+    @ViewBuilder
+    private var timerContent: some View {
+        if model.presentationState == .recording {
+            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                let elapsed = model.elapsedTimeOverride
+                    ?? model.recordingStartedAt.map { max(0, context.date.timeIntervalSince($0)) }
+                    ?? 0
+                Text(TrayInfoOverlay.formattedElapsedTime(elapsed))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(statusAccent)
+                    .contentTransition(.numericText())
+            }
+        } else {
+            Text(model.presentationState == .processing ? "•••" : "—")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(ZSTrayTheme.textTertiary)
+        }
+    }
+
+    private var statusAccent: Color {
+        switch model.presentationState {
+        case .recording: return ZSTrayTheme.recordingAccent
+        case .preparing: return ZSTrayTheme.preparingAccent
+        case .processing: return ZSTrayTheme.processingAccent
+        case .idle: return ZSTrayTheme.textSecondary
+        }
+    }
+
+    private var accessibilityLabel: String {
+        [
+            TrayInfoOverlay.statusLabel(for: model.presentationState),
+            model.presentation.text,
+            TrayInfoOverlay.supportingHint(for: model.presentationState),
+        ]
+        .filter { !$0.isEmpty }
+        .joined(separator: ". ")
     }
 
     @ViewBuilder
     private var textContent: some View {
         if model.presentation.isPlaceholderText {
             Text(model.presentation.text)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 15.5, weight: .medium))
+                .foregroundStyle(ZSTrayTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .transition(.opacity)
         } else {
@@ -244,11 +376,17 @@ private struct TrayProgressiveText: View {
     @State private var revealTask: Task<Void, Never>?
 
     var body: some View {
-        Text(displayedText)
-            .font(.system(size: 11))
-            .foregroundStyle(.primary)
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
+        ZStack(alignment: .topLeading) {
+            // Reserva a altura do alvo antes da datilografia/onAppear. Sem
+            // esta sonda invisível, o texto podia crescer para fora do painel
+            // no primeiro frame de estados como `.processing`.
+            transcriptText(text)
+                .hidden()
+                .accessibilityHidden(true)
+
+            transcriptText(displayedText)
+                .foregroundStyle(ZSTrayTheme.textPrimary)
+        }
             .onAppear { updateRevealTarget(text) }
             .onChange(of: text) { _, newValue in
                 updateRevealTarget(newValue)
@@ -260,6 +398,15 @@ private struct TrayProgressiveText: View {
                 revealTask?.cancel()
                 revealTask = nil
             }
+    }
+
+    private func transcriptText(_ value: String) -> some View {
+        Text(value)
+            .font(.system(size: 15.5, weight: .medium))
+            .multilineTextAlignment(.leading)
+            .lineSpacing(2)
+            .lineLimit(4)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     @MainActor
@@ -392,9 +539,14 @@ final class TrayInfoOverlayPanel: NSPanel {
     /// Atualiza o conteúdo e garante o painel visível. O frame é calculado só
     /// no PRIMEIRO present do ciclo (janela fixa; tela e posição não mudam no
     /// meio do ditado) — atualizações seguintes só alimentam o modelo.
-    func present(_ presentation: TrayPreviewPresentation, anchoredTo button: NSStatusBarButton?) {
+    func present(
+        _ presentation: TrayPreviewPresentation,
+        recordingStartedAt: Date? = nil,
+        anchoredTo button: NSStatusBarButton?
+    ) {
         model.reduceMotionOverride = prefersReducedMotion()
         model.presentation = presentation
+        model.recordingStartedAt = recordingStartedAt
 
         guard !isPresented else { return }
         guard let screen = button?.window?.screen ?? NSScreen.main else { return }

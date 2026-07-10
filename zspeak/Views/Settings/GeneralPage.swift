@@ -88,6 +88,7 @@ struct GeneralPage: View {
             }
         }
         .formStyle(.grouped)
+        .zsAppSurface()
         .navigationTitle("Geral")
         .navigationSubtitle("Inicialização, inserção de texto e feedback")
     }

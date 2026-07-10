@@ -195,6 +195,15 @@ struct VisualSnapshotTests {
 
     // MARK: - Settings
 
+    @Test("Sidebar principal permanece estável")
+    func testSettingsSidebarSnapshot() throws {
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-sidebar-overview",
+            of: SettingsSidebar(selection: .constant(.overview)),
+            size: CGSize(width: 240, height: 720)
+        )
+    }
+
     @Test("Settings overview permanece estável")
     func testSettingsOverviewSnapshot() throws {
         let context = makeSettingsContext()

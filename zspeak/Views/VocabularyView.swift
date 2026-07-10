@@ -67,6 +67,7 @@ struct VocabularyView: View {
             }
         }
         .formStyle(.grouped)
+        .zsAppSurface()
         .navigationTitle("Vocabulário")
         .navigationSubtitle("Termos, aliases e pesos do biasing local")
         .searchable(text: $searchText, placement: .toolbar, prompt: "Buscar termo ou alias")
@@ -463,6 +464,7 @@ struct NewVocabularyTermSheet: View {
             }
         }
         .formStyle(.grouped)
+        .zsAppSurface()
         .frame(width: 440, height: 440)
     }
 }

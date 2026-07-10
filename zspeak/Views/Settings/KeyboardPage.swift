@@ -63,6 +63,7 @@ struct KeyboardPage: View {
             }
         }
         .formStyle(.grouped)
+        .zsAppSurface()
         .navigationTitle("Atalhos de Teclado")
         .navigationSubtitle("Tecla principal e atalhos globais dos modos LLM")
     }

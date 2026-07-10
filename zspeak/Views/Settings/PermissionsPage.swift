@@ -137,6 +137,7 @@ struct PermissionsPage: View {
             }
         }
         .formStyle(.grouped)
+        .zsAppSurface()
         .navigationTitle("Permissões")
         .onAppear {
             guard refreshOnAppear else { return }

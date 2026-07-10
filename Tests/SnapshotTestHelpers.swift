@@ -14,6 +14,14 @@ enum SnapshotTestHelpers {
         filePath: String = #filePath
     ) throws {
         let image = try render(view: view, size: size)
+        try assertSnapshot(named: name, image: image, filePath: filePath)
+    }
+
+    static func assertSnapshot(
+        named name: String,
+        image: NSImage,
+        filePath: String = #filePath
+    ) throws {
         let baselineURL = snapshotURL(named: name, filePath: filePath)
 
         if shouldRecord(filePath: filePath) {

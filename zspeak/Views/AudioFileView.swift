@@ -138,7 +138,7 @@ struct AudioFileView: View {
             }
             .padding(ZSDesign.pagePadding)
         }
-        .background(ZSDesign.pageBackground)
+        .zsAppSurface()
         .navigationTitle("Transcrever Arquivo")
         .task(id: mode) {
             if mode == .meeting {

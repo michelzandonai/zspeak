@@ -88,6 +88,7 @@ struct AboutPage: View {
             }
         }
         .formStyle(.grouped)
+        .zsAppSurface()
         .navigationTitle("Sobre")
     }
 }
