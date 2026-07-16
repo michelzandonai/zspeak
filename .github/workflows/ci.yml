@@ -78,10 +78,12 @@ jobs:
       - name: Build (debug)
         run: swift build --configuration debug
 
-      - name: Test (parallel)
+      - name: Test (serial)
         # Suites ambient-dependent se auto-desativam via @Suite(..., .disabled(if: CI))
         # em Tests/*.swift. Ver comentário no topo deste arquivo para a lista.
-        run: swift test --parallel
+        # A execução serial evita crashes do runner Swift ao combinar em paralelo
+        # suites AppKit/áudio que compartilham estado global do processo.
+        run: swift test
 
   lint:
     name: Lint (swift-format, best-effort)
