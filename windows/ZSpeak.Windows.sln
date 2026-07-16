@@ -1,0 +1,64 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{F3E8E543-30F9-4787-B543-4E82F58D5AEC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZSpeak.Core", "src\ZSpeak.Core\ZSpeak.Core.csproj", "{EE5D423B-7F5C-464E-B27A-0188FA0FC96E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZSpeak.Platform", "src\ZSpeak.Platform\ZSpeak.Platform.csproj", "{1E23A775-CAB5-44EA-93F8-0341B47DAC98}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZSpeak.AsrSpike", "src\ZSpeak.AsrSpike\ZSpeak.AsrSpike.csproj", "{1D6AD5D8-09CE-4A12-93B5-A0EA4714EBF3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZSpeak.App", "src\ZSpeak.App\ZSpeak.App.csproj", "{DE4BE384-0B93-4D34-B530-2E0120102ED4}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{EC44C38C-14C8-4B56-8509-A0E7ACCD63A7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZSpeak.Core.Tests", "tests\ZSpeak.Core.Tests\ZSpeak.Core.Tests.csproj", "{2B97EA8E-4255-4121-871E-128C7FE37BA4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZSpeak.IntegrationTests", "tests\ZSpeak.IntegrationTests\ZSpeak.IntegrationTests.csproj", "{2FB276F4-6CB5-4F56-91FC-7D0D5DF83BBF}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EE5D423B-7F5C-464E-B27A-0188FA0FC96E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EE5D423B-7F5C-464E-B27A-0188FA0FC96E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EE5D423B-7F5C-464E-B27A-0188FA0FC96E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EE5D423B-7F5C-464E-B27A-0188FA0FC96E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1E23A775-CAB5-44EA-93F8-0341B47DAC98}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1E23A775-CAB5-44EA-93F8-0341B47DAC98}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1E23A775-CAB5-44EA-93F8-0341B47DAC98}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1E23A775-CAB5-44EA-93F8-0341B47DAC98}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1D6AD5D8-09CE-4A12-93B5-A0EA4714EBF3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1D6AD5D8-09CE-4A12-93B5-A0EA4714EBF3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1D6AD5D8-09CE-4A12-93B5-A0EA4714EBF3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1D6AD5D8-09CE-4A12-93B5-A0EA4714EBF3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DE4BE384-0B93-4D34-B530-2E0120102ED4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DE4BE384-0B93-4D34-B530-2E0120102ED4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DE4BE384-0B93-4D34-B530-2E0120102ED4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DE4BE384-0B93-4D34-B530-2E0120102ED4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2B97EA8E-4255-4121-871E-128C7FE37BA4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2B97EA8E-4255-4121-871E-128C7FE37BA4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2B97EA8E-4255-4121-871E-128C7FE37BA4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2B97EA8E-4255-4121-871E-128C7FE37BA4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2FB276F4-6CB5-4F56-91FC-7D0D5DF83BBF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2FB276F4-6CB5-4F56-91FC-7D0D5DF83BBF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2FB276F4-6CB5-4F56-91FC-7D0D5DF83BBF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2FB276F4-6CB5-4F56-91FC-7D0D5DF83BBF}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{EE5D423B-7F5C-464E-B27A-0188FA0FC96E} = {F3E8E543-30F9-4787-B543-4E82F58D5AEC}
+		{1E23A775-CAB5-44EA-93F8-0341B47DAC98} = {F3E8E543-30F9-4787-B543-4E82F58D5AEC}
+		{1D6AD5D8-09CE-4A12-93B5-A0EA4714EBF3} = {F3E8E543-30F9-4787-B543-4E82F58D5AEC}
+		{DE4BE384-0B93-4D34-B530-2E0120102ED4} = {F3E8E543-30F9-4787-B543-4E82F58D5AEC}
+		{2B97EA8E-4255-4121-871E-128C7FE37BA4} = {EC44C38C-14C8-4B56-8509-A0E7ACCD63A7}
+		{2FB276F4-6CB5-4F56-91FC-7D0D5DF83BBF} = {EC44C38C-14C8-4B56-8509-A0E7ACCD63A7}
+	EndGlobalSection
+EndGlobal

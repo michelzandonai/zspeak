@@ -53,3 +53,11 @@ evidencias/
 
 # Temp files
 Untitled-*
+# Windows/.NET
+windows/**/bin/
+windows/**/obj/
+windows/artifacts/
+windows/packages/
+*.user
+*.suo
+.vs/

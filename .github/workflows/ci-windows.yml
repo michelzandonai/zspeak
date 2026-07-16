@@ -1,0 +1,46 @@
+name: CI Windows
+
+on:
+  push:
+    branches: [main]
+    paths: ["windows/**", ".github/workflows/ci-windows.yml"]
+  pull_request:
+    paths: ["windows/**", ".github/workflows/ci-windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Build, test e publish (Windows x64)
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+          cache: true
+          cache-dependency-path: windows/**/packages.lock.json
+      - name: Restore
+        run: dotnet restore windows/ZSpeak.Windows.sln --locked-mode
+      - name: Build
+        run: dotnet build windows/ZSpeak.Windows.sln -c Release --no-restore
+      - name: Testes unitários
+        run: dotnet test windows/tests/ZSpeak.Core.Tests/ZSpeak.Core.Tests.csproj -c Release --no-build
+      - name: Vulnerabilidades NuGet
+        run: dotnet list windows/ZSpeak.Windows.sln package --vulnerable --include-transitive
+      - name: Publish autocontido x64
+        run: dotnet publish windows/src/ZSpeak.App/ZSpeak.App.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=false -o windows/artifacts/publish
+      - name: Validar publish autocontido
+        shell: pwsh
+        run: |
+          $config = Get-Content windows/artifacts/publish/ZSpeak.App.runtimeconfig.json -Raw | ConvertFrom-Json
+          if (-not $config.runtimeOptions.includedFrameworks -or $config.runtimeOptions.frameworks) {
+            throw 'Publish inválido: o pacote não está autocontido.'
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zspeak-windows-x64
+          path: windows/artifacts/publish
