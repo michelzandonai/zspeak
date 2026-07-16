@@ -48,6 +48,10 @@ Se preferir pelo terminal:
 xcodebuild -scheme zspeak -configuration Debug -destination 'platform=macOS' build
 ```
 
+## Port para Windows
+
+O código atual é nativo do macOS e não compila diretamente no Windows. O plano técnico, os gates e o prompt para continuar o port no Codex do Windows estão em [`docs/HANDOFF-WINDOWS.md`](docs/HANDOFF-WINDOWS.md).
+
 ## O que é baixado automaticamente
 
 Na primeira execução, o app baixa sozinho:
