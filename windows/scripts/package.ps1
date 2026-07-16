@@ -21,7 +21,7 @@ try {
         & $dotnet test $solution -c Release --no-build
     }
     & $dotnet publish (Join-Path $windowsRoot 'src\ZSpeak.App\ZSpeak.App.csproj') `
-        -c Release -r win-x64 --self-contained true --no-restore `
+        -c Release -r win-x64 --self-contained true `
         -p:PublishSingleFile=false -o $publish
 
     $runtimeConfigPath = Join-Path $publish 'ZSpeak.App.runtimeconfig.json'

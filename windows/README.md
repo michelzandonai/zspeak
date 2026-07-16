@@ -16,7 +16,7 @@ converte para PCM float32 mono 16 kHz, transcreve localmente com Parakeet TDT
 
 ## Instalação
 
-Execute `zspeak-1.0.48-win-x64-setup.exe`. O instalador é por usuário, não pede
+Execute `zspeak-1.0.49-win-x64-setup.exe`. O instalador é por usuário, não pede
 privilégio administrativo e instala em `%LOCALAPPDATA%\Programs\zspeak`.
 
 Depois da abertura, procure o ícone do zspeak na bandeja. Use

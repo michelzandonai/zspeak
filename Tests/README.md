@@ -139,6 +139,7 @@ Falha se o pixel diff ultrapassar a tolerância configurada.
 
 ## CI
 
-O workflow `.github/workflows/ci.yml` (configurado em paralelo por outro agente) roda
-por padrão com `ZSPEAK_SKIP_SLOW=1`. O suite de integração só executa manualmente
-(via `workflow_dispatch`) para evitar baixar 496 MB em todo push.
+O workflow `.github/workflows/ci.yml` roda por padrão com
+`ZSPEAK_SKIP_SLOW=1`. Suites de integração lenta, hardware, snapshots e timing
+visual continuam disponíveis localmente, mas se auto-desativam no runner CI para
+evitar downloads grandes e medições falsas causadas pelo ambiente compartilhado.

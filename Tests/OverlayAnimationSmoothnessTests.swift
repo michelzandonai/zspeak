@@ -15,7 +15,14 @@ import Testing
 /// Os limites são generosos de propósito (o alvo é regressão grosseira, não
 /// flakiness): nenhum stall acima de 250ms e tempo total em hitches (>34ms,
 /// ~2 frames) abaixo de 15% da janela medida.
-@Suite("OverlayAnimationSmoothness", .serialized)
+@Suite(
+    "OverlayAnimationSmoothness",
+    .serialized,
+    .disabled(
+        if: ProcessInfo.processInfo.environment["CI"] != nil,
+        "Medição visual de timing depende de janela real e carga estável; validar localmente no Mac."
+    )
+)
 @MainActor
 struct OverlayAnimationSmoothnessTests {
 

@@ -1,5 +1,10 @@
 # Handoff — zspeak para Windows
 
+> **Estado em 16/07/2026:** o P0 descrito neste handoff foi implementado na
+> `main`. A solution, o aplicativo WPF, o spike sherpa-onnx, o instalador, os
+> testes e os benchmarks estão em [`windows/`](../windows/). Este documento
+> permanece como registro das decisões e critérios usados no port.
+
 ## Objetivo
 
 Criar uma versão nativa do zspeak para Windows, no mesmo repositório, mantendo o app macOS intacto. O primeiro marco deve entregar o fluxo 100% local:
@@ -8,9 +13,9 @@ Criar uma versão nativa do zspeak para Windows, no mesmo repositório, mantendo
 
 Este documento é o ponto de partida para o Codex executado no computador Windows.
 
-## Estado real do código atual
+## Estado do código macOS na avaliação inicial
 
-O projeto atual não pode ser apenas compilado no Windows. Ele foi construído em Swift/SwiftUI e depende de tecnologias Apple:
+O projeto macOS não pode ser apenas compilado no Windows. Ele foi construído em Swift/SwiftUI e depende de tecnologias Apple:
 
 - `AppKit` e `SwiftUI` para tray, janelas e overlay;
 - `AVFoundation`, `CoreAudio` e `Accelerate` para captura e processamento de áudio;

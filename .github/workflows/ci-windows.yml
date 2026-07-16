@@ -32,7 +32,7 @@ jobs:
       - name: Vulnerabilidades NuGet
         run: dotnet list windows/ZSpeak.Windows.sln package --vulnerable --include-transitive
       - name: Publish autocontido x64
-        run: dotnet publish windows/src/ZSpeak.App/ZSpeak.App.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=false -o windows/artifacts/publish
+        run: dotnet publish windows/src/ZSpeak.App/ZSpeak.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o windows/artifacts/publish
       - name: Validar publish autocontido
         shell: pwsh
         run: |

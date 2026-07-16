@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="zspeak transforma voz em texto localmente no macOS e Windows, com Parakeet TDT V3 e zero cloud.">
+    <meta name="theme-color" content="#0b1411">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="zspeak — voz local para devs">
+    <meta property="og:description" content="Transcrição por voz 100% local para macOS e Windows.">
+    <meta property="og:url" content="https://michelzandonai.github.io/zspeak/">
+    <title>zspeak — transcrição local para devs</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="script.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#conteudo">Ir para o conteúdo</a>
+
+    <header class="site-header">
+      <nav class="nav shell" aria-label="Navegação principal">
+        <a class="brand" href="#inicio" aria-label="zspeak, início">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <span>zspeak</span>
+        </a>
+        <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links">
+          <span class="sr-only">Abrir menu</span>
+          <span></span><span></span>
+        </button>
+        <div class="nav-links" id="nav-links">
+          <a href="#plataformas">Plataformas</a>
+          <a href="#desempenho">Desempenho</a>
+          <a href="#privacidade">Privacidade</a>
+          <a class="nav-github" href="https://github.com/michelzandonai/zspeak">GitHub <span aria-hidden="true">↗</span></a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="conteudo">
+      <section class="hero shell" id="inicio">
+        <div class="hero-copy">
+          <p class="eyebrow"><span></span> macOS + Windows</p>
+          <h1>Fale. O texto aparece onde você está.</h1>
+          <p class="hero-lead">Transcrição por voz local para devs. O Parakeet TDT V3 roda na sua máquina, entende PT-BR com termos técnicos e não envia uma palavra para a nuvem.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="https://github.com/michelzandonai/zspeak#readme">Começar agora <span aria-hidden="true">→</span></a>
+            <a class="button secondary" href="https://github.com/michelzandonai/zspeak">Ver código</a>
+          </div>
+          <ul class="hero-notes" aria-label="Características principais">
+            <li>100% local</li>
+            <li>Offline após o modelo</li>
+            <li>Sem API key</li>
+          </ul>
+        </div>
+
+        <div class="demo" aria-label="Demonstração do fluxo de transcrição">
+          <div class="demo-top">
+            <span class="demo-dot"></span>
+            <span>zspeak</span>
+            <span class="demo-shortcut">⌃ ⌥ Space</span>
+          </div>
+          <div class="wave" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          </div>
+          <p class="demo-status"><span></span> Gravando localmente</p>
+          <div class="transcript">
+            <span class="terminal-label">resultado</span>
+            <p>“Faz o deploy desse pipeline no Kubernetes e abre um pull request.”</p>
+            <span class="inserted">Copiado e inserido no app ativo ✓</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="flow" aria-label="Pipeline local">
+        <div class="shell flow-row">
+          <span>MIC</span><b>→</b><span>16 KHZ</span><b>→</b><span>PARAKEET V3</span><b>→</b><span>CLIPBOARD</span><b>→</b><span>SEU APP</span>
+        </div>
+      </section>
+
+      <section class="section shell" id="plataformas">
+        <div class="section-heading">
+          <p class="eyebrow"><span></span> Dois apps nativos</p>
+          <h2>A mesma ideia, respeitando cada sistema.</h2>
+          <p>O macOS continua intacto. O Windows vive em uma solução independente, com APIs nativas e o mesmo compromisso de privacidade.</p>
+        </div>
+
+        <div class="platforms">
+          <article class="platform platform-mac">
+            <div class="platform-title">
+              <div class="platform-icon" aria-hidden="true">●</div>
+              <div><span>Apple Silicon</span><h3>macOS</h3></div>
+            </div>
+            <p>SwiftUI, AVAudioEngine e FluidAudio usando CoreML e Apple Neural Engine.</p>
+            <ul>
+              <li>Menu bar, overlay e hotkey configurável</li>
+              <li>Toggle, Hold e Double Tap</li>
+              <li>Transcrição de arquivos e LLM local opcional</li>
+              <li>macOS 14 ou superior</li>
+            </ul>
+            <a href="https://github.com/michelzandonai/zspeak#macos">Guia para macOS <span aria-hidden="true">→</span></a>
+          </article>
+
+          <article class="platform platform-win">
+            <div class="platform-title">
+              <div class="windows-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+              <div><span>x64</span><h3>Windows 11</h3></div>
+            </div>
+            <p>C#/.NET 8, WPF, NAudio/WASAPI e sherpa-onnx sobre ONNX Runtime.</p>
+            <ul>
+              <li>Tray, overlay e hotkey global</li>
+              <li>Áudio float32 mono em 16 kHz</li>
+              <li>Clipboard, restauração de foco e Ctrl+V</li>
+              <li>Instalador por usuário, sem Visual Studio</li>
+            </ul>
+            <a href="https://github.com/michelzandonai/zspeak/blob/main/windows/README.md">Guia para Windows <span aria-hidden="true">→</span></a>
+          </article>
+        </div>
+      </section>
+
+      <section class="section benchmark" id="desempenho">
+        <div class="shell benchmark-grid">
+          <div class="section-heading inverse">
+            <p class="eyebrow"><span></span> Medido, não estimado</p>
+            <h2>Mais rápido que o áudio que você fala.</h2>
+            <p>Benchmark do spike Windows em CPU, com sherpa-onnx 1.13.4 e busca por feixe modificada.</p>
+            <small>Windows 11 Pro x64 · Intel Core i7-9700K · 16 GiB RAM</small>
+          </div>
+          <dl class="metrics">
+            <div><dt>Áudio curto</dt><dd>0,0992 <span>RTF</span></dd><small>2,785 s processados em 0,276 s</small></div>
+            <div><dt>Áudio longo</dt><dd>0,0783 <span>RTF</span></dd><small>13,245 s processados em 1,037 s</small></div>
+            <div><dt>Carga do modelo</dt><dd>3,241 <span>s</span></dd><small>Cache local já preparado</small></div>
+            <div><dt>Pico de memória</dt><dd>838,8 <span>MiB</span></dd><small>Inferência em CPU</small></div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="section shell privacy" id="privacidade">
+        <div class="privacy-number" aria-hidden="true">0</div>
+        <div class="privacy-copy">
+          <p class="eyebrow"><span></span> Privacidade por arquitetura</p>
+          <h2>Zero palavras enviadas.</h2>
+          <p>Não é uma promessa apoiada em política de uso. É como o produto foi construído: não existe integração com cloud, conta, API key ou telemetria.</p>
+          <div class="privacy-list">
+            <span>Áudio local</span><span>Texto local</span><span>Histórico local</span><span>Modelo local</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="cta shell">
+        <div>
+          <p class="eyebrow"><span></span> Open source</p>
+          <h2>Leve sua voz para o fluxo de trabalho.</h2>
+          <p>Clone, compile e use. O modelo baixa uma vez; depois, o zspeak continua com você mesmo sem internet.</p>
+        </div>
+        <a class="button primary light" href="https://github.com/michelzandonai/zspeak">Abrir no GitHub <span aria-hidden="true">↗</span></a>
+      </section>
+    </main>
+
+    <footer>
+      <div class="shell footer-row">
+        <a class="brand" href="#inicio"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>zspeak</span></a>
+        <p>Local por padrão. Feito para devs.</p>
+        <p>v1.0.49 · <span id="year">2026</span></p>
+      </div>
+    </footer>
+  </body>
+</html>

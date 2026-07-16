@@ -1,121 +1,120 @@
 # zspeak
 
-Transcrição por voz local para macOS, feita para devs.
+Transcrição por voz local para devs, nativa no macOS e no Windows.
 
-## O que é
+O zspeak captura o microfone, transcreve com o Parakeet TDT 0.6B V3 e insere o
+texto no aplicativo que estava em foco. Áudio, texto, configurações e histórico
+permanecem na máquina: não há cloud, API key, login ou telemetria.
 
-- App de menu bar, sem Dock
-- 100% local, sem cloud e sem API keys
-- Pipeline: `Mic -> AVAudioEngine -> Parakeet TDT v3 -> Clipboard -> Cmd+V`
-- Modelos baixados automaticamente na primeira execução
+## Plataformas
 
-## Requisitos
+| | macOS | Windows |
+|---|---|---|
+| Sistema | macOS 14+, Apple Silicon | Windows 11 x64 |
+| Interface | SwiftUI, menu bar e overlay | C#/.NET 8, WPF, tray e overlay |
+| Captura | AVAudioEngine | NAudio/WASAPI |
+| ASR | FluidAudio + CoreML/ANE | sherpa-onnx + ONNX Runtime |
+| Inserção | Clipboard + `Cmd+V` | Clipboard + `Ctrl+V` |
+| Modelo | Parakeet TDT 0.6B V3 | Parakeet TDT 0.6B V3 |
 
-- macOS 14 Sonoma ou superior
-- Apple Silicon (M1 ou mais novo)
-- Xcode 15 ou superior
-- Permissão de Microfone
-- Permissão de Acessibilidade
-- Internet na primeira execução para baixar os modelos
+- [Guia do macOS](#macos)
+- [Guia do Windows](windows/README.md)
+- [Estado técnico do port Windows](docs/HANDOFF-WINDOWS.md)
+- [Prompt pronto para sincronizar no Mac](docs/PROMPT-MAC.md)
+- [Site oficial](https://michelzandonai.github.io/zspeak/)
 
-## Como subir em outro Mac
+## Como funciona
 
-Você **não precisa baixar os modelos manualmente antes**.
-
-O fluxo normal é este:
-
-1. Fazer `git pull` no outro Mac
-2. Abrir o projeto no Xcode
-3. Rodar o app pela primeira vez
-4. Deixar o app baixar os modelos automaticamente
-
-Se o repositório já estiver clonado nesse Mac:
-
-```bash
-git pull
+```text
+Microfone -> áudio mono 16 kHz -> Parakeet TDT V3 -> Clipboard -> app em foco
 ```
 
-Depois:
+1. Use a hotkey global para começar a gravação.
+2. Fale normalmente e use a hotkey novamente para encerrar.
+3. A transcrição acontece localmente.
+4. O resultado é copiado e colado no aplicativo anteriormente focado.
 
-1. Abra o `Package.swift` no Xcode
-2. Aguarde o Swift Package Manager resolver as dependências
-3. Selecione `My Mac`
-4. Rode com `Cmd + R`
+O modelo é baixado e validado na primeira execução. Depois de armazenado no
+cache local, o reconhecimento funciona offline.
 
-Se preferir pelo terminal:
+## Windows
 
-```bash
-xcodebuild -scheme zspeak -configuration Debug -destination 'platform=macOS' build
+A implementação Windows está isolada em [`windows/`](windows/) e preserva o
+aplicativo macOS. O P0 inclui:
+
+- aplicativo de bandeja e overlay WPF;
+- captura WASAPI em float32 mono, 16 kHz;
+- hotkey global `Ctrl+Alt+Espaço`;
+- transcrição local com sherpa-onnx e Parakeet TDT V3;
+- restauração de foco, clipboard e envio de `Ctrl+V`;
+- configurações e histórico em `%LOCALAPPDATA%\zspeak`;
+- instalador Inno Setup por usuário, sem exigir Visual Studio ou .NET instalado;
+- testes unitários, integração Win32, prova offline e smoke test empacotado.
+
+Para compilar:
+
+```powershell
+dotnet restore windows/ZSpeak.Windows.sln --locked-mode
+dotnet build windows/ZSpeak.Windows.sln -c Release --no-restore
+dotnet test windows/ZSpeak.Windows.sln -c Release --no-build
 ```
 
-## Port para Windows
+Para publicar e gerar o instalador local, com Inno Setup 6 instalado:
 
-O código atual é nativo do macOS e não compila diretamente no Windows. O plano técnico, os gates e o prompt para continuar o port no Codex do Windows estão em [`docs/HANDOFF-WINDOWS.md`](docs/HANDOFF-WINDOWS.md).
+```powershell
+windows\scripts\package.cmd
+```
 
-## O que é baixado automaticamente
+O instalador público ainda precisa de assinatura de código antes de uma release.
+Builds, modelos e caches não são commitados no repositório.
 
-Na primeira execução, o app baixa sozinho:
+## macOS
 
-- Dependências do Swift Package Manager, quando o Xcode abrir o projeto
-- Modelo de transcrição `Parakeet TDT 0.6B V3` via `FluidAudio`
+### Requisitos
 
-Isso significa que:
+- macOS 14 Sonoma ou superior;
+- Apple Silicon (M1 ou mais novo);
+- Xcode 15 ou superior;
+- permissões de Microfone e Acessibilidade;
+- internet no primeiro uso para baixar o modelo.
 
-- Você não precisa baixar o modelo em separado
-- Você precisa estar com internet no primeiro uso
-- Depois disso, os modelos ficam em cache local no Mac
+### Sincronizar em outro Mac
 
-## Primeiro uso
+Você não precisa baixar o modelo manualmente. Se o repositório ainda não existe:
 
-Na primeira vez que abrir e começar a gravar, o macOS pode pedir:
+```bash
+git clone https://github.com/michelzandonai/zspeak.git
+cd zspeak
+```
 
-- Acesso ao microfone
-- Acesso à Acessibilidade
+Se já existe e não há alterações locais pendentes:
 
-Essas permissões são obrigatórias para:
+```bash
+git switch main
+git pull --ff-only origin main
+```
 
-- Capturar o áudio
-- Inserir o texto transcrito no app ativo
-- Monitorar a hotkey global
+Depois abra `Package.swift` no Xcode, aguarde o Swift Package Manager resolver as
+dependências, selecione `My Mac` e use `Cmd+R`.
 
-Se alguma janela de permissão não aparecer, ative manualmente em:
-
-`System Settings -> Privacy & Security -> Microphone`
-
-`System Settings -> Privacy & Security -> Accessibility`
-
-Se o app ainda estiver carregando os modelos, ele pode levar um pouco mais na primeira abertura. Isso é esperado.
-
-## Uso
-
-1. O app fica apenas na menu bar
-2. Escolha a hotkey em `Configurações`
-3. Inicie a gravação
-4. Fale normalmente
-5. Ao parar, o texto é transcrito localmente e colado no app ativo
-
-`Esc` pode cancelar a gravação, se essa opção estiver ativa nas configurações.
-
-## Configurações principais
-
-- Hotkey global com modos `Toggle`, `Hold` e `Double Tap`
-- Seleção de microfone
-- Ordem de prioridade dos microfones conectados
-- Prompt Mode com LLM local opcional para pós-processamento
-- `Iniciar com o sistema`
-- `Use Escape to cancel recording`
-
-## Modelo e processamento
-
-- ASR: `Parakeet TDT 0.6B V3`
-- Execução local via `FluidAudio`
-- Download inicial do modelo de ASR: cerca de 496 MB
-
-## Build
+Pelo terminal:
 
 ```bash
 xcodebuild -scheme zspeak -configuration Debug -destination 'platform=macOS' build
 ```
+
+Na primeira captura, autorize o microfone e a Acessibilidade em
+`System Settings -> Privacy & Security`. O app baixa o modelo de ASR pelo
+FluidAudio e o mantém em cache para os próximos usos offline.
+
+### Recursos atuais do macOS
+
+- hotkey global nos modos `Toggle`, `Hold` e `Double Tap`;
+- seleção e prioridade de microfones;
+- Prompt Mode com LLM local opcional;
+- transcrição de arquivos e histórico local;
+- inicialização com o sistema;
+- cancelamento da gravação com `Esc`, quando habilitado.
 
 Para empacotar localmente:
 
@@ -123,30 +122,46 @@ Para empacotar localmente:
 scripts/package_app.sh
 ```
 
-Se não houver identidade Apple/Developer ID disponível, o script cria uma identidade local autoassinada chamada `zspeak Local Code Signing` no Keychain de login. Para builds distribuíveis, use `SIGNING_IDENTITY` com uma identidade apropriada e notarização fora deste script.
+Uma distribuição pública para macOS exige identidade Developer ID e
+notarização. O script aceita `SIGNING_IDENTITY`; sem ela, usa uma identidade
+autoassinada apenas para desenvolvimento local.
+
+## Benchmark Windows
+
+Medição em Windows 11 Pro x64, Intel Core i7-9700K, 16 GiB RAM, sherpa-onnx
+1.13.4 em CPU com `modified_beam_search`:
+
+| Métrica | Resultado |
+|---|---:|
+| Carga do modelo | 3,241 s |
+| Pico de memória | 838,8 MiB |
+| Áudio curto, 2,785 s | 0,276 s; RTF 0,0992 |
+| Áudio longo, 13,245 s | 1,037 s; RTF 0,0783 |
+
+Os testes confirmaram PT-BR e os termos `pipeline`, `deploy`, `Kubernetes`,
+`PostgreSQL`, `cache`, `Redis` e `pull request`.
 
 ## Estrutura
 
 ```text
 zspeak/
-├── zspeak/
-│   ├── App.swift
-│   ├── AppState.swift
-│   ├── AudioCapture.swift
-│   ├── RecordingController.swift
-│   ├── LLMCoordinator.swift
-│   ├── FileTranscriptionCoordinator.swift
-│   ├── Transcriber.swift
-│   ├── HotkeyManager.swift
-│   ├── TextInserter.swift
-│   └── Views/
-├── docs/
-│   ├── adr/
-│   └── prd/
+├── zspeak/                 # aplicativo macOS existente
+├── windows/                # aplicativo Windows independente
+├── Tests/                  # testes e fixtures do macOS
+├── docs/                   # decisões, handoffs e guias
+├── site/                   # site estático oficial
+├── scripts/                # empacotamento macOS
+├── Package.swift
 └── AGENTS.md
 ```
 
-## Observação
+## Privacidade
 
-Para uso local em desenvolvimento, basta clonar, abrir no Xcode e rodar.
-Se a ideia for distribuir para outras pessoas fora do seu ambiente, ainda vai ser preciso tratar assinatura e notarização do app.
+- nenhuma cloud, API key, conta ou telemetria;
+- nenhum upload de áudio ou texto;
+- áudio de gravação mantido somente em memória no fluxo Windows;
+- modelo, preferências e histórico armazenados localmente;
+- funcionamento offline depois do primeiro download do modelo.
+
+As dependências e licenças do Windows estão documentadas em
+[`windows/THIRD-PARTY-NOTICES.md`](windows/THIRD-PARTY-NOTICES.md).
