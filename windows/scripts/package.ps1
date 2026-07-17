@@ -16,13 +16,17 @@ if (-not (Test-Path $dotnet)) { throw 'SDK .NET 8 não encontrado.' }
 Push-Location $repositoryRoot
 try {
     & $dotnet restore $solution --locked-mode
+    if ($LASTEXITCODE -ne 0) { throw "dotnet restore falhou com código $LASTEXITCODE" }
     & $dotnet build $solution -c Release --no-restore
+    if ($LASTEXITCODE -ne 0) { throw "dotnet build falhou com código $LASTEXITCODE" }
     if (-not $SkipTests) {
         & $dotnet test $solution -c Release --no-build
+        if ($LASTEXITCODE -ne 0) { throw "dotnet test falhou com código $LASTEXITCODE" }
     }
     & $dotnet publish (Join-Path $windowsRoot 'src\ZSpeak.App\ZSpeak.App.csproj') `
         -c Release -r win-x64 --self-contained true `
         -p:PublishSingleFile=false -o $publish
+    if ($LASTEXITCODE -ne 0) { throw "dotnet publish falhou com código $LASTEXITCODE" }
 
     $runtimeConfigPath = Join-Path $publish 'ZSpeak.App.runtimeconfig.json'
     $runtimeConfig = Get-Content $runtimeConfigPath -Raw | ConvertFrom-Json

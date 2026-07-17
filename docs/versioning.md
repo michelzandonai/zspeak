@@ -1,6 +1,6 @@
 # Versionamento do zspeak
 
-Versão atual do app: `1.0.50`.
+Versão atual do app: `1.0.51`.
 
 ## Regra padrão
 

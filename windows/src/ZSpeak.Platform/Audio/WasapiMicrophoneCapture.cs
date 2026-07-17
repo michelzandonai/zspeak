@@ -14,6 +14,7 @@ public sealed class WasapiMicrophoneCapture : IDisposable
     private WasapiCapture? _capture;
     private TaskCompletionSource<Exception?>? _stopped;
     private WaveFormat? _sourceFormat;
+    public event EventHandler<float>? LevelChanged;
 
     public static IReadOnlyList<MicrophoneDevice> EnumerateDevices()
     {
@@ -77,6 +78,37 @@ public sealed class WasapiMicrophoneCapture : IDisposable
         {
             _rawAudio.Write(args.Buffer, 0, args.BytesRecorded);
         }
+
+        if (_sourceFormat is not null && args.BytesRecorded > 0)
+        {
+            LevelChanged?.Invoke(this, EstimateLevel(args.Buffer, args.BytesRecorded, _sourceFormat));
+        }
+    }
+
+    private static float EstimateLevel(byte[] buffer, int bytesRecorded, WaveFormat format)
+    {
+        double sum = 0;
+        var count = 0;
+        if (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
+        {
+            for (var index = 0; index + 3 < bytesRecorded; index += 4)
+            {
+                var sample = BitConverter.ToSingle(buffer, index);
+                sum += sample * sample;
+                count++;
+            }
+        }
+        else if (format.BitsPerSample == 16)
+        {
+            for (var index = 0; index + 1 < bytesRecorded; index += 2)
+            {
+                var sample = BitConverter.ToInt16(buffer, index) / 32768f;
+                sum += sample * sample;
+                count++;
+            }
+        }
+
+        return count == 0 ? 0 : Math.Clamp((float)Math.Sqrt(sum / count) * 4f, 0f, 1f);
     }
 
     private void OnRecordingStopped(object? sender, StoppedEventArgs args) => _stopped?.TrySetResult(args.Exception);

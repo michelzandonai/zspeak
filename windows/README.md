@@ -16,12 +16,26 @@ converte para PCM float32 mono 16 kHz, transcreve localmente com Parakeet TDT
 
 ## Instalação
 
-Execute `zspeak-1.0.50-win-x64-setup.exe`. O instalador é por usuário, não pede
+Execute `zspeak-1.0.51-win-x64-setup.exe`. O instalador é por usuário, não pede
 privilégio administrativo e instala em `%LOCALAPPDATA%\Programs\zspeak`.
 
 Depois da abertura, procure o ícone do zspeak na bandeja. Use
 `Ctrl+Alt+Espaço` para iniciar e encerrar a gravação. A janela de configurações
-permite escolher o microfone e consultar o histórico local.
+segue a mesma linguagem visual do app macOS e reúne Visão Geral, Histórico,
+Benchmark, Vocabulário, Correção LLM, atalhos, microfone, preferências,
+permissões e informações do app.
+
+Funcionalidades nativas disponíveis:
+
+- overlay sem roubar o foco, com duração e forma de onda alimentada pelo áudio real;
+- `Esc` cancela a gravação sem transcrever;
+- colar automaticamente ou apenas copiar para o clipboard;
+- iniciar com o Windows, som de feedback e seleção de microfone;
+- histórico com métricas, cópia, exclusão individual e limpeza completa;
+- vocabulário técnico persistido e aplicado localmente às transcrições.
+
+A área de Correção LLM espelha a navegação do macOS, mas fica desativada até um
+runtime LLM local equivalente ser validado para Windows; ela nunca usa cloud.
 
 ## Build e testes
 

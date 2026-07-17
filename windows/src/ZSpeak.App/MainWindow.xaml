@@ -1,45 +1,244 @@
 <Window x:Class="ZSpeak.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="zspeak para Windows" Width="680" Height="520"
-        MinWidth="560" MinHeight="420" WindowStartupLocation="CenterScreen"
-        Background="#111827" Foreground="#F9FAFB">
-    <Grid Margin="24">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-        <StackPanel>
-            <TextBlock Text="zspeak" FontSize="30" FontWeight="SemiBold"/>
-            <TextBlock Text="Transcrição local com Parakeet TDT 0.6B V3" Foreground="#9CA3AF" Margin="0,4,0,0"/>
-        </StackPanel>
-        <Border Grid.Row="1" Background="#1F2937" CornerRadius="10" Padding="16" Margin="0,20,0,0">
-            <StackPanel>
-                <TextBlock Text="Status" FontWeight="SemiBold"/>
-                <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                <TextBlock Text="Hotkey: Ctrl + Alt + Espaço (Toggle)" Foreground="#9CA3AF" Margin="0,8,0,0"/>
-            </StackPanel>
-        </Border>
-        <StackPanel Grid.Row="2" Margin="0,18,0,16">
-            <TextBlock Text="Microfone" FontWeight="SemiBold" Margin="0,0,0,6"/>
-            <ComboBox ItemsSource="{Binding Microphones}" SelectedItem="{Binding SelectedMicrophone}"
-                      DisplayMemberPath="Name" IsEnabled="{Binding CanSelectMicrophone}" Height="34"/>
-        </StackPanel>
-        <Grid Grid.Row="3">
-            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-            <TextBlock Text="Histórico local" FontWeight="SemiBold" FontSize="16"/>
-            <ListBox Grid.Row="1" ItemsSource="{Binding History}" Margin="0,8,0,0" Background="#1F2937" Foreground="#F9FAFB" BorderThickness="0">
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <StackPanel Margin="10,8">
-                            <TextBlock Text="{Binding Text}" TextWrapping="Wrap"/>
-                            <TextBlock Text="{Binding CreatedAt, StringFormat={}{0:dd/MM/yyyy HH:mm}}" Foreground="#9CA3AF" FontSize="11" Margin="0,4,0,0"/>
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="zspeak" Width="1050" Height="720" MinWidth="860" MinHeight="600"
+        WindowStartupLocation="CenterScreen" WindowStyle="None" ResizeMode="CanResize"
+        Background="{StaticResource PageBackground}" Foreground="{StaticResource TextPrimary}">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="42" ResizeBorderThickness="6" CornerRadius="10" GlassFrameThickness="0"/>
+    </shell:WindowChrome.WindowChrome>
+    <Window.Resources>
+        <Style x:Key="Switch" TargetType="CheckBox">
+            <Setter Property="Width" Value="42"/><Setter Property="Height" Value="24"/><Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="Track" Background="#253443" BorderBrush="#536579" BorderThickness="1" CornerRadius="12">
+                            <Ellipse x:Name="Knob" Width="18" Height="18" Margin="2" HorizontalAlignment="Left" Fill="#D8E0E8"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="#397EC4"/><Setter TargetName="Track" Property="BorderBrush" Value="#73ADFF"/>
+                                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/><Setter TargetName="Knob" Property="Fill" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="TitleButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Width" Value="46"/><Setter Property="Height" Value="42"/><Setter Property="Padding" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons"/><Setter Property="FontSize" Value="10"/>
+        </Style>
+    </Window.Resources>
+
+    <Border BorderBrush="#2C4054" BorderThickness="1" CornerRadius="10" Background="{StaticResource PageBackground}">
+        <Grid>
+            <Grid.RowDefinitions><RowDefinition Height="42"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Background="{StaticResource ToolbarBackground}" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="230"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="15,0,0,0" VerticalAlignment="Center">
+                    <Border Style="{StaticResource IconBadge}" Width="27" Height="27" CornerRadius="7" Background="#182F47" BorderBrush="#4E7FB7">
+                        <TextBlock Style="{StaticResource FluentIcon}" Text="&#xE720;" Foreground="{StaticResource Accent}" FontSize="13"/>
+                    </Border>
+                    <TextBlock Text="zspeak" FontWeight="SemiBold" Margin="9,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+                <TextBlock Grid.Column="1" x:Name="WindowPageTitle" Text="Visão Geral" Foreground="{StaticResource TextSecondary}" FontSize="12" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button Style="{StaticResource TitleButton}" Content="&#xE921;" Click="Minimize_Click" ToolTip="Minimizar"/>
+                    <Button Style="{StaticResource TitleButton}" Content="&#xE8BB;" Click="Close_Click" ToolTip="Fechar"/>
+                </StackPanel>
+            </Grid>
+
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="230"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Background="{StaticResource SidebarBackground}" BorderBrush="#24384A" BorderThickness="0,0,1,0">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="7,12,7,18">
+                            <StackPanel Orientation="Horizontal" Margin="10,4,6,10">
+                                <Border Style="{StaticResource IconBadge}" Background="#172D45" BorderBrush="#4C79A9">
+                                    <TextBlock Style="{StaticResource FluentIcon}" Text="&#xE720;" Foreground="{StaticResource Accent}"/>
+                                </Border>
+                                <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="zspeak" FontWeight="SemiBold" FontSize="15"/>
+                                    <TextBlock Text="Transcrição local" Style="{StaticResource Caption}" FontSize="11"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <TextBlock Text="CONTEÚDO" Style="{StaticResource SidebarSection}"/>
+                            <RadioButton x:Name="OverviewNav" Style="{StaticResource SidebarButton}" IsChecked="True" Tag="Overview" Checked="Navigate_Checked">
+                                <StackPanel Orientation="Horizontal"><Border Style="{StaticResource IconBadge}" Width="25" Height="25" CornerRadius="6" Background="#18304B" BorderBrush="#436F9F"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xE80F;" Foreground="{StaticResource Accent}" FontSize="12"/></Border><TextBlock Text="Visão Geral" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource SidebarButton}" Tag="History" Checked="Navigate_Checked">
+                                <StackPanel Orientation="Horizontal"><Border Style="{StaticResource IconBadge}" Width="25" Height="25" CornerRadius="6" Background="#16313A" BorderBrush="#397889"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xE81C;" Foreground="{StaticResource Info}" FontSize="12"/></Border><TextBlock Text="Histórico" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource SidebarButton}" Tag="Benchmark" Checked="Navigate_Checked">
+                                <StackPanel Orientation="Horizontal"><Border Style="{StaticResource IconBadge}" Width="25" Height="25" CornerRadius="6" Background="#382B18" BorderBrush="#8B6830"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xE9D9;" Foreground="{StaticResource Warning}" FontSize="12"/></Border><TextBlock Text="Benchmark" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                            </RadioButton>
+
+                            <TextBlock Text="CONFIGURAÇÕES" Style="{StaticResource SidebarSection}"/>
+                            <RadioButton Style="{StaticResource SidebarButton}" Tag="Vocabulary" Checked="Navigate_Checked">
+                                <StackPanel Orientation="Horizontal"><Border Style="{StaticResource IconBadge}" Width="25" Height="25" CornerRadius="6" Background="#17352C" BorderBrush="#397D65"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xE82D;" Foreground="{StaticResource Success}" FontSize="12"/></Border><TextBlock Text="Vocabulário" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource SidebarButton}" Tag="Correction" Checked="Navigate_Checked">
+                                <StackPanel Orientation="Horizontal"><Border Style="{StaticResource IconBadge}" Width="25" Height="25" CornerRadius="6" Background="#302443" BorderBrush="#76599D"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xE945;" Foreground="{StaticResource Purple}" FontSize="12"/></Border><TextBlock Text="Correção LLM" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource SidebarButton}" Tag="Keyboard" Checked="Navigate_Checked">
+                                <StackPanel Orientation="Horizontal"><Border Style="{StaticResource IconBadge}" Width="25" Height="25" CornerRadius="6"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xE765;" Foreground="#A5B2C0" FontSize="12"/></Border><TextBlock Text="Atalhos de Teclado" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource SidebarButton}" Tag="Microphone" Checked="Navigate_Checked">
+                                <StackPanel Orientation="Horizontal"><Border Style="{StaticResource IconBadge}" Width="25" Height="25" CornerRadius="6" Background="#3C2026" BorderBrush="#87424B"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xE720;" Foreground="{StaticResource Danger}" FontSize="12"/></Border><TextBlock Text="Microfone" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource SidebarButton}" Tag="General" Checked="Navigate_Checked">
+                                <StackPanel Orientation="Horizontal"><Border Style="{StaticResource IconBadge}" Width="25" Height="25" CornerRadius="6"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xE713;" Foreground="#A5B2C0" FontSize="12"/></Border><TextBlock Text="Geral" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                            </RadioButton>
+
+                            <TextBlock Text="SISTEMA" Style="{StaticResource SidebarSection}"/>
+                            <RadioButton Style="{StaticResource SidebarButton}" Tag="Permissions" Checked="Navigate_Checked">
+                                <StackPanel Orientation="Horizontal"><Border Style="{StaticResource IconBadge}" Width="25" Height="25" CornerRadius="6" Background="#17352C" BorderBrush="#397D65"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xEA18;" Foreground="{StaticResource Success}" FontSize="12"/></Border><TextBlock Text="Permissões" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource SidebarButton}" Tag="About" Checked="Navigate_Checked">
+                                <StackPanel Orientation="Horizontal"><Border Style="{StaticResource IconBadge}" Width="25" Height="25" CornerRadius="6" Background="#16313A" BorderBrush="#397889"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xE946;" Foreground="{StaticResource Info}" FontSize="12"/></Border><TextBlock Text="Sobre" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                            </RadioButton>
                         </StackPanel>
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+                    </ScrollViewer>
+                </Border>
+
+                <Grid Grid.Column="1" Background="{StaticResource PageBackground}">
+                    <!-- Visão geral -->
+                    <ScrollViewer x:Name="OverviewPage" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="30,26,30,30" MaxWidth="850">
+                            <TextBlock Text="Visão Geral" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Text="Estado do zspeak e dos componentes locais" Style="{StaticResource PageSubtitle}"/>
+                            <Border Style="{StaticResource Card}" Margin="0,22,0,14" BorderBrush="{Binding StatusBrush}">
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <Border Style="{StaticResource IconBadge}" Width="42" Height="42" Background="#18334A" BorderBrush="{Binding StatusBrush}"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xE73E;" Foreground="{Binding StatusBrush}" FontSize="18"/></Border>
+                                    <StackPanel Grid.Column="1" Margin="14,0"><TextBlock Text="{Binding StatusTitle}" FontSize="17" FontWeight="SemiBold"/><TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel>
+                                    <Border Grid.Column="2" Background="#172738" BorderBrush="{Binding StatusBrush}" BorderThickness="1" CornerRadius="12" Padding="9,4" VerticalAlignment="Center"><TextBlock Text="{Binding StatusChip}" Foreground="{Binding StatusBrush}" FontSize="11"/></Border>
+                                </Grid>
+                            </Border>
+                            <UniformGrid Columns="4" Margin="0,0,0,14">
+                                <Border Style="{StaticResource Card}" Margin="0,0,7,0"><StackPanel><TextBlock Text="MODELO" Style="{StaticResource Caption}"/><TextBlock Text="Parakeet V3" Style="{StaticResource MetricValue}" FontSize="17"/><TextBlock Text="100% local" Foreground="{StaticResource Success}" FontSize="11" Margin="0,6,0,0"/></StackPanel></Border>
+                                <Border Style="{StaticResource Card}" Margin="7,0"><StackPanel><TextBlock Text="MICROFONE" Style="{StaticResource Caption}"/><TextBlock Text="{Binding MicrophoneSummary}" Style="{StaticResource MetricValue}" FontSize="17" TextTrimming="CharacterEllipsis"/><TextBlock Text="WASAPI" Foreground="{StaticResource Info}" FontSize="11" Margin="0,6,0,0"/></StackPanel></Border>
+                                <Border Style="{StaticResource Card}" Margin="7,0"><StackPanel><TextBlock Text="HOTKEY" Style="{StaticResource Caption}"/><TextBlock Text="Ctrl Alt Espaço" Style="{StaticResource MetricValue}" FontSize="15"/><TextBlock Text="Global" Foreground="{StaticResource Accent}" FontSize="11" Margin="0,6,0,0"/></StackPanel></Border>
+                                <Border Style="{StaticResource Card}" Margin="7,0,0,0"><StackPanel><TextBlock Text="HISTÓRICO" Style="{StaticResource Caption}"/><TextBlock Text="{Binding HistoryCount}" Style="{StaticResource MetricValue}"/><TextBlock Text="Só neste PC" Foreground="{StaticResource Success}" FontSize="11" Margin="0,6,0,0"/></StackPanel></Border>
+                            </UniformGrid>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel><TextBlock Text="Estado operacional" Style="{StaticResource SectionTitle}"/><Separator Background="#304050" Margin="0,13"/>
+                                    <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Reconhecimento de fala"/><TextBlock Grid.Column="1" Text="Parakeet TDT 0.6B V3" Foreground="{StaticResource Success}"/></Grid>
+                                    <Grid Margin="0,12,0,2"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Processamento"/><TextBlock Grid.Column="1" Text="Local · CPU · offline" Foreground="{StaticResource Success}"/></Grid>
+                                    <Grid Margin="0,12,0,2"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Privacidade"/><TextBlock Grid.Column="1" Text="Áudio e texto nunca saem do PC" Foreground="{StaticResource Success}"/></Grid>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Card}" Visibility="{Binding HasHistoryVisibility}">
+                                <StackPanel><TextBlock Text="Última transcrição" Style="{StaticResource SectionTitle}"/><TextBlock Text="{Binding LatestTranscriptionText}" Margin="0,12,0,0" FontSize="14"/><TextBlock Text="{Binding LatestTranscriptionMeta}" Style="{StaticResource Caption}" Margin="0,7,0,0"/></StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Histórico -->
+                    <ScrollViewer x:Name="HistoryPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="30,26,30,30" MaxWidth="850">
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Histórico" Style="{StaticResource PageTitle}"/><TextBlock Text="Transcrições salvas apenas neste computador" Style="{StaticResource PageSubtitle}"/></StackPanel><Button Grid.Column="1" Content="Apagar tudo" Foreground="{StaticResource Danger}" Click="ClearHistory_Click" VerticalAlignment="Center"/></Grid>
+                            <UniformGrid Columns="3" Margin="0,22,0,14">
+                                <Border Style="{StaticResource Card}" Margin="0,0,7,0"><StackPanel><TextBlock Text="TRANSCRIÇÕES" Style="{StaticResource Caption}"/><TextBlock Text="{Binding HistoryCount}" Style="{StaticResource MetricValue}"/></StackPanel></Border>
+                                <Border Style="{StaticResource Card}" Margin="7,0"><StackPanel><TextBlock Text="TEMPO DE ÁUDIO" Style="{StaticResource Caption}"/><TextBlock Text="{Binding TotalAudioText}" Style="{StaticResource MetricValue}"/></StackPanel></Border>
+                                <Border Style="{StaticResource Card}" Margin="7,0,0,0"><StackPanel><TextBlock Text="HOJE" Style="{StaticResource Caption}"/><TextBlock Text="{Binding TodayCount}" Style="{StaticResource MetricValue}"/></StackPanel></Border>
+                            </UniformGrid>
+                            <ItemsControl ItemsSource="{Binding History}">
+                                <ItemsControl.ItemTemplate><DataTemplate>
+                                    <Border Style="{StaticResource Card}"><Grid><Grid.RowDefinitions><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Text}" FontSize="14" LineHeight="21"/>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="16,0,0,0"><Button Content="Copiar" Padding="10,5" Margin="0,0,6,0" CommandParameter="{Binding}" Click="CopyHistory_Click"/><Button Content="Apagar" Padding="10,5" Foreground="{StaticResource Danger}" CommandParameter="{Binding}" Click="DeleteHistory_Click"/></StackPanel>
+                                        <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Margin="0,12,0,0" Style="{StaticResource Caption}"><Run Text="{Binding CreatedAt, StringFormat={}{0:dd/MM/yyyy · HH:mm}, Mode=OneWay}"/><Run Text="  ·  "/><Run Text="{Binding AudioSeconds, StringFormat={}{0:F1}s de áudio, Mode=OneWay}"/><Run Text="  ·  RTF "/><Run Text="{Binding RealTimeFactor, StringFormat={}{0:F2}, Mode=OneWay}"/></TextBlock>
+                                    </Grid></Border>
+                                </DataTemplate></ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Border Style="{StaticResource Card}"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Manter no histórico" Style="{StaticResource SectionTitle}"/><TextBlock Text="As 200 transcrições mais recentes são mantidas localmente." Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel><TextBlock Grid.Column="1" Text="200 itens" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/></Grid></Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Benchmark -->
+                    <ScrollViewer x:Name="BenchmarkPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="30,26,30,30" MaxWidth="850"><TextBlock Text="Benchmark" Style="{StaticResource PageTitle}"/><TextBlock Text="Desempenho real do reconhecimento neste computador" Style="{StaticResource PageSubtitle}"/>
+                            <UniformGrid Columns="3" Margin="0,22,0,14"><Border Style="{StaticResource Card}" Margin="0,0,7,0"><StackPanel><TextBlock Text="RTF MÉDIO" Style="{StaticResource Caption}"/><TextBlock Text="{Binding AverageRtfText}" Style="{StaticResource MetricValue}"/><TextBlock Text="Abaixo de 1,0 é tempo real" Foreground="{StaticResource Success}" FontSize="11" Margin="0,6,0,0"/></StackPanel></Border><Border Style="{StaticResource Card}" Margin="7,0"><StackPanel><TextBlock Text="INFERÊNCIA MÉDIA" Style="{StaticResource Caption}"/><TextBlock Text="{Binding AverageInferenceText}" Style="{StaticResource MetricValue}"/></StackPanel></Border><Border Style="{StaticResource Card}" Margin="7,0,0,0"><StackPanel><TextBlock Text="AMOSTRAS" Style="{StaticResource Caption}"/><TextBlock Text="{Binding HistoryCount}" Style="{StaticResource MetricValue}"/></StackPanel></Border></UniformGrid>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Spike ASR aprovado" Style="{StaticResource SectionTitle}"/><TextBlock Text="Parakeet TDT 0.6B V3 via sherpa-onnx, áudio mono float32 a 16 kHz e execução offline com cache local." Style="{StaticResource Caption}" Margin="0,7,0,0"/><Grid Margin="0,16,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Modelo"/><TextBlock Grid.Column="1" Text="nvidia/parakeet-tdt-0.6b-v3" Foreground="{StaticResource Accent}"/></Grid><Grid Margin="0,11,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Backend"/><TextBlock Grid.Column="1" Text="sherpa-onnx · CPU x64" Foreground="{StaticResource Success}"/></Grid></StackPanel></Border>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Benchmark contínuo" Style="{StaticResource SectionTitle}"/><TextBlock Text="As métricas acima são calculadas das suas transcrições reais. Os fixtures PT-BR automatizados continuam na suite de integração da solution Windows." Style="{StaticResource Caption}" Margin="0,7,0,0"/></StackPanel></Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Vocabulário -->
+                    <ScrollViewer x:Name="VocabularyPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="30,26,30,30" MaxWidth="850"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Vocabulário" Style="{StaticResource PageTitle}"/><TextBlock Text="Termos técnicos e nomes que o zspeak deve preservar" Style="{StaticResource PageSubtitle}"/></StackPanel><Button Grid.Column="1" Content="Adicionar termo" Style="{StaticResource AccentButton}" Click="AddVocabulary_Click" VerticalAlignment="Center"/></Grid>
+                            <Border Style="{StaticResource Card}" Margin="0,22,0,14"><StackPanel><TextBlock Text="Vocabulário local" Style="{StaticResource SectionTitle}"/><TextBlock Text="Os termos são guardados somente neste PC e aplicados depois da transcrição." Style="{StaticResource Caption}" Margin="0,5,0,12"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="VocabularyInput" MinHeight="36" ToolTip="Ex.: Kubernetes"/><Button Grid.Column="1" Content="Adicionar" Margin="9,0,0,0" Click="AddVocabulary_Click"/></Grid></StackPanel></Border>
+                            <ItemsControl ItemsSource="{Binding Vocabulary}"><ItemsControl.ItemTemplate><DataTemplate><Border Style="{StaticResource Card}"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="{Binding}" FontWeight="SemiBold"/><TextBlock Text="Ativo · todos os aplicativos" Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel><Button Grid.Column="1" Content="Remover" Foreground="{StaticResource Danger}" CommandParameter="{Binding}" Click="RemoveVocabulary_Click"/></Grid></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+                            <Border Style="{StaticResource Card}" Visibility="{Binding VocabularyEmptyVisibility}"><StackPanel HorizontalAlignment="Center" Margin="0,22"><TextBlock Text="Nenhum termo" FontSize="17" FontWeight="SemiBold" HorizontalAlignment="Center"/><TextBlock Text="Adicione termos para melhorar a precisão da transcrição." Style="{StaticResource Caption}" Margin="0,6,0,0"/></StackPanel></Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Correção LLM -->
+                    <ScrollViewer x:Name="CorrectionPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="30,26,30,30" MaxWidth="850"><TextBlock Text="Correção LLM" Style="{StaticResource PageTitle}"/><TextBlock Text="Pós-processamento opcional e totalmente local" Style="{StaticResource PageSubtitle}"/>
+                            <Border Style="{StaticResource Card}" Margin="0,22,0,14" BorderBrush="#76599D"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Correção LLM ativa" Style="{StaticResource SectionTitle}"/><TextBlock Text="Requer um modelo local compatível. Nenhum dado é enviado à nuvem." Style="{StaticResource Caption}" Margin="0,5,0,0"/></StackPanel><CheckBox Grid.Column="1" Style="{StaticResource Switch}" IsChecked="False" IsEnabled="False"/></Grid></Border>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Modelo LLM" Style="{StaticResource SectionTitle}"/><TextBlock Text="Nenhum modelo instalado no Windows" FontSize="15" Margin="0,15,0,0"/><TextBlock Text="O reconhecedor Parakeet já está ativo. A correção por LLM permanece desligada para não baixar outro modelo sem sua escolha." Style="{StaticResource Caption}" Margin="0,5,0,14"/><Button Content="Em desenvolvimento para Windows" IsEnabled="False" HorizontalAlignment="Left"/></StackPanel></Border>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Prompts" Style="{StaticResource SectionTitle}"/><TextBlock Text="Nenhum prompt" Margin="0,14,0,0"/><TextBlock Text="Os fluxos de prompt e tradução do Mac serão habilitados após um runtime LLM local equivalente ser validado." Style="{StaticResource Caption}" Margin="0,5,0,0"/></StackPanel></Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Atalhos -->
+                    <ScrollViewer x:Name="KeyboardPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="30,26,30,30" MaxWidth="850"><TextBlock Text="Atalhos de Teclado" Style="{StaticResource PageTitle}"/><TextBlock Text="Controle o zspeak sem sair do aplicativo atual" Style="{StaticResource PageSubtitle}"/>
+                            <Border Style="{StaticResource Card}" Margin="0,22,0,14" BorderBrush="#5A7898"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Atalho atual" Style="{StaticResource Caption}"/><TextBlock Text="Ctrl  +  Alt  +  Espaço" FontSize="22" FontWeight="SemiBold" Margin="0,8,0,0"/></StackPanel><Border Grid.Column="1" Background="#172738" BorderBrush="#4D6D8C" BorderThickness="1" CornerRadius="12" Padding="10,5" VerticalAlignment="Center"><TextBlock Text="Global" Foreground="{StaticResource Accent}"/></Border></Grid></Border>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Tecla de ativação" Style="{StaticResource SectionTitle}"/><Grid Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="250"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Tecla"/><TextBlock Text="Atalho registrado pelo Windows" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel><ComboBox Grid.Column="1" SelectedIndex="0"><ComboBoxItem Content="Ctrl + Alt + Espaço"/></ComboBox></Grid><Separator Background="#304050" Margin="0,14"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="250"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Modo"/><TextBlock Text="Pressione uma vez para iniciar e outra para encerrar" Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel><ComboBox Grid.Column="1" SelectedIndex="0"><ComboBoxItem Content="Alternar (toggle)"/></ComboBox></Grid></StackPanel></Border>
+                            <Border Style="{StaticResource Card}"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Escape cancela gravação" Style="{StaticResource SectionTitle}"/><TextBlock Text="Interrompe sem transcrever e sem alterar o clipboard." Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel><CheckBox Grid.Column="1" Style="{StaticResource Switch}" IsChecked="{Binding EscapeCancelsRecording}"/></Grid></Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Microfone -->
+                    <ScrollViewer x:Name="MicrophonePage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="30,26,30,30" MaxWidth="850"><TextBlock Text="Microfone" Style="{StaticResource PageTitle}"/><TextBlock Text="Escolha a entrada usada nas gravações" Style="{StaticResource PageSubtitle}"/>
+                            <Border Style="{StaticResource Card}" Margin="0,22,0,14"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Usar padrão do sistema" Style="{StaticResource SectionTitle}"/><TextBlock Text="Segue o microfone de comunicação escolhido no Windows." Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel><CheckBox Grid.Column="1" Style="{StaticResource Switch}" IsChecked="{Binding UseSystemMicrophone}"/></Grid></Border>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Dispositivo ativo" Style="{StaticResource SectionTitle}"/><ComboBox ItemsSource="{Binding Microphones}" SelectedItem="{Binding SelectedMicrophone}" DisplayMemberPath="Name" IsEnabled="{Binding CanSelectMicrophone}" Margin="0,13,0,0"/><TextBlock Text="Captura WASAPI · convertido para mono, 16 kHz, float32 antes do ASR." Style="{StaticResource Caption}" Margin="0,9,0,0"/></StackPanel></Border>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Formato de captura" Style="{StaticResource SectionTitle}"/><Grid Margin="0,13,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Entrada do reconhecedor"/><TextBlock Grid.Column="1" Text="16.000 Hz · mono · float32" Foreground="{StaticResource Success}"/></Grid><Grid Margin="0,11,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Backend"/><TextBlock Grid.Column="1" Text="NAudio / WASAPI" Foreground="{StaticResource Info}"/></Grid></StackPanel></Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Geral -->
+                    <ScrollViewer x:Name="GeneralPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="30,26,30,30" MaxWidth="850"><TextBlock Text="Geral" Style="{StaticResource PageTitle}"/><TextBlock Text="Comportamento do zspeak no Windows" Style="{StaticResource PageSubtitle}"/>
+                            <Border Style="{StaticResource Card}" Margin="0,22,0,14"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Iniciar com o sistema" Style="{StaticResource SectionTitle}"/><TextBlock Text="Abre o zspeak automaticamente quando você entra no Windows." Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel><CheckBox Grid.Column="1" Style="{StaticResource Switch}" IsChecked="{Binding LaunchAtStartup}"/></Grid></Border>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Após a transcrição" Style="{StaticResource SectionTitle}"/><Grid Margin="0,13,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="240"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Inserção de texto"/><TextBlock Text="O texto sempre fica no clipboard." Style="{StaticResource Caption}" Margin="0,3,0,0"/></StackPanel><ComboBox Grid.Column="1" SelectedValue="{Binding InsertionMode}" SelectedValuePath="Tag"><ComboBoxItem Content="Colar automaticamente" Tag="paste"/><ComboBoxItem Content="Apenas copiar" Tag="copy"/></ComboBox></Grid></StackPanel></Border>
+                            <Border Style="{StaticResource Card}"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Mostrar overlay durante a gravação" Style="{StaticResource SectionTitle}"/><TextBlock Text="Exibe estado, duração, microfone e forma de onda sem roubar o foco." Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel><CheckBox Grid.Column="1" Style="{StaticResource Switch}" IsChecked="{Binding ShowOverlay}"/></Grid></Border>
+                            <Border Style="{StaticResource Card}"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Som ao gravar" Style="{StaticResource SectionTitle}"/><TextBlock Text="Bip discreto no início e no fim da gravação." Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel><CheckBox Grid.Column="1" Style="{StaticResource Switch}" IsChecked="{Binding SoundFeedback}"/></Grid></Border>
+                            <Border Style="{StaticResource Card}"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Mostrar latência no overlay" Style="{StaticResource SectionTitle}"/><TextBlock Text="Útil para diagnóstico de performance da captura." Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel><CheckBox Grid.Column="1" Style="{StaticResource Switch}" IsChecked="{Binding ShowLatency}"/></Grid></Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Permissões -->
+                    <ScrollViewer x:Name="PermissionsPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="30,26,30,30" MaxWidth="850"><TextBlock Text="Permissões" Style="{StaticResource PageTitle}"/><TextBlock Text="Acesso necessário para captura e inserção de texto" Style="{StaticResource PageSubtitle}"/>
+                            <Border Style="{StaticResource Card}" Margin="0,22,0,14" BorderBrush="{StaticResource Success}"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Configuração do Windows" Style="{StaticResource SectionTitle}"/><TextBlock Text="O zspeak usa somente permissões locais do sistema." Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel><TextBlock Grid.Column="1" Text="LOCAL" Foreground="{StaticResource Success}" FontWeight="SemiBold" VerticalAlignment="Center"/></Grid></Border>
+                            <Border Style="{StaticResource Card}"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Microfone" Style="{StaticResource SectionTitle}"/><TextBlock Text="Necessário para capturar sua voz com WASAPI." Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel><Button Grid.Column="1" Content="Abrir privacidade do microfone" Click="OpenMicrophonePrivacy_Click"/></Grid></Border>
+                            <Border Style="{StaticResource Card}"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Clipboard e aplicativo em foco" Style="{StaticResource SectionTitle}"/><TextBlock Text="O Windows não exige uma permissão separada. O zspeak restaura o foco e envia Ctrl+V localmente." Style="{StaticResource Caption}" Margin="0,4,0,0"/></StackPanel><TextBlock Grid.Column="1" Text="Disponível" Foreground="{StaticResource Success}" VerticalAlignment="Center"/></Grid></Border>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Privacidade" Style="{StaticResource SectionTitle}"/><TextBlock Text="Sem cloud, API key, telemetria ou envio de áudio/texto. O modelo e o histórico ficam em %LOCALAPPDATA%\zspeak." Style="{StaticResource Caption}" Margin="0,6,0,0"/></StackPanel></Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Sobre -->
+                    <ScrollViewer x:Name="AboutPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="30,26,30,30" MaxWidth="850"><Border Style="{StaticResource Card}" Margin="0,0,0,14" Padding="25"><StackPanel HorizontalAlignment="Center"><Border Style="{StaticResource IconBadge}" Width="64" Height="64" CornerRadius="15" Background="#172F49" BorderBrush="#4F80B6"><TextBlock Style="{StaticResource FluentIcon}" Text="&#xE720;" Foreground="{StaticResource Accent}" FontSize="28"/></Border><TextBlock Text="zspeak" FontSize="28" FontWeight="SemiBold" Margin="0,14,0,0"/><TextBlock Text="Transcrição local para devs" Style="{StaticResource PageSubtitle}"/><TextBlock Text="{Binding VersionText}" Style="{StaticResource Caption}" Margin="0,8,0,0"/></StackPanel></Border>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Tecnologia" Style="{StaticResource SectionTitle}"/><Grid Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Reconhecimento"/><TextBlock Grid.Column="1" Text="Parakeet TDT 0.6B V3" Foreground="{StaticResource Accent}"/></Grid><Grid Margin="0,11,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Runtime"/><TextBlock Grid.Column="1" Text="sherpa-onnx 1.13.4"/></Grid><Grid Margin="0,11,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Áudio"/><TextBlock Grid.Column="1" Text="NAudio / WASAPI"/></Grid></StackPanel></Border>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Plataforma" Style="{StaticResource SectionTitle}"/><Grid Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Sistema"/><TextBlock Grid.Column="1" Text="Windows 11 x64"/></Grid><Grid Margin="0,11,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Interface"/><TextBlock Grid.Column="1" Text="WPF · .NET 8"/></Grid></StackPanel></Border>
+                            <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Privacidade" Style="{StaticResource SectionTitle}"/><TextBlock Text="100% local. Nenhuma conta, cloud, telemetria, API key ou envio de conteúdo." Foreground="{StaticResource Success}" Margin="0,12,0,0"/></StackPanel></Border>
+                            <Button Content="Abrir repositório no GitHub" HorizontalAlignment="Left" Click="OpenGitHub_Click"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
         </Grid>
-    </Grid>
+    </Border>
 </Window>

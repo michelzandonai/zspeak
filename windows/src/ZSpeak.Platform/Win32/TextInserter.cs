@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows;
 
 namespace ZSpeak.Platform.Win32;
@@ -13,6 +14,15 @@ public static class TextInserter
     private const ushort VkV = 0x56;
 
     public static nint CaptureForegroundWindow() => GetForegroundWindow();
+
+    public static string GetWindowTitle(nint window)
+    {
+        if (window == 0) return "Aplicativo em foco";
+        var length = GetWindowTextLength(window);
+        if (length <= 0) return "Aplicativo em foco";
+        var builder = new StringBuilder(length + 1);
+        return GetWindowText(window, builder, builder.Capacity) > 0 ? builder.ToString() : "Aplicativo em foco";
+    }
 
     public static async Task<PasteResult> CopyAndPasteAsync(
         string text,
@@ -41,6 +51,14 @@ public static class TextInserter
         };
         var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>()) == inputs.Length;
         return new PasteResult(focused, sent);
+    }
+
+    public static async Task CopyAsync(string text, CancellationToken cancellationToken = default)
+    {
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            await SetClipboardAsync(text, cancellationToken);
+        }
     }
 
     private static async Task SetClipboardAsync(string text, CancellationToken cancellationToken)
@@ -147,6 +165,12 @@ public static class TextInserter
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(nint hwnd, StringBuilder text, int maximum);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextLength(nint hwnd);
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(nint hwnd);

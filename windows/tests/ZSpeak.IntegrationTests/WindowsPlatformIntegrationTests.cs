@@ -46,6 +46,20 @@ public sealed class WindowsPlatformIntegrationTests
 
     [Fact]
     [Trait("Category", "Windows")]
+    public async Task EscapeGlobal_TemCicloDeVidaLimitadoAGravacao()
+    {
+        using var escape = new GlobalHotkey(0, 0x1B);
+        var pressed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        escape.Pressed += (_, _) => pressed.TrySetResult();
+
+        KeybdEvent(0x1B, 0, 0, 0);
+        KeybdEvent(0x1B, 0, 2, 0);
+
+        await pressed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    [Trait("Category", "Windows")]
     public async Task ClipboardEFoco_ColaNoCampoAnteriormenteFocado()
     {
         var pasted = await RunOnDispatcherAsync(async () =>
@@ -88,6 +102,18 @@ public sealed class WindowsPlatformIntegrationTests
 
     [Fact]
     [Trait("Category", "Windows")]
+    public async Task ModoApenasCopiar_NaoPrecisaDeJanelaAlvo()
+    {
+        await RunOnDispatcherAsync(async () =>
+        {
+            await TextInserter.CopyAsync("somente clipboard");
+            Assert.Equal("somente clipboard", Clipboard.GetText());
+            return true;
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "Windows")]
     public void SingleInstance_ImpedeSegundaInstancia()
     {
         var name = "Local\\zspeak-test-" + Guid.NewGuid();
@@ -104,12 +130,15 @@ public sealed class WindowsPlatformIntegrationTests
         var devices = WasapiMicrophoneCapture.EnumerateDevices();
         Assert.NotEmpty(devices);
         using var capture = new WasapiMicrophoneCapture();
+        var receivedLevel = new TaskCompletionSource<float>(TaskCreationOptions.RunContinuationsAsynchronously);
+        capture.LevelChanged += (_, level) => receivedLevel.TrySetResult(level);
         capture.Start(devices[0].Id);
         await Task.Delay(750);
         var samples = await capture.StopAsync();
 
         Assert.InRange(samples.Length, 8_000, 32_000);
         Assert.All(samples, sample => Assert.True(float.IsFinite(sample) && sample is >= -1.1f and <= 1.1f));
+        Assert.InRange(await receivedLevel.Task.WaitAsync(TimeSpan.FromSeconds(2)), 0f, 1f);
     }
 
     private static Task<T> RunOnDispatcherAsync<T>(Func<Task<T>> action)

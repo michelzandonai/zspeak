@@ -1,5 +1,5 @@
 #define MyAppName "zspeak"
-#define MyAppVersion "1.0.50"
+#define MyAppVersion "1.0.51"
 #define MyAppPublisher "Michel Zandonai"
 #define MyAppExeName "ZSpeak.App.exe"
 

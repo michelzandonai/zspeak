@@ -42,6 +42,19 @@ public sealed class JsonFileStore
         await SaveAsync("history.json", history, cancellationToken).ConfigureAwait(false);
     }
 
+    public Task SaveHistoryAsync(
+        IReadOnlyList<TranscriptionRecord> history,
+        CancellationToken cancellationToken = default) =>
+        SaveAsync("history.json", history.Take(200).ToArray(), cancellationToken);
+
+    public async Task<IReadOnlyList<string>> LoadVocabularyAsync(CancellationToken cancellationToken = default) =>
+        await LoadAsync("vocabulary.json", new List<string>(), cancellationToken).ConfigureAwait(false);
+
+    public Task SaveVocabularyAsync(
+        IReadOnlyList<string> vocabulary,
+        CancellationToken cancellationToken = default) =>
+        SaveAsync("vocabulary.json", vocabulary, cancellationToken);
+
     private async Task<T> LoadAsync<T>(string fileName, T fallback, CancellationToken cancellationToken)
     {
         var path = Path.Combine(_root, fileName);
