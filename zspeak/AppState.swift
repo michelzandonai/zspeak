@@ -30,6 +30,11 @@ final class AppState {
     let fileCoordinator: FileTranscriptionCoordinator
     let selectionTranslationCoordinator: SelectionTranslationCoordinator
 
+    /// Fila serial de transcrição de arquivos. Compartilhada por todas as
+    /// entradas em lote: janela "Transcrever Arquivo", lista da pasta de
+    /// downloads, menu Serviços do Finder e "Abrir com".
+    let fileQueue = FileTranscriptionQueue()
+
     // MARK: - Stores externos (setados por App.swift)
 
     var store: TranscriptionStore? {
@@ -257,6 +262,74 @@ final class AppState {
                 sourceRecordID: sourceID
             )
         }
+
+        wireFileQueue()
+    }
+
+    // MARK: - Fila de arquivos
+
+    private func wireFileQueue() {
+        fileQueue.transcribeHandler = { [weak self] request, onProgress in
+            guard let self else { throw CancellationError() }
+            return try await self.transcribeFileForQueue(request: request, onProgress: onProgress)
+        }
+
+        // Modo Reunião exige o diarizer baixado — a fila pode ser disparada de
+        // fora da janela (Serviços do Finder, "Abrir com"), então a preparação
+        // mora aqui e não na view.
+        fileQueue.prepareForMode = { [weak self] mode in
+            guard mode == .meeting else { return }
+            try await self?.prepareDiarizerIfNeeded()
+        }
+
+        // Clipboard consolidado: cada item roda com `copyToClipboard: false`
+        // para não sobrescrever o anterior. No fim, um item copia o próprio
+        // texto; vários copiam o consolidado com o nome de cada arquivo.
+        fileQueue.onQueueFinished = { [weak self] succeededIDs, _ in
+            guard let self, !succeededIDs.isEmpty else { return }
+            // Um arquivo: o texto puro, como na transcrição avulsa de sempre.
+            // Vários: o consolidado com o nome de cada um, só desta rodada.
+            let text: String
+            if succeededIDs.count == 1, let item = self.fileQueue.item(id: succeededIDs[0]) {
+                text = item.result?.text ?? ""
+            } else {
+                text = self.fileQueue.combinedText(for: succeededIDs)
+            }
+            guard !text.isEmpty else { return }
+            self.textInserter.copyToClipboard(text)
+        }
+    }
+
+    /// Executa um item da fila. Diferente de `transcribeFile`, não copia para o
+    /// clipboard (a fila faz isso no fim) e aceita o WAV pré-transcodificado
+    /// pelo prefetch.
+    private func transcribeFileForQueue(
+        request: FileTranscriptionQueue.Request,
+        onProgress: @escaping @MainActor (FileTranscriptionPhase) -> Void
+    ) async throws -> FileTranscriptionQueue.Outcome {
+        if isModelReady, let store = vocabularyStore {
+            try? await transcriber.configureVocabulary(store.buildVocabularyContext())
+        }
+        let outcome = try await fileCoordinator.transcribeFile(
+            url: request.url,
+            mode: request.mode,
+            numSpeakers: request.numSpeakers,
+            preTranscodedURL: request.preTranscodedURL,
+            copyToClipboard: false,
+            onProgress: onProgress
+        )
+        lastTranscription = outcome.result.text
+        lastTranscriptionRecordID = outcome.recordID
+        return FileTranscriptionQueue.Outcome(result: outcome.result, recordID: outcome.recordID)
+    }
+
+    /// Garante o diarizer pronto (dispara download se preciso).
+    func prepareDiarizerIfNeeded() async throws {
+        guard let diarizer = diarizationManager else {
+            throw AudioFileTranscriber.TranscriberError.diarizerUnavailable
+        }
+        if case .ready = await diarizer.modelState { return }
+        try await diarizer.prepare()
     }
 
     // MARK: - Hooks com stores externos

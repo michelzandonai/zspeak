@@ -54,6 +54,50 @@ struct VisualSnapshotTests {
         )
     }
 
+    @Test("Aba da pasta com transcrição aberta permanece estável")
+    func testAudioFileFolderTabSnapshot() throws {
+        let appState = AppState(skipBundlePermissionCheck: true)
+        let store = TranscriptionStore(baseDirectory: makeTemporaryDirectory())
+
+        // Datas fixas: a lista real da pasta de Downloads varia por máquina e
+        // tornaria o snapshot impossível de comparar.
+        let base = Date(timeIntervalSince1970: 1_780_000_000)
+        let entries = [
+            RecentAudioScanner.Entry(
+                url: URL(fileURLWithPath: "/Downloads/WhatsApp Ptt 2026-08-31 at 15.14.15.ogg"),
+                fileName: "WhatsApp Ptt 2026-08-31 at 15.14.15.ogg",
+                arrivedAt: base,
+                sizeBytes: 143_360
+            ),
+            RecentAudioScanner.Entry(
+                url: URL(fileURLWithPath: "/Downloads/9.ogg"),
+                fileName: "9.ogg",
+                arrivedAt: base.addingTimeInterval(-86_400),
+                sizeBytes: 75_776
+            ),
+            RecentAudioScanner.Entry(
+                url: URL(fileURLWithPath: "/Downloads/8.ogg"),
+                fileName: "8.ogg",
+                arrivedAt: base.addingTimeInterval(-90_000),
+                sizeBytes: 47_104
+            ),
+        ]
+
+        let view = AudioFileView(
+            appState: appState,
+            store: store,
+            initialMode: .plain,
+            previewFolderEntries: entries,
+            initialSource: .folder
+        )
+
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "audio-file-folder-tab",
+            of: view,
+            size: CGSize(width: 900, height: 700)
+        )
+    }
+
     @Test("Audio file processing permanece estável")
     func testAudioFileProcessingSnapshot() throws {
         let appState = AppState(skipBundlePermissionCheck: true)
@@ -62,10 +106,14 @@ struct VisualSnapshotTests {
         let view = AudioFileView(
             appState: appState,
             store: store,
-            initialState: .processing,
             initialMode: .plain,
-            initialPhase: .transcribing(current: 2, total: 5),
-            initialFileName: "daily-standup.m4a"
+            previewItems: [
+                FileTranscriptionQueue.previewItem(
+                    fileName: "daily-standup.m4a",
+                    status: .running,
+                    phase: .transcribing(current: 2, total: 5)
+                )
+            ]
         )
 
         try SnapshotTestHelpers.assertSnapshot(
@@ -108,15 +156,21 @@ struct VisualSnapshotTests {
             samples: Array(repeating: 0.05, count: 16000 * 9)
         )
 
+        let doneItem = FileTranscriptionQueue.previewItem(
+            fileName: "reuniao-opus.opus",
+            status: .done,
+            result: result
+        )
         let view = AudioFileView(
             appState: appState,
             store: store,
-            initialState: .result(result),
             initialMode: .plain,
             initialSpeakerNames: [
                 "Speaker 0": "Ana",
                 "Speaker 1": "Bruno",
-            ]
+            ],
+            previewItems: [doneItem],
+            initialSelectedItemID: doneItem.id
         )
 
         try SnapshotTestHelpers.assertSnapshot(

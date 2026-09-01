@@ -133,11 +133,16 @@ final class AudioFileTranscriber {
     /// - Parameters:
     ///   - url: arquivo de entrada (qualquer formato suportado)
     ///   - mode: `.plain` (texto corrido) ou `.meeting` (com interlocutores)
+    ///   - preTranscodedURL: WAV 16 kHz mono já convertido por quem chamou
+    ///     (usado pelo prefetch da `FileTranscriptionQueue`). Quando presente,
+    ///     o passo de ffmpeg é pulado e o arquivo NÃO é apagado aqui — o dono
+    ///     é quem passou.
     ///   - onProgress: callback chamado em cada fase do processo
     func transcribe(
         url: URL,
         mode: Mode,
         numSpeakers: Int? = nil,
+        preTranscodedURL: URL? = nil,
         onProgress: @escaping @MainActor (FileTranscriptionPhase) -> Void
     ) async throws -> FileTranscriptionResult {
         let ext = url.pathExtension.lowercased()
@@ -155,7 +160,9 @@ final class AudioFileTranscriber {
             }
         }
 
-        if Self.ffmpegExtensions.contains(ext) {
+        if let preTranscodedURL {
+            workingURL = preTranscodedURL
+        } else if Self.ffmpegExtensions.contains(ext) {
             guard FFmpegTranscoder.isAvailable else {
                 throw TranscriberError.ffmpegUnavailable
             }

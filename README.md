@@ -112,11 +112,31 @@ FluidAudio e o mantém em cache para os próximos usos offline.
 - hotkey global nos modos `Toggle`, `Hold` e `Double Tap`;
 - seleção e prioridade de microfones;
 - Prompt Mode com LLM local opcional;
-- transcrição de arquivos e histórico local;
+- transcrição de arquivos em lote e histórico local;
+- lista dos áudios recentes da pasta de downloads, do mais novo para o mais antigo;
+- Serviços do Finder e "Abrir com" para vários arquivos de uma vez;
 - inicialização com o sistema;
 - cancelamento da gravação com `Esc`, quando habilitado.
 
-Para empacotar localmente:
+### Transcrever áudios do WhatsApp
+
+Baixe o áudio normalmente e abra **Transcrever arquivo**. A aba **Na pasta**
+lista o que chegou na sua pasta de downloads, **do mais novo para o mais
+antigo**, com a hora em que chegou — um download novo aparece sozinho, sem
+precisar clicar em atualizar. A aba **Anexados** guarda o que você arrastou ou
+escolheu na janela.
+
+- Marque quantos quiser e use **Transcrever selecionados** para mandar o lote.
+- **Trocar pasta** aponta para outro diretório, se você não baixa em `Downloads`.
+- A data mostrada é a de **chegada na pasta**, não a da gravação: um áudio
+  antigo encaminhado e baixado agora aparece no topo, que é onde você espera.
+
+Clicar em **Transcrever** abre o texto ali mesmo, embaixo do arquivo, com botão
+de copiar. Também funciona pelo Finder: selecione os arquivos, botão direito →
+Serviços → **Transcrever com zspeak** (ou Abrir com → zspeak). E a janela aceita
+seleção múltipla e arrastar vários arquivos de uma vez.
+
+### Empacotamento local
 
 ```bash
 scripts/package_app.sh
@@ -124,7 +144,10 @@ scripts/package_app.sh
 
 Uma distribuição pública para macOS exige identidade Developer ID e
 notarização. O script aceita `SIGNING_IDENTITY`; sem ela, usa uma identidade
-autoassinada apenas para desenvolvimento local.
+autoassinada apenas para desenvolvimento local. A identidade é **fixada no
+primeiro uso** e reaproveitada nos builds seguintes: trocar de certificado
+invalida a permissão de Acessibilidade já concedida, porque o macOS casa o grant
+pelo requisito designado do app.
 
 ## Benchmark Windows
 

@@ -7,6 +7,7 @@ import SwiftUI
 /// `title`.
 enum SettingsPage: String, CaseIterable, Identifiable {
     case overview = "overview"
+    case files = "files"
     case history = "history"
     case benchmark = "benchmark"
     case vocabulary = "vocabulary"
@@ -22,6 +23,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .overview: "Visão Geral"
+        case .files: "Transcrever Arquivo"
         case .history: "Histórico"
         case .benchmark: "Benchmark"
         case .vocabulary: "Vocabulário"
@@ -37,6 +39,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .overview: "square.grid.2x2.fill"
+        case .files: "waveform.badge.plus"
         case .history: "clock.arrow.circlepath"
         case .benchmark: "gauge.with.needle"
         case .vocabulary: "text.book.closed.fill"
@@ -54,6 +57,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     var tint: Color {
         switch self {
         case .overview: ZSDesign.accent
+        case .files: ZSDesign.successAccent
         case .history: ZSDesign.infoAccent
         case .benchmark: ZSDesign.warningAccent
         case .vocabulary: ZSDesign.successAccent
@@ -75,7 +79,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     var section: Section {
         switch self {
-        case .overview, .history, .benchmark: .content
+        case .overview, .files, .history, .benchmark: .content
         case .vocabulary, .correction, .keyboard, .microphone, .general: .configuration
         case .permissions, .about: .system
         }
@@ -227,6 +231,10 @@ struct SettingsView: View {
         switch page {
         case .overview:
             OverviewPage()
+        case .files:
+            // Mesma tela da janela "Transcrever arquivo..." do menu da barra.
+            // Está aqui porque é onde o usuário foi procurar.
+            AudioFileView(appState: appState, store: store)
         case .history:
             HistoryView(store: store)
         case .benchmark:

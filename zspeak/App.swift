@@ -241,6 +241,7 @@ struct ZSpeakApp: App {
     nonisolated(unsafe) private static var overlayController: OverlayController?
     nonisolated(unsafe) private static var settingsWindowController: SettingsWindowController?
     nonisolated(unsafe) private static var audioFileWindowController: AudioFileWindowController?
+    nonisolated(unsafe) private static var fileIngestEntryPoints: FileIngestEntryPoints?
     nonisolated(unsafe) private static var statusItemController: StatusItemController?
 
     var body: some Scene {
@@ -364,6 +365,19 @@ struct ZSpeakApp: App {
             Self.settingsWindowController = settingsController
             Self.audioFileWindowController = audioFileController
             Self.statusItemController = statusController
+
+            // Entradas do Finder (Serviços e "Abrir com") — alimentam a mesma
+            // fila da janela "Transcrever Arquivo".
+            let entryPoints = FileIngestEntryPoints(
+                queue: state.fileQueue,
+                presentQueueWindow: { audioFileController.show() }
+            )
+            entryPoints.install()
+            Self.fileIngestEntryPoints = entryPoints
+            ZSpeakAppDelegate.onOpenURLs = { urls in
+                entryPoints.handleOpen(urls: urls)
+            }
+
             StartupWindowPresenter(showSettings: { page in
                 settingsController.show(initialPage: page)
             })

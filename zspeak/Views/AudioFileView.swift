@@ -17,60 +17,77 @@ struct AudioFileView: View {
     let appState: AppState
     let store: TranscriptionStore
 
-    enum ViewState {
-        case initial
-        case processing
-        case result(FileTranscriptionResult)
-        case error(String)
-
-        var isProcessing: Bool {
-            if case .processing = self { return true }
-            return false
-        }
-    }
-
-    @State private var state: ViewState = .initial
     @State private var mode: AudioFileTranscriber.Mode = .plain
-    @State private var phase: FileTranscriptionPhase = .loadingSamples
-    @State private var processingTask: Task<Void, Never>?
-    @State private var currentFileName: String = ""
     @State private var isDropTargeted: Bool = false
     @State private var diarizerState: DiarizationManager.ModelState = .notReady
     @State private var isPreparingDiarizer: Bool = false
     /// Hint do número de interlocutores: nil = automático, ou 2/3/4/5/6
     @State private var numSpeakersHint: Int? = nil
     @State private var speakerNames: [String: String] = [:]
-    @State private var currentRecordID: UUID?
+    /// Item da fila cujo resultado está aberto embaixo da lista.
+    @State private var selectedItemID: UUID?
     @StateObject private var speakerPlayer = SpeakerAudioPlayer()
+
+    /// Lista da pasta de downloads: é por onde o usuário pega os áudios que
+    /// acabou de baixar, sem abrir janela de arquivo.
+    @State private var scanner: RecentAudioScanner
+    @State private var selectedRecent: Set<URL> = []
+
+    /// Qual fonte está em foco. As abas são as DUAS ORIGENS de arquivo, não os
+    /// modos de transcrição: é assim que o usuário pensa o fluxo.
+    @State private var source: FileSource
+    /// Liga um arquivo da pasta ao item que ele virou na fila, para a linha da
+    /// pasta mostrar progresso e resultado sem duplicar a lista.
+    @State private var jobsByURL: [URL: UUID] = [:]
+    /// Linhas abertas mostrando o texto embaixo.
+    @State private var expandedRows: Set<String>
+
+    /// Itens injetados só para preview/snapshot — em produção fica vazio e a
+    /// tela lê a fila real do `AppState`.
+    private let previewItems: [FileTranscriptionQueue.Item]
 
     init(
         appState: AppState,
         store: TranscriptionStore,
-        initialState: ViewState = .initial,
         initialMode: AudioFileTranscriber.Mode = .plain,
-        initialPhase: FileTranscriptionPhase = .loadingSamples,
-        initialFileName: String = "",
         initialDropTargeted: Bool = false,
         initialDiarizerState: DiarizationManager.ModelState = .notReady,
         initialPreparingDiarizer: Bool = false,
         initialNumSpeakersHint: Int? = nil,
         initialSpeakerNames: [String: String] = [:],
-        initialRecordID: UUID? = nil
+        previewItems: [FileTranscriptionQueue.Item] = [],
+        initialSelectedItemID: UUID? = nil,
+        previewFolderEntries: [RecentAudioScanner.Entry]? = nil,
+        initialSource: FileSource? = nil,
+        initialExpandedRows: Set<String> = []
     ) {
         self.appState = appState
         self.store = store
-        _state = State(initialValue: initialState)
+        self.previewItems = previewItems
         _mode = State(initialValue: initialMode)
-        _phase = State(initialValue: initialPhase)
-        _processingTask = State(initialValue: nil)
-        _currentFileName = State(initialValue: initialFileName)
         _isDropTargeted = State(initialValue: initialDropTargeted)
         _diarizerState = State(initialValue: initialDiarizerState)
         _isPreparingDiarizer = State(initialValue: initialPreparingDiarizer)
         _numSpeakersHint = State(initialValue: initialNumSpeakersHint)
         _speakerNames = State(initialValue: initialSpeakerNames)
-        _currentRecordID = State(initialValue: initialRecordID)
+        _selectedItemID = State(initialValue: initialSelectedItemID ?? previewItems.first { $0.status == .done }?.id)
         _speakerPlayer = StateObject(wrappedValue: SpeakerAudioPlayer())
+        _scanner = State(initialValue: previewFolderEntries.map { RecentAudioScanner(previewEntries: $0) }
+            ?? RecentAudioScanner())
+        // Com itens injetados o padrão é "Anexados": é o que o snapshot mostra.
+        _source = State(initialValue: initialSource ?? (previewItems.isEmpty ? .folder : .attached))
+        _expandedRows = State(initialValue: initialExpandedRows)
+    }
+
+    private var queue: FileTranscriptionQueue { appState.fileQueue }
+
+    private var items: [FileTranscriptionQueue.Item] {
+        previewItems.isEmpty ? queue.items : previewItems
+    }
+
+    private var selectedItem: FileTranscriptionQueue.Item? {
+        guard let selectedItemID else { return nil }
+        return items.first { $0.id == selectedItemID }
     }
 
     var body: some View {
@@ -78,20 +95,14 @@ struct AudioFileView: View {
             VStack(alignment: .leading, spacing: 16) {
                 AudioFileHeader()
 
+                FileSourceTabs(
+                    source: $source,
+                    folderCount: scanner.entries.count,
+                    attachedCount: attachedItems.count
+                )
+
                 ZSSectionCard {
-                    HStack(alignment: .center, spacing: 12) {
-                        Label("Modo", systemImage: "slider.horizontal.3")
-                            .font(.headline)
-                        Spacer()
-                        Picker("Modo", selection: $mode) {
-                            Label("Texto corrido", systemImage: "text.alignleft").tag(AudioFileTranscriber.Mode.plain)
-                            Label("Reunião", systemImage: "person.2.wave.2").tag(AudioFileTranscriber.Mode.meeting)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 260)
-                        .disabled(state.isProcessing)
-                    }
+                    sourceToolbar
 
                     if mode == .meeting {
                         Divider()
@@ -102,57 +113,125 @@ struct AudioFileView: View {
                         )
                         SpeakersHintPicker(
                             numSpeakersHint: $numSpeakersHint,
-                            isDisabled: state.isProcessing
+                            isDisabled: queue.isRunning
                         )
+                    }
+
+                    Divider()
+
+                    switch source {
+                    case .folder:
+                        folderRows
+                    case .attached:
+                        attachedRows
                     }
                 }
 
-                switch state {
-                case .initial:
-                    AudioFileDropZone(
-                        isDropTargeted: $isDropTargeted,
-                        onPickFile: openFilePicker,
-                        onDrop: handleDrop
-                    )
-                case .processing:
-                    AudioFileProcessingView(
-                        phase: phase,
-                        fileName: currentFileName,
-                        onCancel: cancelProcessing
-                    )
-                case .result(let result):
-                    AudioFileResultView(
-                        result: result,
-                        speakerNames: $speakerNames,
-                        currentRecordID: currentRecordID,
-                        appState: appState,
-                        speakerPlayer: speakerPlayer,
-                        onTranscribeAnother: { state = .initial }
-                    )
-                case .error(let message):
-                    AudioFileErrorView(
-                        message: message,
-                        onRetry: { state = .initial }
-                    )
+                if mode == .meeting, let segments = selectedItem?.result?.segments, !segments.isEmpty {
+                    detailSection
                 }
             }
             .padding(ZSDesign.pagePadding)
         }
         .zsAppSurface()
         .navigationTitle("Transcrever Arquivo")
+        .onAppear {
+            scanner.refresh()
+            scanner.startWatching()
+        }
+        .onDisappear { scanner.stopWatching() }
+        // Drop na janela inteira: com a fila já preenchida não sobra área de
+        // drop zone, e arrastar mais um lote é a ação mais comum aqui.
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers: providers)
+        }
         .task(id: mode) {
             if mode == .meeting {
                 await refreshDiarizerState()
+            }
+        }
+        .onChange(of: queue.doneCount) { _, _ in
+            // Em lote, mostra sempre o resultado mais recente — o usuário
+            // acompanha a fila andando sem precisar clicar em cada linha.
+            if let last = queue.items.last(where: { $0.status == .done }) {
+                select(itemID: last.id)
+            }
+        }
+    }
+
+    /// Detalhe do item selecionado: progresso (quando é o único da fila),
+    /// resultado, ou erro.
+    @ViewBuilder
+    private var detailSection: some View {
+        if items.count == 1, let only = items.first, only.status.isRunning {
+            AudioFileProcessingView(
+                phase: only.phase ?? .loadingSamples,
+                fileName: only.fileName,
+                onCancel: { queue.cancel(itemID: only.id) }
+            )
+        } else if let selected = selectedItem {
+            switch selected.status {
+            case .done:
+                if let result = selected.result {
+                    AudioFileResultView(
+                        result: result,
+                        speakerNames: $speakerNames,
+                        currentRecordID: selected.recordID,
+                        appState: appState,
+                        speakerPlayer: speakerPlayer,
+                        onTranscribeAnother: openFilePicker
+                    )
+                }
+            case .failed(let message):
+                AudioFileErrorView(
+                    message: message,
+                    onRetry: { retry(selected) }
+                )
+            case .pending, .running, .cancelled:
+                EmptyView()
             }
         }
     }
 
     // MARK: - Ações
 
-    private func cancelProcessing() {
-        processingTask?.cancel()
-        processingTask = nil
-        state = .initial
+    private func select(itemID: UUID) {
+        guard selectedItemID != itemID else { return }
+        speakerPlayer.stop()
+        selectedItemID = itemID
+        speakerNames = Self.defaultSpeakerNames(for: items.first { $0.id == itemID }?.result)
+    }
+
+    /// Nomes iniciais dos interlocutores (id → id) para o painel renderizar.
+    private static func defaultSpeakerNames(for result: FileTranscriptionResult?) -> [String: String] {
+        guard let segments = result?.segments else { return [:] }
+        var names: [String: String] = [:]
+        for id in Set(segments.map(\.speakerId)) { names[id] = id }
+        return names
+    }
+
+    /// Reenfileira um item. O arquivo de origem continua em disco justamente
+    /// para isto — os temporários da fila só são apagados ao sair da lista.
+    private func retry(_ item: FileTranscriptionQueue.Item) {
+        let ids = queue.enqueue(urls: [item.url], mode: item.mode, numSpeakers: item.numSpeakers)
+        if let first = ids.first { select(itemID: first) }
+    }
+
+    private func clearFinished() {
+        let removedSelection = selectedItem?.status.isFinished ?? false
+        queue.clearFinished()
+        if removedSelection {
+            selectedItemID = nil
+            speakerNames = [:]
+            speakerPlayer.stop()
+        }
+    }
+
+    private func copyAll() {
+        let text = queue.combinedText
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     // MARK: - Diarizer lifecycle
@@ -199,32 +278,198 @@ struct AudioFileView: View {
         }
     }
 
-    /// Garante que o diarizer está pronto antes de prosseguir. Se não estiver,
-    /// dispara `prepare()` e aguarda. Lança erro se falhar.
-    private func ensureDiarizerReady() async throws {
-        guard let diarizer = appState.diarizationManager else {
-            throw AudioFileTranscriber.TranscriberError.diarizerUnavailable
-        }
-        let state = await diarizer.modelState
-        if case .ready = state { return }
+    // MARK: - File handling
 
-        // Auto-dispara o download
-        isPreparingDiarizer = true
-        diarizerState = .preparing(progress: 0)
-        startDiarizerStatePolling()
-        defer { isPreparingDiarizer = false }
+    // MARK: - Fontes e linhas
 
-        try await diarizer.prepare()
-        diarizerState = .ready
+    /// Itens da fila que NÃO vieram da lista da pasta — ou seja, o que o
+    /// usuário anexou pelo seletor, arrastando ou pelo Finder.
+    private var attachedItems: [FileTranscriptionQueue.Item] {
+        let fromFolder = Set(jobsByURL.values)
+        return items.filter { !fromFolder.contains($0.id) }
     }
 
-    // MARK: - File handling
+    @ViewBuilder
+    private var sourceToolbar: some View {
+        HStack(spacing: 10) {
+            if source == .folder {
+                Text(scanner.folderURL.lastPathComponent)
+                    .font(.caption)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                    .foregroundStyle(.secondary)
+                Button("Atualizar") { scanner.refresh() }
+                    .controlSize(.small)
+                Button("Trocar pasta", action: chooseWatchedFolder)
+                    .controlSize(.small)
+                Button("Abrir no Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([scanner.folderURL])
+                }
+                .controlSize(.small)
+            } else {
+                Button("Adicionar arquivos...", action: openFilePicker)
+                    .controlSize(.small)
+                if !attachedItems.isEmpty {
+                    Button("Copiar tudo", action: copyAll).controlSize(.small)
+                    Button("Limpar concluídos", action: clearFinished).controlSize(.small)
+                }
+            }
+
+            Spacer()
+
+            Picker("Modo", selection: $mode) {
+                Text("Texto corrido").tag(AudioFileTranscriber.Mode.plain)
+                Text("Reunião").tag(AudioFileTranscriber.Mode.meeting)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 210)
+            .disabled(queue.isRunning)
+        }
+    }
+
+    @ViewBuilder
+    private var folderRows: some View {
+        if let problem = scanner.lastScanFailed {
+            Label(problem, systemImage: "exclamationmark.triangle.fill")
+                .font(.callout)
+                .foregroundStyle(.orange)
+        } else if scanner.entries.isEmpty {
+            Text("Nenhum áudio nesta pasta ainda. Baixe um áudio e ele aparece aqui sozinho.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(spacing: 0) {
+                ForEach(scanner.entries) { entry in
+                    FileRow(
+                        title: entry.fileName,
+                        subtitle: "\(RecentAudioScanner.arrivalLabel(for: entry.arrivedAt)) · \(RecentAudioScanner.sizeLabel(entry.sizeBytes))",
+                        item: jobsByURL[entry.url].flatMap { id in items.first { $0.id == id } },
+                        isSelected: selectedRecent.contains(entry.url),
+                        isExpanded: expandedRows.contains(entry.url.path),
+                        showsSelection: true,
+                        onToggleSelection: { toggleRecent(entry.url) },
+                        onTranscribe: { enqueueRecent([entry.url]) },
+                        onToggleExpanded: { toggleExpanded(entry.url.path) },
+                        onCancel: { cancelJob(for: entry.url) }
+                    )
+                    if entry.id != scanner.entries.last?.id { Divider().opacity(0.4) }
+                }
+            }
+
+            if !selectedRecent.isEmpty {
+                Divider()
+                HStack {
+                    Text("\(selectedRecent.count) selecionado\(selectedRecent.count == 1 ? "" : "s")")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Transcrever selecionados") { enqueueRecent(Array(selectedRecent)) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var attachedRows: some View {
+        if attachedItems.isEmpty {
+            AudioFileDropZone(isDropTargeted: isDropTargeted, onPickFiles: openFilePicker)
+        } else {
+            VStack(spacing: 0) {
+                ForEach(attachedItems) { item in
+                    FileRow(
+                        title: item.fileName,
+                        subtitle: item.phase.map(zsPhaseDescription) ?? "Anexado",
+                        item: item,
+                        isSelected: false,
+                        isExpanded: expandedRows.contains(item.id.uuidString),
+                        showsSelection: false,
+                        onToggleSelection: {},
+                        onTranscribe: { retry(item) },
+                        onToggleExpanded: { toggleExpanded(item.id.uuidString) },
+                        onCancel: { queue.cancel(itemID: item.id) }
+                    )
+                    if item.id != attachedItems.last?.id { Divider().opacity(0.4) }
+                }
+            }
+        }
+    }
+
+    private func toggleExpanded(_ key: String) {
+        if expandedRows.contains(key) {
+            expandedRows.remove(key)
+        } else {
+            expandedRows.insert(key)
+        }
+    }
+
+    private func cancelJob(for url: URL) {
+        guard let id = jobsByURL[url] else { return }
+        queue.cancel(itemID: id)
+    }
+
+    // MARK: - Áudios recentes da pasta
+
+    private func toggleRecent(_ url: URL) {
+        if selectedRecent.contains(url) {
+            selectedRecent.remove(url)
+        } else {
+            selectedRecent.insert(url)
+        }
+    }
+
+    /// Enfileira preservando a ordem da lista (mais novo primeiro) — enfileirar
+    /// na ordem do `Set` faria o lote sair embaralhado.
+    private func enqueueRecent(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let chosen = Set(urls)
+        let ordered = scanner.entries.map(\.url).filter { chosen.contains($0) }
+        let finalOrder = ordered.isEmpty ? urls : ordered
+
+        // "Transcrever de novo" no mesmo arquivo: o item da rodada anterior sai
+        // da fila antes, senão o vínculo abaixo o deixa órfão e ele reaparece
+        // como linha fantasma na aba "Anexados".
+        for url in finalOrder {
+            if let previous = jobsByURL[url] { queue.remove(itemID: previous) }
+        }
+
+        let ids = queue.enqueue(urls: finalOrder, mode: mode, numSpeakers: numSpeakersHint)
+        // Guarda o vínculo para a linha da pasta mostrar progresso e texto sem
+        // o arquivo aparecer duplicado na aba "Anexados".
+        for (url, id) in zip(finalOrder, ids) {
+            jobsByURL[url] = id
+            expandedRows.insert(url.path)
+        }
+        selectedRecent.subtract(chosen)
+    }
+
+    private func chooseWatchedFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Monitorar"
+        panel.message = "Escolha a pasta onde seus áudios são baixados."
+        panel.directoryURL = scanner.folderURL
+
+        if panel.runModal() == .OK, let url = panel.url {
+            scanner.folderURL = url
+            selectedRecent.removeAll()
+        }
+    }
 
     private func openFilePicker() {
         let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
+        // Seleção múltipla: o caso real é baixar vários áudios do WhatsApp de
+        // uma vez e transcrever o lote inteiro.
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
+        panel.prompt = "Transcrever"
+        panel.message = "Selecione um ou mais arquivos de áudio ou vídeo."
 
         // Permite todos os formatos aceitáveis + audio genérico (fallback)
         var types: [UTType] = [.audio]
@@ -235,66 +480,61 @@ struct AudioFileView: View {
         }
         panel.allowedContentTypes = types
 
-        if panel.runModal() == .OK, let url = panel.url {
-            startTranscription(url: url)
+        if panel.runModal() == .OK, !panel.urls.isEmpty {
+            enqueue(urls: panel.urls)
         }
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
-        _ = provider.loadObject(ofClass: URL.self) { url, _ in
-            guard let url else { return }
-            Task { @MainActor in
-                startTranscription(url: url)
+        guard !providers.isEmpty else { return false }
+
+        // `loadObject` resolve cada provider por callback e fora de ordem; o
+        // coletor junta tudo e só então enfileira, preservando a ordem em que
+        // os arquivos foram arrastados.
+        let collector = DroppedURLCollector(expected: providers.count) { urls in
+            enqueue(urls: urls)
+        }
+        for (index, provider) in providers.enumerated() {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                Task { @MainActor in
+                    collector.set(url, at: index)
+                }
             }
         }
         return true
     }
 
-    @MainActor
-    private func startTranscription(url: URL) {
-        // Valida formato
-        guard AudioFileTranscriber.isSupported(url: url) else {
-            state = .error("Formato .\(url.pathExtension) não é suportado.\n\nFormatos aceitos: \(AudioFileTranscriber.supportedExtensions.sorted().map { ".\($0)" }.joined(separator: ", ")).")
-            return
+    private func enqueue(urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let ids = queue.enqueue(urls: urls, mode: mode, numSpeakers: numSpeakersHint)
+        // Foca o primeiro item novo para o detalhe não continuar preso num
+        // resultado antigo enquanto o lote roda.
+        if let first = ids.first, urls.count == 1 {
+            select(itemID: first)
         }
+    }
+}
 
-        currentFileName = url.lastPathComponent
-        state = .processing
-        phase = .loadingSamples
+/// Junta URLs resolvidas de forma assíncrona por vários `NSItemProvider`,
+/// preservando a ordem original, e dispara o callback quando o último chega.
+@MainActor
+private final class DroppedURLCollector {
+    private var urls: [URL?]
+    private var remaining: Int
+    private let onComplete: ([URL]) -> Void
 
-        processingTask = Task {
-            do {
-                // Modo Reunião: garante que o diarizer está pronto (auto-dispara download se necessário)
-                if mode == .meeting {
-                    try await ensureDiarizerReady()
-                }
+    init(expected: Int, onComplete: @escaping ([URL]) -> Void) {
+        self.urls = Array(repeating: nil, count: expected)
+        self.remaining = expected
+        self.onComplete = onComplete
+    }
 
-                let result = try await appState.transcribeFile(url: url, mode: mode, numSpeakers: numSpeakersHint) { newPhase in
-                    self.phase = newPhase
-                }
-                // Inicializa speakerNames com defaults (id → id) para o painel renderizar
-                if let segments = result.segments {
-                    let ids = Set(segments.map(\.speakerId))
-                    var initial: [String: String] = [:]
-                    for id in ids { initial[id] = id }
-                    speakerNames = initial
-                } else {
-                    speakerNames = [:]
-                }
-                currentRecordID = appState.lastTranscriptionRecordID
-                state = .result(result)
-            } catch is CancellationError {
-                state = .initial
-            } catch {
-                if (error as NSError).domain == NSCocoaErrorDomain && (error as NSError).code == NSUserCancelledError {
-                    state = .initial
-                } else {
-                    state = .error(error.localizedDescription)
-                }
-            }
-            processingTask = nil
-        }
+    func set(_ url: URL?, at index: Int) {
+        guard index < urls.count, remaining > 0 else { return }
+        urls[index] = url
+        remaining -= 1
+        guard remaining == 0 else { return }
+        onComplete(urls.compactMap { $0 })
     }
 }
 
@@ -322,9 +562,9 @@ private struct AudioFileHeader: View {
 // MARK: - Drop zone
 
 private struct AudioFileDropZone: View {
-    @Binding var isDropTargeted: Bool
-    let onPickFile: () -> Void
-    let onDrop: ([NSItemProvider]) -> Bool
+    /// Só visual: o `onDrop` fica na janela inteira (ver `AudioFileView.body`).
+    let isDropTargeted: Bool
+    let onPickFiles: () -> Void
 
     var body: some View {
         VStack(spacing: 14) {
@@ -337,15 +577,16 @@ private struct AudioFileDropZone: View {
                         .fill((isDropTargeted ? Color.accentColor : Color.secondary).opacity(0.10))
                 )
 
-            Text("Arraste um arquivo de áudio aqui")
+            Text("Arraste os arquivos de áudio aqui")
                 .font(.title3.weight(.semibold))
 
-            Text("Solte para começar a transcrição ou selecione manualmente.")
+            Text("Pode soltar vários de uma vez — eles entram numa fila e são transcritos em sequência.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
 
-            Button(action: onPickFile) {
-                Label("Selecionar arquivo...", systemImage: "folder")
+            Button(action: onPickFiles) {
+                Label("Selecionar arquivos...", systemImage: "folder")
             }
             .buttonStyle(.borderedProminent)
         }
@@ -363,10 +604,228 @@ private struct AudioFileDropZone: View {
                 )
         )
         .animation(.easeInOut(duration: 0.16), value: isDropTargeted)
-        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
-            onDrop(providers)
+    }
+}
+
+// MARK: - Fila
+
+/// Lista da fila de transcrição: uma linha por arquivo, com status, progresso
+/// e ações em lote. É o que transforma "transcrevi um áudio" em "joguei os 9
+/// áudios que baixei do WhatsApp e fui fazer outra coisa".
+private struct AudioFileQueueSection: View {
+    let items: [FileTranscriptionQueue.Item]
+    let selectedItemID: UUID?
+    let isDropTargeted: Bool
+    let onSelect: (UUID) -> Void
+    let onCancelItem: (UUID) -> Void
+    let onCancelAll: () -> Void
+    let onClearFinished: () -> Void
+    let onCopyAll: () -> Void
+    let onAddFiles: () -> Void
+
+    private var finishedCount: Int { items.filter { $0.status.isFinished }.count }
+    private var doneCount: Int { items.filter { $0.status == .done }.count }
+    private var isRunning: Bool { items.contains { $0.status.isRunning } }
+    private var hasFinished: Bool { finishedCount > 0 }
+
+    var body: some View {
+        ZSSectionCard {
+            HStack(alignment: .center, spacing: 10) {
+                Label("Fila de transcrição", systemImage: "list.bullet.rectangle")
+                    .font(.headline)
+
+                ZSStatusChip(
+                    text: "\(finishedCount)/\(items.count)",
+                    tone: finishedCount == items.count ? .success : .info,
+                    systemImage: isRunning ? "waveform" : nil
+                )
+
+                Spacer()
+
+                Button(action: onAddFiles) {
+                    Label("Adicionar", systemImage: "plus")
+                }
+                .controlSize(.small)
+            }
+
+            if items.count > 1 {
+                ProgressView(value: Double(finishedCount), total: Double(items.count))
+                    .progressViewStyle(.linear)
+            }
+
+            Divider()
+
+            VStack(spacing: 0) {
+                ForEach(items) { item in
+                    AudioFileQueueRow(
+                        item: item,
+                        isSelected: item.id == selectedItemID,
+                        onSelect: { onSelect(item.id) },
+                        onCancel: { onCancelItem(item.id) }
+                    )
+                    if item.id != items.last?.id {
+                        Divider().opacity(0.4)
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack(spacing: 10) {
+                Button(action: onCopyAll) {
+                    Label(doneCount > 1 ? "Copiar tudo (\(doneCount))" : "Copiar texto", systemImage: "doc.on.doc")
+                }
+                .controlSize(.small)
+                .disabled(doneCount == 0)
+
+                Button(action: onClearFinished) {
+                    Label("Limpar concluídos", systemImage: "eraser")
+                }
+                .controlSize(.small)
+                .disabled(!hasFinished)
+
+                Spacer()
+
+                if isRunning || items.contains(where: { $0.status.isPending }) {
+                    Button(role: .destructive, action: onCancelAll) {
+                        Label("Cancelar tudo", systemImage: "xmark.circle")
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: ZSDesign.radius)
+                .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8]))
+                .opacity(isDropTargeted ? 1 : 0)
+                .animation(.easeInOut(duration: 0.16), value: isDropTargeted)
+                .allowsHitTesting(false)
+        )
+    }
+}
+
+private struct AudioFileQueueRow: View {
+    let item: FileTranscriptionQueue.Item
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            statusIcon
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.fileName)
+                    .font(.callout.weight(isSelected ? .semibold : .regular))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            if let progress = phaseProgress {
+                Text("\(Int(progress * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            if !item.status.isFinished {
+                Button(action: onCancel) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Cancelar este arquivo")
+            }
+        }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch item.status {
+        case .pending:
+            Image(systemName: "clock").foregroundStyle(.secondary)
+        case .running:
+            ProgressView().controlSize(.small)
+        case .done:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(ZSDesign.successAccent)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(ZSDesign.dangerAccent)
+        case .cancelled:
+            Image(systemName: "slash.circle").foregroundStyle(.secondary)
         }
     }
+
+    private var phaseProgress: Double? {
+        guard item.status.isRunning, let phase = item.phase else { return nil }
+        switch phase {
+        case .transcoding(let progress): return progress
+        case .transcribing(let current, let total):
+            guard total > 1 else { return nil }
+            return Double(current) / Double(total)
+        case .loadingSamples, .diarizing: return nil
+        }
+    }
+
+    private var subtitle: String {
+        switch item.status {
+        case .pending:
+            return "Na fila"
+        case .running:
+            return zsPhaseDescription(item.phase ?? .loadingSamples)
+        case .done:
+            let duration = zsFormatDuration(item.result?.durationSeconds ?? 0)
+            let preview = (item.result?.text ?? "")
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return preview.isEmpty ? "Concluído · \(duration)" : "\(duration) · \(preview)"
+        case .failed(let message):
+            return message
+        case .cancelled:
+            return "Cancelado"
+        }
+    }
+}
+
+/// Texto humano da fase atual — compartilhado pela linha da fila e pelo painel
+/// grande de progresso (arquivo único).
+private func zsPhaseDescription(_ phase: FileTranscriptionPhase) -> String {
+    switch phase {
+    case .transcoding(let progress):
+        if let progress {
+            return "Convertendo formato de áudio... (\(Int(progress * 100))%)"
+        }
+        return "Convertendo formato de áudio..."
+    case .loadingSamples:
+        return "Carregando áudio..."
+    case .diarizing(let elapsed, let estimated):
+        let sub = AudioFileTranscriber.diarizingSubphase(elapsed: elapsed, estimated: estimated)
+        return "\(sub) \(Int(elapsed))s de ~\(Int(estimated))s estimados"
+    case .transcribing(let current, let total):
+        if total > 1 {
+            return "Transcrevendo \(current) de \(total)..."
+        }
+        return "Transcrevendo..."
+    }
+}
+
+private func zsFormatDuration(_ seconds: Double) -> String {
+    let total = Int(seconds.rounded())
+    return String(format: "%d:%02d", total / 60, total % 60)
 }
 
 // MARK: - Processing
@@ -432,25 +891,7 @@ private struct AudioFileProcessingView: View {
         }
     }
 
-    private var phaseDescription: String {
-        switch phase {
-        case .transcoding(let progress):
-            if let progress {
-                return "Convertendo formato de áudio... (\(Int(progress * 100))%)"
-            }
-            return "Convertendo formato de áudio..."
-        case .loadingSamples:
-            return "Carregando áudio..."
-        case .diarizing(let elapsed, let estimated):
-            let sub = AudioFileTranscriber.diarizingSubphase(elapsed: elapsed, estimated: estimated)
-            return "\(sub) \(Int(elapsed))s de ~\(Int(estimated))s estimados"
-        case .transcribing(let current, let total):
-            if total > 1 {
-                return "Transcrevendo \(current) de \(total)..."
-            }
-            return "Transcrevendo..."
-        }
-    }
+    private var phaseDescription: String { zsPhaseDescription(phase) }
 }
 
 // MARK: - Result
@@ -725,7 +1166,7 @@ private struct AudioFileErrorView: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                 Button(action: onRetry) {
-                    Label("Tentar outro arquivo", systemImage: "arrow.counterclockwise")
+                    Label("Tentar de novo", systemImage: "arrow.counterclockwise")
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -841,4 +1282,192 @@ private func colorForSpeaker(_ speakerId: String) -> Color {
     let palette: [Color] = [.blue, .green, .orange, .purple, .pink, .teal, .red, .indigo]
     let hash = abs(speakerId.hashValue)
     return palette[hash % palette.count]
+}
+
+
+/// De onde vêm os arquivos. São as abas da tela porque é assim que o fluxo do
+/// usuário se divide: o que caiu na pasta de downloads e o que ele anexou.
+enum FileSource: String, CaseIterable, Identifiable {
+    case folder
+    case attached
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .folder: "Na pasta"
+        case .attached: "Anexados"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .folder: "folder.fill"
+        case .attached: "paperclip"
+        }
+    }
+}
+
+private struct FileSourceTabs: View {
+    @Binding var source: FileSource
+    let folderCount: Int
+    let attachedCount: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(FileSource.allCases) { candidate in
+                let isActive = candidate == source
+                Button {
+                    source = candidate
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: candidate.icon)
+                        Text(candidate.title)
+                        Text("\(count(for: candidate))")
+                            .font(.caption.monospacedDigit())
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.primary.opacity(isActive ? 0.18 : 0.10)))
+                    }
+                    .font(.callout.weight(isActive ? .semibold : .regular))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isActive ? ZSDesign.accent.opacity(0.22) : Color.secondary.opacity(0.10))
+                    )
+                    .foregroundStyle(isActive ? Color.primary : Color.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+    }
+
+    private func count(for source: FileSource) -> Int {
+        switch source {
+        case .folder: folderCount
+        case .attached: attachedCount
+        }
+    }
+}
+
+/// Linha de arquivo com o texto aparecendo embaixo, tipo dropdown.
+///
+/// A fonte do resultado é pequena de propósito: o pedido é caber bastante
+/// transcrição na tela sem precisar abrir outra janela.
+private struct FileRow: View {
+    let title: String
+    let subtitle: String
+    let item: FileTranscriptionQueue.Item?
+    let isSelected: Bool
+    let isExpanded: Bool
+    let showsSelection: Bool
+    let onToggleSelection: () -> Void
+    let onTranscribe: () -> Void
+    let onToggleExpanded: () -> Void
+    let onCancel: () -> Void
+
+    private var hasResult: Bool { !(item?.result?.text ?? "").isEmpty }
+
+    private var isRunning: Bool {
+        switch item?.status {
+        case .pending, .running: true
+        default: false
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                if showsSelection {
+                    Button(action: onToggleSelection) {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(isSelected ? ZSDesign.accent : Color.secondary)
+                            .imageScale(.large)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(statusLine)
+                        .font(.caption)
+                        .foregroundStyle(statusColor)
+                }
+
+                Spacer()
+
+                if isRunning {
+                    ProgressView().controlSize(.small)
+                    Button("Cancelar", action: onCancel).controlSize(.small)
+                } else if hasResult {
+                    Button(action: onToggleExpanded) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    }
+                    .buttonStyle(.plain)
+                    .help(isExpanded ? "Recolher" : "Ver transcrição")
+                    Button("Transcrever de novo", action: onTranscribe).controlSize(.small)
+                } else {
+                    Button("Transcrever", action: onTranscribe).controlSize(.small)
+                }
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if hasResult { onToggleExpanded() } else if showsSelection { onToggleSelection() }
+            }
+
+            if isExpanded, let text = item?.result?.text, !text.isEmpty {
+                resultBlock(text)
+            }
+        }
+    }
+
+    private var statusLine: String {
+        switch item?.status {
+        case .failed(let message): message
+        case .cancelled: "Cancelado"
+        case .running: item?.phase.map(zsPhaseDescription) ?? "Transcrevendo..."
+        case .pending: "Na fila"
+        default: subtitle
+        }
+    }
+
+    private var statusColor: Color {
+        switch item?.status {
+        case .failed: .red
+        case .cancelled: .orange
+        default: .secondary
+        }
+    }
+
+    @ViewBuilder
+    private func resultBlock(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(text)
+                .font(.system(size: 11))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 8) {
+                Text("\(text.count) caracteres")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Copiar") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.10)))
+        .padding(.bottom, 8)
+    }
 }

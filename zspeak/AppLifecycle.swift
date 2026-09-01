@@ -43,6 +43,21 @@ struct AppDockIconInstaller {
 final class ZSpeakAppDelegate: NSObject, NSApplicationDelegate {
     static var onDidFinishLaunching: (() -> Void)?
 
+    /// Handler de "Abrir com" / arrastar no ícone do Dock. Instalado no
+    /// `onDidFinishLaunching`; até lá as URLs ficam represadas em
+    /// `pendingOpenURLs` — o Finder pode abrir o app JÁ com arquivos, e sem o
+    /// buffer esse primeiro lote se perderia.
+    static var onOpenURLs: (([URL]) -> Void)? {
+        didSet {
+            guard let onOpenURLs, !pendingOpenURLs.isEmpty else { return }
+            let pending = pendingOpenURLs
+            pendingOpenURLs = []
+            onOpenURLs(pending)
+        }
+    }
+
+    private static var pendingOpenURLs: [URL] = []
+
     private let appearanceInstaller: AppAppearanceInstaller
     private let dockIconInstaller: AppDockIconInstaller
 
@@ -63,6 +78,14 @@ final class ZSpeakAppDelegate: NSObject, NSApplicationDelegate {
         appearanceInstaller.applyDarkAquaAppearance()
         dockIconInstaller.showDockIcon()
         Self.onDidFinishLaunching?()
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        if let handler = Self.onOpenURLs {
+            handler(urls)
+        } else {
+            Self.pendingOpenURLs.append(contentsOf: urls)
+        }
     }
 }
 

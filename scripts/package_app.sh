@@ -101,14 +101,61 @@ CONFIG
   fi
 }
 
-SIGNING_IDENTITY="${SIGNING_IDENTITY:-$(detect_identity)}"
-if [[ -z "${SIGNING_IDENTITY}" ]]; then
-  SIGNING_IDENTITY="$(create_local_identity)"
+# O macOS casa a permissão de Acessibilidade pelo REQUISITO DESIGNADO, que
+# inclui o certificado que assinou o app. Se a identidade mudar entre builds, o
+# grant existente para de valer: o toggle continua ligado nos Ajustes, mas
+# AXIsProcessTrusted() passa a devolver false e a hotkey/colagem morrem em
+# silêncio. Foi exatamente o que aconteceu ao alternar entre o certificado local
+# e o "Apple Development".
+#
+# Por isso a identidade é FIXADA no primeiro uso e reaproveitada enquanto
+# existir no keychain. Para trocar de propósito: SIGNING_IDENTITY="..." ./scripts/package_app.sh
+# >>> bloco-identidade (extraído por scripts/tests/signing_identity_test.sh)
+IDENTITY_PIN_FILE="$HOME/.cache/zspeak/codesign/pinned-identity"
+
+pinned_identity() {
+  [[ -f "$IDENTITY_PIN_FILE" ]] || return 1
+  local pinned
+  pinned="$(cat "$IDENTITY_PIN_FILE")"
+  [[ -n "$pinned" ]] || return 1
+  # Só reaproveita se o certificado ainda existir — senão a assinatura falharia.
+  security find-identity -v -p codesigning | grep -qF -- "$pinned" || return 1
+  echo "$pinned"
+}
+
+PREVIOUS_IDENTITY=""
+if [[ -f "$IDENTITY_PIN_FILE" ]]; then
+  PREVIOUS_IDENTITY="$(cat "$IDENTITY_PIN_FILE")"
 fi
-if [[ -z "${SIGNING_IDENTITY}" ]]; then
-  echo "  AVISO: identidade local indisponível; usando assinatura ad-hoc."
-  SIGNING_IDENTITY="-"
+
+if [[ -n "${SIGNING_IDENTITY:-}" ]]; then
+  :  # escolha explícita do usuário vence
+elif SIGNING_IDENTITY="$(pinned_identity)"; then
+  :  # reusa a identidade fixada
+else
+  SIGNING_IDENTITY="$(detect_identity)"
+  if [[ -z "${SIGNING_IDENTITY}" ]]; then
+    SIGNING_IDENTITY="$(create_local_identity)"
+  fi
+  if [[ -z "${SIGNING_IDENTITY}" ]]; then
+    echo "  AVISO: identidade local indisponível; usando assinatura ad-hoc."
+    SIGNING_IDENTITY="-"
+  fi
 fi
+
+if [[ -n "$PREVIOUS_IDENTITY" && "$PREVIOUS_IDENTITY" != "$SIGNING_IDENTITY" ]]; then
+  echo "  ATENÇÃO: a identidade de assinatura mudou."
+  echo "    antes: $PREVIOUS_IDENTITY"
+  echo "    agora: $SIGNING_IDENTITY"
+  echo "    A permissão de Acessibilidade concedida antes NÃO vale para esta assinatura."
+  echo "    Ajustes > Privacidade e Segurança > Acessibilidade: remova o zspeak no botão '-' e conceda de novo."
+fi
+
+if [[ "$SIGNING_IDENTITY" != "-" ]]; then
+  mkdir -p "$(dirname "$IDENTITY_PIN_FILE")"
+  printf '%s' "$SIGNING_IDENTITY" > "$IDENTITY_PIN_FILE"
+fi
+# <<< bloco-identidade
 
 download_ffmpeg() {
   if [[ -f "$FFMPEG_CACHE_BINARY" ]] && [[ -x "$FFMPEG_CACHE_BINARY" ]]; then

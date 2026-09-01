@@ -56,11 +56,13 @@ final class FileTranscriptionCoordinator {
     /// Transcreve um arquivo de áudio (qualquer formato suportado).
     /// - Suporta modo `.plain` (texto corrido) e `.meeting` (com identificação de interlocutores)
     /// - Salva automaticamente no histórico via `persistTranscription` hook
-    /// - Copia o texto final para o clipboard
+    /// - Copia o texto final para o clipboard (a menos que `copyToClipboard` seja `false`)
     func transcribeFile(
         url: URL,
         mode: AudioFileTranscriber.Mode,
         numSpeakers: Int? = nil,
+        preTranscodedURL: URL? = nil,
+        copyToClipboard: Bool = true,
         onProgress: @escaping @MainActor (FileTranscriptionPhase) -> Void
     ) async throws -> FileTranscriptionOutcome {
         let fileTranscriber = AudioFileTranscriber(
@@ -74,6 +76,7 @@ final class FileTranscriptionCoordinator {
             url: url,
             mode: mode,
             numSpeakers: numSpeakers,
+            preTranscodedURL: preTranscodedURL,
             onProgress: onProgress
         )
 
@@ -106,8 +109,12 @@ final class FileTranscriptionCoordinator {
             samplesForHistory
         )
 
-        // Copia para o clipboard
-        textInserter.copyToClipboard(result.text)
+        // Copia para o clipboard. Em lote a `FileTranscriptionQueue` desliga isto
+        // e copia o texto consolidado no fim — senão cada arquivo sobrescreveria
+        // o clipboard e sobraria só o último.
+        if copyToClipboard {
+            textInserter.copyToClipboard(result.text)
+        }
 
         return FileTranscriptionOutcome(result: result, recordID: newID)
     }
