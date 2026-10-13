@@ -159,7 +159,7 @@ final class AppState {
 
     // Instâncias concretas usadas para compor os controllers; expostas como
     // `private` porque os controllers já atendem o resto do app.
-    private let audioCapture: AudioCapture
+    private let audioCapture: RecordingAudioCapture
     private let transcriber: Transcriber
     private let textInserter: TextInserter
     private let llmManager: LLMCorrectionManager
@@ -171,7 +171,7 @@ final class AppState {
 
     init(skipBundlePermissionCheck: Bool = false) {
         let micManager = MicrophoneManager(skipBundlePermissionCheck: skipBundlePermissionCheck)
-        let audio = AudioCapture()
+        let audio = RecordingAudioCapture()
         let asr = Transcriber()
         let inserter = TextInserter()
         let llm = LLMCorrectionManager()
@@ -188,7 +188,13 @@ final class AppState {
             audioCapture: audio,
             transcriber: asr,
             textInserter: inserter,
-            microphoneManager: micManager
+            microphoneManager: micManager,
+            includesSystemAudio: { UserDefaults.standard.bool(forKey: RecordingAudioCapture.systemAudioEnabledKey) },
+            includesMicrophone: { UserDefaults.standard.bool(forKey: RecordingAudioCapture.microphoneWithSystemAudioKey) },
+            setRecordingSource: { system in
+                UserDefaults.standard.set(false, forKey: RecordingAudioCapture.microphoneWithSystemAudioKey)
+                UserDefaults.standard.set(system, forKey: RecordingAudioCapture.systemAudioEnabledKey)
+            }
         )
         self.llmCoordinator = LLMCoordinator(
             llmManager: llm,
@@ -431,6 +437,8 @@ final class AppState {
     }
 
     /// Pré-aquece o `AudioCapture` com o device prioritário atual.
+    func toggleRecordingSource() { recordingController.toggleRecordingSource() }
+
     func warmUpAudioCapture() async {
         await recordingController.warmUpAudioCapture()
     }

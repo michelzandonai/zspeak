@@ -1,0 +1,1177 @@
+{
+  "version": "1.0.65",
+  "baseline_version": "1.0.64",
+  "measured_at_utc": "2026-10-13T00:28:20.425282+00:00",
+  "hardware": "Apple M5 Pro",
+  "source_sha256": {
+    "zspeak/AudioSamplePadding.swift": "74dbf319b71cfebc2b16251826748e65509b85c9456e2a39bbd27e0fa6a3a765",
+    "zspeak/AudioFileTranscriber.swift": "2e29120ec339b9b17a9eadb048058df8d87831c28655ae471e3f925a5c3ce0e1",
+    "zspeak/LiveTranscription.swift": "79a61a083c8e4ddab9e958f322c091b1ccdf9335caee7306f87448c12434f597",
+    "zspeak/RecordingController.swift": "bf2284bd68f7391220e3494a5d6b8e04a094ea205e23810d3a30c6fa4837d623",
+    "Tests/Support/SpeechPreparationReference.swift": "c930248108712ebc5a91b533d7f03d5e0466aba6e495ddf6e2d16e0b43d72571",
+    "scripts/benchmarks/SpeechPreparationBenchmark.swift": "c32b55341ca9039778f2b0b3f2c6f0a187f8f924c4c5564996ad50473e48f36e"
+  },
+  "preparation_benchmark": {
+    "baseline_version": "1.0.64",
+    "os": "Version 26.6.2 (Build 25G83)",
+    "quality_gate": "identical_float32_bits",
+    "rows": [
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.113209,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.010541,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.146417,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.004833,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.075375,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.001875,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.076875,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.005791,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.084291,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.023542,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.055708,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.002084,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.055959,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.001834,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.058208,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.003417,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.055291,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.003333,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.059708,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.002042,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.052333,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.002541,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.056167,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.005459,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.056166,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.004166,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.051959,
+        "name": "preparation_rms",
+        "samples_out": 16000,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 1,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.0015,
+        "name": "segment_padding",
+        "samples_out": 24000,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.530125,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.079666,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.610542,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.024333,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.702667,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.009209,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.545833,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.0215,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.552958,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.03075,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.55375,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.010375,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.667084,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.020083,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.623625,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.018833,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.514917,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.018125,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.568541,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.008917,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.507042,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.009459,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.663917,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.019125,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.619833,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.019,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.513208,
+        "name": "preparation_rms",
+        "samples_out": 126240,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 8,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.008958,
+        "name": "segment_padding",
+        "samples_out": 136000,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 4.114542,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.563709,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 4.597667,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.075125,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 4.15625,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.071958,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 4.623958,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.138625,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 4.052792,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.153792,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 4.625625,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.068542,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 4.050583,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.087916,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 4.686958,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.133541,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 4.197875,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.131,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 4.03225,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.091875,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 4.285416,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.086042,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 4.178833,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.129375,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 4.146625,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 0.135583,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 4.179625,
+        "name": "preparation_rms",
+        "samples_out": 950240,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 60,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.071,
+        "name": "segment_padding",
+        "samples_out": 968000,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 43.681208,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 6.7335,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 43.603167,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.843625,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 43.450666,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.684458,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 42.333625,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 1.545666,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 45.7855,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 1.599709,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 46.168834,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.72325,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 43.581,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.675166,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 42.969167,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 1.369709,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 44.485375,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 1.56075,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 44.534959,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.746041,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 43.707917,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.846625,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 42.739,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 1.523334,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 5
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 46.945834,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": true,
+        "bit_exact": true,
+        "elapsed_ms": 1.8475,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 46.369709,
+        "name": "preparation_rms",
+        "samples_out": 9590240,
+        "trial": 6
+      },
+      {
+        "audio_seconds": 600,
+        "baseline": false,
+        "bit_exact": true,
+        "elapsed_ms": 0.810083,
+        "name": "segment_padding",
+        "samples_out": 9608000,
+        "trial": 6
+      }
+    ]
+  },
+  "asr_quality": {
+    "baseline_version": "1.0.64",
+    "rows": [
+      {
+        "audio_seconds": 2.784625,
+        "baseline_asr_ms": [
+          102.771459,
+          94.944792,
+          104.649209
+        ],
+        "baseline_cer": 0,
+        "baseline_wer": 0,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          102.137084,
+          100.437667,
+          97.000875
+        ],
+        "candidate_cer": 0,
+        "candidate_wer": 0,
+        "case": "pt-short",
+        "same_text": true
+      },
+      {
+        "audio_seconds": 13.24525,
+        "baseline_asr_ms": [
+          156.0395,
+          131.668917,
+          129.551292
+        ],
+        "baseline_cer": 0.017045454545454544,
+        "baseline_wer": 0.06451612903225806,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          141.501292,
+          140.932917,
+          129.543875
+        ],
+        "candidate_cer": 0.017045454545454544,
+        "candidate_wer": 0.06451612903225806,
+        "case": "pt-technical",
+        "same_text": true
+      },
+      {
+        "audio_seconds": 2.784625,
+        "baseline_asr_ms": [
+          86.670041,
+          84.591375,
+          87.710583
+        ],
+        "baseline_cer": 0,
+        "baseline_wer": 0,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          88.590208,
+          86.866958,
+          87.712959
+        ],
+        "candidate_cer": 0,
+        "candidate_wer": 0,
+        "case": "quiet-speech",
+        "same_text": true
+      },
+      {
+        "audio_seconds": 2.784625,
+        "baseline_asr_ms": [
+          93.519083,
+          91.480958,
+          91.902375
+        ],
+        "baseline_cer": 0,
+        "baseline_wer": 0,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          90.632916,
+          91.923834,
+          91.45075
+        ],
+        "candidate_cer": 0,
+        "candidate_wer": 0,
+        "case": "rumble-speech",
+        "same_text": true
+      },
+      {
+        "audio_seconds": 3.984625,
+        "baseline_asr_ms": [
+          86.929792,
+          87.723875,
+          87.953708
+        ],
+        "baseline_cer": 0.08333333333333333,
+        "baseline_wer": 0.16666666666666666,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          86.214167,
+          85.855292,
+          85.37
+        ],
+        "candidate_cer": 0.08333333333333333,
+        "candidate_wer": 0.16666666666666666,
+        "case": "padded-speech",
+        "same_text": true
+      },
+      {
+        "audio_seconds": 5,
+        "baseline_asr_ms": [
+          0.0005,
+          0,
+          4.2e-05
+        ],
+        "baseline_cer": 0,
+        "baseline_wer": 0,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          4.2e-05,
+          4.2e-05,
+          0
+        ],
+        "candidate_cer": 0,
+        "candidate_wer": 0,
+        "case": "silence",
+        "same_text": true
+      }
+    ]
+  },
+  "tests": {
+    "standard": 592,
+    "focused": 41,
+    "native_capture": 2,
+    "live_benchmark": 1,
+    "new_unit_regressions": 6
+  },
+  "scope": "Padding com uma cópia, snapshots/commit independentes e preview fechado antes de drenar o pipe. Modelo, filtros, VAD, normalização, margens e decodificação mantidos.",
+  "native_capture": {
+    "first_microphone_ms": 652.1,
+    "stop_ms": 64.57,
+    "asr_ms": 158.74,
+    "audio_seconds": 4.58,
+    "fixture_recognized": true
+  },
+  "live_transcription": {
+    "audio_seconds": 13.25,
+    "updates": 17,
+    "growing_updates": 16,
+    "first_partial_seconds": 0.89,
+    "max_gap_seconds": 0.87,
+    "final_characters": 180
+  }
+}

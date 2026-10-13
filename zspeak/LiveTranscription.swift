@@ -59,18 +59,24 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
     }
 
     func finish() async throws -> String {
-        isClosed = true
-        pendingPreview = false
-        processingTask?.cancel()
-        processingTask = nil
+        await closeProcessing()
         return lastPublishedText
     }
 
     func cancel() async {
+        await closeProcessing()
+    }
+
+    private func closeProcessing() async {
         isClosed = true
         pendingPreview = false
-        processingTask?.cancel()
+        let task = processingTask
+        task?.cancel()
+        // CoreML pode estar dentro de uma prediction não cancelável. Espera
+        // esse trabalho terminar antes do batch final usar o mesmo ANE.
+        await task?.value
         processingTask = nil
+        samples = []
     }
 
     private func requestPreviewIfNeeded(force: Bool) {
@@ -96,7 +102,10 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
                 searchStart: Self.commitSearchStartSamples,
                 windowSize: Self.commitCutWindowSamples
             )
-            let commitChunk = Array(samples[0..<cut])
+            let commitChunk = AudioSamplePadding.addingSilence(
+                to: samples[0..<cut], trailing: Self.trailingPaddingSamples,
+                minimumCount: Self.minimumPreviewSamples
+            )
             samples.removeFirst(cut)
             lastRequestedSampleCount = samples.count
             pendingPreview = true
@@ -107,7 +116,9 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
         }
 
         lastRequestedSampleCount = samples.count
-        let snapshot = samples
+        // Snapshot já independente: append não precisa copiar toda a janela
+        // enquanto a inferência aguarda, além da cópia feita para o padding.
+        let snapshot = Self.prepareForPreview(samples)
         processingTask = Task { [weak self] in
             await self?.processPreview(snapshot)
         }
@@ -115,7 +126,8 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
 
     private func processPreview(_ snapshot: [Float]) async {
         do {
-            let text = try await transcribePreview(Self.prepareForPreview(snapshot))
+            try Task.checkCancellation()
+            let text = try await transcribePreview(snapshot)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !Task.isCancelled {
                 publish(windowText: text)
@@ -132,7 +144,8 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
     /// Transcreve o trecho que saiu da janela e o congela em `confirmedText`.
     private func processCommit(_ chunk: [Float]) async {
         do {
-            let text = try await transcribePreview(Self.prepareForPreview(chunk))
+            try Task.checkCancellation()
+            let text = try await transcribePreview(chunk)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !Task.isCancelled, !text.isEmpty {
                 // Só acumula — publicar aqui encolheria o texto na tela (a
@@ -179,12 +192,9 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
     }
 
     private static func prepareForPreview(_ samples: [Float]) -> [Float] {
-        var prepared = samples
-        prepared.append(contentsOf: repeatElement(Float.zero, count: trailingPaddingSamples))
-        if prepared.count < minimumPreviewSamples {
-            prepared.append(contentsOf: repeatElement(Float.zero, count: minimumPreviewSamples - prepared.count))
-        }
-        return prepared
+        AudioSamplePadding.addingSilence(
+            to: samples, trailing: trailingPaddingSamples, minimumCount: minimumPreviewSamples
+        )
     }
 
     /// Encontra o índice de corte para o commit: o centro da janela de menor

@@ -39,6 +39,17 @@ final class RecordingController {
     /// chip de gravação no overlay — vive aqui (e não na view) para o timer
     /// não zerar quando o overlay é fechado/reaberto no meio da gravação.
     var recordingStartedAt: Date?
+    private(set) var recordingIncludesSystemAudio = false
+    private(set) var recordingIncludesMicrophone = true
+    private(set) var isSwitchingAudioSource = false
+    private var sourceSelectionRevision = 0
+    var recordingSourceLabel: String {
+        _ = sourceSelectionRevision
+        if isSwitchingAudioSource { return "Trocando fonte…" }
+        let system = isRecordingOrPreparing ? recordingIncludesSystemAudio : includesSystemAudio()
+        let microphone = isRecordingOrPreparing ? recordingIncludesMicrophone : (!system || includesMicrophone())
+        return system ? (microphone ? "Computador + microfone" : "Computador") : "Microfone"
+    }
     var isModelReady: Bool = false
     var lastTranscription: String = ""
     var liveTranscriptionPreview: String = ""
@@ -67,6 +78,9 @@ final class RecordingController {
     private let audioCapture: any AudioCapturing
     private let transcriber: any Transcribing
     private let textInserter: any TextInserting
+    private let includesSystemAudio: @MainActor () -> Bool
+    private let includesMicrophone: @MainActor () -> Bool
+    private let setRecordingSource: @MainActor (Bool) -> Void
 
     /// Hooks sem acoplamento direto aos stores (injetados pelo `AppState`):
     /// - `applyVocabularyReplacements`: pós-transcrição, aplica substituições alias→term.
@@ -88,6 +102,7 @@ final class RecordingController {
     // MARK: - Tasks internas
 
     private var recordingTask: Task<Void, Never>?
+    private var captureMonitoringTask: Task<Void, Never>?
     private var recordingSessionID: UUID?
     private var isRequestingMicrophonePermission = false
     private var liveTranscriptionSession: (any LiveTranscriptionSession)?
@@ -119,12 +134,18 @@ final class RecordingController {
         audioCapture: any AudioCapturing,
         transcriber: any Transcribing,
         textInserter: any TextInserting,
-        microphoneManager: MicrophoneManager
+        microphoneManager: MicrophoneManager,
+        includesSystemAudio: @escaping @MainActor () -> Bool = { false },
+        includesMicrophone: @escaping @MainActor () -> Bool = { true },
+        setRecordingSource: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
         self.audioCapture = audioCapture
         self.transcriber = transcriber
         self.textInserter = textInserter
         self.microphoneManager = microphoneManager
+        self.includesSystemAudio = includesSystemAudio
+        self.includesMicrophone = includesMicrophone
+        self.setRecordingSource = setRecordingSource
     }
 
     // MARK: - Inicialização do modelo ASR
@@ -142,7 +163,14 @@ final class RecordingController {
 
     /// Reprepara o engine após inicialização/stop mantendo o hot window ativo.
     func warmUpAudioCapture() async {
+        sourceSelectionRevision += 1
+        guard state == .idle else { return }
+        guard !includesSystemAudio() || includesMicrophone() else {
+            await audioCapture.coolDown()
+            return
+        }
         guard microphoneManager.isPermissionGranted else { return }
+        microphoneManager.refreshDevices()
         // Mesmo candidato da próxima gravação (respeita bloqueados); lista
         // vazia = nenhum mic permitido — nada a aquecer.
         guard let firstCandidate = microphoneManager.recordingCandidateUIDs().first else { return }
@@ -186,6 +214,61 @@ final class RecordingController {
         }
     }
 
+    /// Mantém o timer, o preview e o destino do texto; só troca a entrada de áudio.
+    func toggleRecordingSource() {
+        guard !isSwitchingAudioSource else { return }
+        guard state != .preparing else {
+            errorMessage = "Aguarde a gravação começar para trocar a fonte."
+            return
+        }
+        let targetSystem = !(state == .recording ? recordingIncludesSystemAudio : includesSystemAudio())
+        guard state == .recording else {
+            setRecordingSource(targetSystem)
+            sourceSelectionRevision += 1
+            Task { await warmUpAudioCapture() }
+            return
+        }
+        if !targetSystem {
+            microphoneManager.refreshPermissionState()
+            microphoneManager.refreshDevices()
+            guard microphoneManager.isPermissionGranted else {
+                errorMessage = "Autorize o microfone em Configurações → Permissões para trocar para sua voz. A captura atual continua."
+                return
+            }
+        }
+        let candidates: [String?] = targetSystem ? [nil] : microphoneManager.recordingCandidateUIDs()
+        guard let device = candidates.first else {
+            errorMessage = "Nenhum microfone disponível para a troca. A captura atual continua."
+            return
+        }
+        isSwitchingAudioSource = true
+        captureMonitoringTask?.cancel()
+        captureMonitoringTask = nil
+        let previousTask = recordingTask
+        let sessionID = recordingSessionID
+        recordingTask = Task {
+            await previousTask?.value
+            defer { isSwitchingAudioSource = false }
+            guard !Task.isCancelled, state == .recording, recordingSessionID == sessionID else { return }
+            do {
+                try await audioCapture.switchSource(deviceUID: device, includesSystemAudio: targetSystem)
+                guard !Task.isCancelled, recordingSessionID == sessionID else { return }
+                recordingIncludesSystemAudio = targetSystem
+                recordingIncludesMicrophone = !targetSystem
+                microphoneManager.activeMicrophoneID = targetSystem ? nil : device
+                setRecordingSource(targetSystem)
+                sourceSelectionRevision += 1
+                errorMessage = nil
+            } catch {
+                guard !Task.isCancelled, recordingSessionID == sessionID else { return }
+                errorMessage = "Não foi possível trocar a fonte: \(error.localizedDescription)"
+            }
+            if state == .recording, let sessionID, recordingSessionID == sessionID {
+                monitorCapture(sessionID: sessionID, startupGrace: .seconds(Self.firstSampleTimeoutSeconds))
+            }
+        }
+    }
+
     func startRecordingIfIdle() {
         guard state == .idle else { return }
         startRecording()
@@ -199,6 +282,8 @@ final class RecordingController {
     /// Cancela gravação em andamento (ESC). Aceita `.preparing` e `.recording`.
     func cancelRecording() {
         guard isRecordingOrPreparing else { return }
+        captureMonitoringTask?.cancel()
+        captureMonitoringTask = nil
         let taskToCancel = recordingTask
         let sessionID = recordingSessionID
         state = .idle
@@ -224,17 +309,22 @@ final class RecordingController {
             return
         }
 
-        microphoneManager.refreshPermissionState()
-        logger.debug("startRecording: permissão mic = \(self.microphoneManager.permissionState == .authorized ? "OK" : "NEGADA", privacy: .public)")
-        guard microphoneManager.isPermissionGranted else {
-            logger.error("startRecording: sem permissão de microfone, estado = \(String(describing: self.microphoneManager.permissionState))")
-            resolveMicrophonePermission()
-            return
+        let sessionIncludesSystemAudio = includesSystemAudio()
+        let sessionIncludesMicrophone = !sessionIncludesSystemAudio || includesMicrophone()
+        if sessionIncludesMicrophone {
+            microphoneManager.refreshPermissionState()
+            microphoneManager.refreshDevices()
+            guard microphoneManager.isPermissionGranted else {
+                resolveMicrophonePermission()
+                return
+            }
         }
 
         onRecordingWillStart?()
 
         state = .preparing
+        recordingIncludesSystemAudio = sessionIncludesSystemAudio
+        recordingIncludesMicrophone = sessionIncludesMicrophone
         recordingStartedAt = nil
         errorMessage = nil
         TextInserter.saveFocusedApp()
@@ -274,8 +364,9 @@ final class RecordingController {
         // "inicia" mas não entrega áudio (device zumbi, race do HAL) cai para
         // o próximo candidato em vez de prender o app em "Preparando...".
         recordingTask = Task {
+            guard !Task.isCancelled, recordingSessionID == sessionID else { return }
             let onSamples = prepareLiveTranscriptionIfNeeded(sessionID: sessionID)
-            let candidates = microphoneManager.recordingCandidateUIDs()
+            let candidates: [String?] = sessionIncludesMicrophone ? microphoneManager.recordingCandidateUIDs() : [nil]
 
             guard !candidates.isEmpty else {
                 logger.error("startRecording: nenhum microfone permitido (todos bloqueados/desconectados)")
@@ -296,7 +387,9 @@ final class RecordingController {
                     try await audioCapture.start(
                         deviceUID: uid,
                         onFirstSample: onFirstSample,
-                        onSamples: onSamples
+                        onSamples: onSamples,
+                        includesSystemAudio: sessionIncludesSystemAudio,
+                        includesMicrophone: sessionIncludesMicrophone
                     )
                 } catch {
                     logger.error("startRecording: \(label, privacy: .public) falhou (\(String(describing: error), privacy: .public))\(isLast ? "" : " — tentando próximo candidato", privacy: .public)")
@@ -304,6 +397,17 @@ final class RecordingController {
                         _ = await audioCapture.stop()
                     }
                     if Task.isCancelled { return }
+                    // Permissão/erro da saída do computador não se resolve
+                    // trocando o microfone; mostra a ação necessária sem repetir prompts.
+                    if let systemError = error as? SystemAudioCaptureError {
+                        await cancelLiveTranscription()
+                        guard recordingSessionID == sessionID else { return }
+                        microphoneManager.activeMicrophoneID = nil
+                        state = .idle
+                        recordingSessionID = nil
+                        errorMessage = systemError.localizedDescription
+                        return
+                    }
                     if isLast { break }
                     continue
                 }
@@ -315,6 +419,9 @@ final class RecordingController {
                 // move .preparing → .recording; sem samples até o prazo, o
                 // device é zumbi — derruba e tenta o próximo.
                 if await waitForFirstSample(sessionID: sessionID) {
+                    if recordingSessionID == sessionID, state == .recording, !isSwitchingAudioSource {
+                        monitorCapture(sessionID: sessionID)
+                    }
                     return
                 }
                 guard recordingSessionID == sessionID, !Task.isCancelled else { return }
@@ -330,13 +437,15 @@ final class RecordingController {
             guard recordingSessionID == sessionID else { return }
             state = .idle
             recordingSessionID = nil
-            errorMessage = "Não foi possível iniciar gravação em nenhum microfone disponível"
+            errorMessage = sessionIncludesMicrophone
+                ? "Não foi possível iniciar gravação em nenhum microfone disponível"
+                : "Não foi possível iniciar a captura do áudio do computador"
         }
     }
 
     /// Prazo para o primeiro sample chegar após `start()` OK (cold path real
     /// fica em ~100–400 ms; folga para devices Bluetooth acordando).
-    static let firstSampleTimeoutSeconds: TimeInterval = 2.0
+    nonisolated static let firstSampleTimeoutSeconds: TimeInterval = 2.0
 
     /// Espera o primeiro sample (state sai de .preparing) até o timeout.
     /// Retorna true se a gravação engatou (ou a sessão mudou/foi parada pelo
@@ -354,7 +463,38 @@ final class RecordingController {
         return state != .preparing
     }
 
+    private func monitorCapture(sessionID: UUID, startupGrace: Duration = .zero) {
+        captureMonitoringTask?.cancel()
+        // Após trocar a fonte, o engine Bluetooth pode abrir antes do primeiro
+        // buffer. Aplica o mesmo prazo do início sem reiniciar a sessão.
+        let startupDeadline = ContinuousClock.now.advanced(by: startupGrace)
+        captureMonitoringTask = Task { [weak self, audioCapture] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(250)) }
+                catch { return }
+                guard let self, self.recordingSessionID == sessionID,
+                      self.state == .recording else { return }
+                let receivingAudio = await audioCapture.isReceivingAudio()
+                // A sessão pode ter sido encerrada enquanto consultávamos o actor.
+                guard !Task.isCancelled, self.recordingSessionID == sessionID,
+                      self.state == .recording else { return }
+                if !receivingAudio && ContinuousClock.now >= startupDeadline {
+                    self.errorMessage = !self.recordingIncludesMicrophone
+                        ? "A captura do computador foi interrompida. A gravação foi encerrada; tente novamente."
+                        : self.recordingIncludesSystemAudio
+                        ? "O microfone ou a captura do computador foi interrompido. A gravação foi encerrada; tente novamente."
+                        : "O microfone foi desconectado ou parou de enviar áudio. A gravação foi encerrada; tente novamente."
+                    self.microphoneManager.refreshDevices()
+                    self.stopRecording()
+                    return
+                }
+            }
+        }
+    }
+
     private func stopRecording() {
+        captureMonitoringTask?.cancel()
+        captureMonitoringTask = nil
         let taskToStop = recordingTask
         let sessionID = recordingSessionID
         state = .processing
@@ -415,7 +555,7 @@ final class RecordingController {
                 )
 
                 let rawText = try await PerfSignposter.measure(.asrTranscribe, metadata: [
-                    "source": "microphone",
+                    "source": recordingIncludesSystemAudio ? "microphone_and_system" : "microphone",
                     "samples_in": "\(samples.count)",
                     "samples_asr": "\(asrSamples.count)",
                     "trimmed_samples": "\(trimResult.removedSampleCount)",
@@ -540,14 +680,20 @@ final class RecordingController {
 
         await liveTranscriptionStartTask?.value
         liveTranscriptionStartTask = nil
-        await liveAudioPumpTask?.value
-        liveAudioPumpTask = nil
-        liveAudioPipe = nil
-
         guard let liveTranscriptionSession else { return nil }
+        // Fecha o preview ANTES de drenar o pipe. A cauda já foi preservada
+        // por audioCapture.stop(); só o batch final precisa transcrevê-la.
+        // Drenar primeiro disparava previews extras enquanto o usuário esperava.
+        defer {
+            liveAudioPumpTask = nil
+            liveAudioPipe = nil
+        }
         do {
-            return try await liveTranscriptionSession.finish()
+            let text = try await liveTranscriptionSession.finish()
+            await liveAudioPumpTask?.value
+            return text
         } catch {
+            await liveAudioPumpTask?.value
             logger.error("finishLiveTranscription: falhou (\(error.localizedDescription, privacy: .public))")
             return nil
         }
@@ -563,8 +709,8 @@ final class RecordingController {
 
         await liveTranscriptionStartTask?.value
         liveTranscriptionStartTask = nil
-        await liveAudioPumpTask?.value
         await liveTranscriptionSession?.cancel()
+        await liveAudioPumpTask?.value
         clearLiveTranscriptionState()
     }
 

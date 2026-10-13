@@ -160,6 +160,7 @@ final class PreRollBuffer: @unchecked Sendable {
     private var storage: [Float]
     private var writeIndex: Int = 0
     private var hasWrapped: Bool = false
+    private var lastSampleTime: CFAbsoluteTime?
     private let lock = NSLock()
 
     init(capacity: Int) {
@@ -167,10 +168,11 @@ final class PreRollBuffer: @unchecked Sendable {
         self.storage = [Float](repeating: 0, count: self.capacity)
     }
 
-    func append(_ newSamples: [Float]) {
+    func append(_ newSamples: [Float], at timestamp: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) {
         guard capacity > 0, !newSamples.isEmpty else { return }
         lock.lock()
         defer { lock.unlock() }
+        lastSampleTime = timestamp
         for sample in newSamples {
             storage[writeIndex] = sample
             writeIndex += 1
@@ -179,6 +181,27 @@ final class PreRollBuffer: @unchecked Sendable {
                 hasWrapped = true
             }
         }
+    }
+
+    /// Um engine pode continuar marcado como ativo após o Bluetooth parar de
+    /// entregar áudio. Só reutilizamos o pre-roll se houve samples recentes.
+    func hasRecentSamples(now: CFAbsoluteTime, maxAge: TimeInterval) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return hasRecentActivityLocked(now: now, maxAge: maxAge) && (hasWrapped || writeIndex > 0)
+    }
+
+    /// Drenar o pre-roll não significa que o hardware parou de enviar áudio.
+    func hasRecentActivity(now: CFAbsoluteTime, maxAge: TimeInterval) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return hasRecentActivityLocked(now: now, maxAge: maxAge)
+    }
+
+    private func hasRecentActivityLocked(now: CFAbsoluteTime, maxAge: TimeInterval) -> Bool {
+        guard let lastSampleTime else { return false }
+        let age = now - lastSampleTime
+        return age >= 0 && age <= maxAge
     }
 
     /// Retorna as amostras em ordem cronológica (mais antiga primeiro).
@@ -219,6 +242,7 @@ final class PreRollBuffer: @unchecked Sendable {
         defer { lock.unlock() }
         writeIndex = 0
         hasWrapped = false
+        lastSampleTime = nil
     }
 }
 
@@ -289,7 +313,11 @@ actor AudioCapture {
     /// 250 ms em 16 kHz: reduz chamadas ao streaming ASR sem atrasar a UI.
     private static let liveChunkSampleCount = targetSampleRate / 4
 
-    private var engine = AVAudioEngine()
+    private var engine: any AudioCaptureEngine
+    private let engineFactory: @Sendable () -> any AudioCaptureEngine
+    private let systemDefaultUIDProvider: @Sendable () -> String?
+    private let now: @Sendable () -> CFAbsoluteTime
+    private var engineGeneration = UUID()
     private let samplesBuffer = SynchronizedBuffer()
     /// Ring buffer alimentado pelo tap enquanto o engine está aberto em hot window.
     /// Seu conteúdo é prefixado ao início de cada gravação para eliminar perda do
@@ -317,9 +345,11 @@ actor AudioCapture {
     nonisolated let audioLevelMonitor = AudioLevelMonitor()
     private var configObserver: NSObjectProtocol?
     private var currentDeviceUID: String?
+    private var currentResolvedDeviceUID: String?
     /// Default input device original do HAL, salvo quando trocamos temporariamente.
     /// Restaurado em `stop()` ou em caso de erro durante `start()`.
     private var originalDefaultInputDeviceID: AudioDeviceID?
+    private var overriddenDefaultInputDeviceID: AudioDeviceID?
     /// Timestamp (CFAbsoluteTime) do momento em que `start()` foi invocada.
     /// Marca a intenção do usuário — usado para medir latência total até o
     /// primeiro sample chegar (critério que o usuário percebe).
@@ -336,6 +366,9 @@ actor AudioCapture {
     /// uniqueID do device ativo no hot window — se divergir do que `start()`
     /// recebe, descartamos o hot e reconfiguramos.
     private var hotWindowDeviceUID: String?
+    /// Identidade concreta do input: `nil` como preferência não identifica o
+    /// hardware, pois o padrão pode passar de MacBook para AirPods e vice-versa.
+    private var hotWindowResolvedDeviceUID: String?
     /// Timestamp do último `warmUp` concluído com sucesso. Usado pelo
     /// `PerfSignposter` para reportar a idade do prepare (`warmup_age_ms`)
     /// no momento do start — útil para correlacionar fast-path frio vs morno.
@@ -353,10 +386,45 @@ actor AudioCapture {
     /// (overlay com spinner) para `.recording` (overlay com waveform) apenas
     /// quando o engine está de fato capturando áudio.
     private var onFirstSampleCallback: (@Sendable () -> Void)?
+    private var timedSamplesHandler: (@Sendable (TimestampedAudioChunk) -> Void)?
+
+    init(
+        engineFactory: @escaping @Sendable () -> any AudioCaptureEngine = { AVAudioEngine() },
+        systemDefaultUIDProvider: @escaping @Sendable () -> String? = { MicrophoneManager.halDefaultInputUID() },
+        now: @escaping @Sendable () -> CFAbsoluteTime = { CFAbsoluteTimeGetCurrent() }
+    ) {
+        self.engineFactory = engineFactory
+        self.systemDefaultUIDProvider = systemDefaultUIDProvider
+        self.now = now
+        self.engine = engineFactory()
+    }
+
+    private func matchesHotWindow(deviceUID: String?) -> Bool {
+        guard isRunning, engine.isRunning, isHotWindowActive,
+              hotWindowDeviceUID == deviceUID,
+              let resolvedUID = deviceUID ?? systemDefaultUIDProvider() else { return false }
+        return hotWindowResolvedDeviceUID == resolvedUID
+    }
+
+    private func replaceEngine() {
+        if let observer = configObserver {
+            NotificationCenter.default.removeObserver(observer)
+            configObserver = nil
+        }
+        engineGeneration = UUID()
+        engine = engineFactory()
+    }
 
     var isCapturing: Bool { isRunning }
     /// Exposto para testes/diagnóstico — indica se há engine em hot window.
     var isHot: Bool { isHotWindowActive }
+
+    /// Saúde da captura real, inclusive quando o Bluetooth mantém o engine
+    /// aparentemente ativo sem entregar buffers. Silêncio válido conta como áudio.
+    func isReceivingAudio() -> Bool {
+        isRunning && engine.isRunning
+            && preRollBuffer.hasRecentActivity(now: now(), maxAge: RecordingController.firstSampleTimeoutSeconds)
+    }
 
     /// Leitura não-isolated do nível de áudio. Evita hop para o actor no hotpath
     /// da UI (o `WaveformView` faz pull 30 vezes por segundo).
@@ -387,15 +455,31 @@ actor AudioCapture {
         onFirstSample: (@Sendable () -> Void)? = nil,
         onSamples: (@Sendable ([Float]) -> Void)? = nil
     ) async throws {
-        let callTime = CFAbsoluteTimeGetCurrent()
+        try await startSession(deviceUID: deviceUID, onFirstSample: onFirstSample, onSamples: onSamples, timedHandler: nil)
+    }
+
+    func startTimestamped(
+        deviceUID: String?, onFirstSample: (@Sendable () -> Void)?,
+        onChunk: @escaping @Sendable (TimestampedAudioChunk) -> Void
+    ) async throws {
+        try await startSession(deviceUID: deviceUID, onFirstSample: onFirstSample, onSamples: nil, timedHandler: onChunk)
+    }
+
+    private func startSession(
+        deviceUID: String?, onFirstSample: (@Sendable () -> Void)?,
+        onSamples: (@Sendable ([Float]) -> Void)?,
+        timedHandler: (@Sendable (TimestampedAudioChunk) -> Void)?
+    ) async throws {
+        let callTime = now()
 
         if isRunning && !isHotWindowActive {
-            engine.inputNode.removeTap(onBus: 0)
+            engine.removeInputTap()
             engine.stop()
             isRunning = false
         }
 
-        let canReusePrewarm = isRunning && engine.isRunning && isHotWindowActive && hotWindowDeviceUID == deviceUID
+        let canReusePrewarm = timedHandler == nil && timedSamplesHandler == nil && matchesHotWindow(deviceUID: deviceUID)
+            && preRollBuffer.hasRecentSamples(now: callTime, maxAge: Self.preRollSeconds)
         let pathLabel = canReusePrewarm ? "fast" : "cold"
         let deviceChanged = isHotWindowActive && !canReusePrewarm
         let warmupAgeMs = lastWarmUpTimestamp.map { (callTime - $0) * 1000 } ?? -1
@@ -431,10 +515,12 @@ actor AudioCapture {
         engineStartTimestamp = nil
         firstSampleTimestamp = nil
         onFirstSampleCallback = onFirstSample
+        timedSamplesHandler = timedHandler
         isRunning = true
 
         do {
             if canReusePrewarm {
+                currentResolvedDeviceUID = hotWindowResolvedDeviceUID
                 // Fast path real: HAL já está aberto desde o warmUp. O clique só
                 // promove o hot window para gravação ativa.
                 //
@@ -461,11 +547,12 @@ actor AudioCapture {
                 engineStartTimestamp = callTime
                 isHotWindowActive = false
                 hotWindowDeviceUID = nil
+                hotWindowResolvedDeviceUID = nil
                 markFirstSampleIfNeeded(at: callTime)
                 logger.info("start: fast path hot window \(String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - callTime) * 1000), privacy: .public)ms preRollSamples=\(hotPreRoll.count, privacy: .public)")
             } else {
                 isRecordingToMain.set(true)
-                engine = AVAudioEngine()
+                replaceEngine()
                 do {
                     try startEngine(deviceUID: deviceUID, baseMeta: baseMeta)
                 } catch {
@@ -477,14 +564,17 @@ actor AudioCapture {
                     // erro propaga e a orquestração cai para o próximo mic.
                     logger.error("start: engine falhou (\(String(describing: error), privacy: .public)) — retry único após 250ms")
                     engine.stop()
+                    engine.removeInputTap()
                     try await Task.sleep(nanoseconds: 250_000_000)
-                    engine = AVAudioEngine()
+                    replaceEngine()
                     try startEngine(deviceUID: deviceUID, baseMeta: baseMeta)
                 }
                 let tEngineStart = engineStartTimestamp ?? CFAbsoluteTimeGetCurrent()
                 logger.info("start: cold path \(String(format: "%.1f", (tEngineStart - callTime) * 1000), privacy: .public)ms")
             }
         } catch {
+            engine.stop()
+            engine.removeInputTap()
             isRecordingToMain.set(false)
             isRunning = false
             liveSampleEmitter.deactivate()
@@ -514,7 +604,7 @@ actor AudioCapture {
     func warmUp(deviceUID: String? = nil) async throws {
         guard !isRunning || isHotWindowActive else { return }
 
-        if isHotWindowActive && hotWindowDeviceUID == deviceUID {
+        if timedSamplesHandler == nil && matchesHotWindow(deviceUID: deviceUID) {
             return
         }
 
@@ -529,12 +619,11 @@ actor AudioCapture {
             try overrideSystemDefaultInput(uniqueID: uid, scope: "warmup")
         }
 
-        engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        inputNode.removeTap(onBus: 0)
-        applyVoiceProcessingIfRequested(to: inputNode)
+        replaceEngine()
+        engine.removeInputTap()
+        applyVoiceProcessingIfRequested()
 
-        let hwFormat = inputNode.outputFormat(forBus: 0)
+        let hwFormat = engine.inputFormat
         guard hwFormat.channelCount > 0, hwFormat.sampleRate > 0 else {
             restoreSystemDefaultInput()
             throw AudioCaptureError.invalidFormat
@@ -542,28 +631,31 @@ actor AudioCapture {
 
         preRollBuffer.clear()
         isRecordingToMain.set(false)
+        timedSamplesHandler = nil
         firstSampleScheduled.reset()
         firstResampleLogged.reset()
         let iTap = PerfSignposter.begin(.installTap, metadata: warmMeta)
-        installTap(on: inputNode)
+        installTap()
         PerfSignposter.end(iTap, metadata: warmMeta)
         let iPrep = PerfSignposter.begin(.enginePrepare, metadata: warmMeta)
         engine.prepare()
         PerfSignposter.end(iPrep, metadata: warmMeta)
 
         let iStart = PerfSignposter.begin(.engineStart, metadata: warmMeta)
+        currentResolvedDeviceUID = deviceUID ?? systemDefaultUIDProvider()
         do {
             try engine.start()
             PerfSignposter.end(iStart, metadata: warmMeta)
-            engineStartTimestamp = CFAbsoluteTimeGetCurrent()
+            engineStartTimestamp = now()
         } catch {
             PerfSignposter.end(iStart, metadata: warmMeta)
-            engine.inputNode.removeTap(onBus: 0)
+            engine.removeInputTap()
             engine.stop()
             restoreSystemDefaultInput()
             isRunning = false
             isHotWindowActive = false
             hotWindowDeviceUID = nil
+            hotWindowResolvedDeviceUID = nil
             isRecordingToMain.set(false)
             throw error
         }
@@ -573,7 +665,8 @@ actor AudioCapture {
         isRunning = true
         isHotWindowActive = true
         hotWindowDeviceUID = deviceUID
-        lastWarmUpTimestamp = CFAbsoluteTimeGetCurrent()
+        hotWindowResolvedDeviceUID = currentResolvedDeviceUID
+        lastWarmUpTimestamp = now()
         logger.info("warmUp: hot window ativo para deviceUID=\(deviceUID ?? "system-default", privacy: .public)")
     }
 
@@ -592,7 +685,7 @@ actor AudioCapture {
             NotificationCenter.default.removeObserver(observer)
             configObserver = nil
         }
-        engine.inputNode.removeTap(onBus: 0)
+        engine.removeInputTap()
         engine.stop()
         restoreSystemDefaultInput()
         preRollBuffer.clear()
@@ -600,9 +693,11 @@ actor AudioCapture {
         streamResampler.reset()
         isHotWindowActive = false
         hotWindowDeviceUID = nil
+        hotWindowResolvedDeviceUID = nil
         isRunning = false
         isRecordingToMain.set(false)
         audioLevelMonitor.reset()
+        timedSamplesHandler = nil
     }
 
     /// Configura e inicia o engine (usado no start e na reconexão)
@@ -624,11 +719,10 @@ actor AudioCapture {
         // NB: engine já foi recriado pelo chamador (`start()`), garantindo que
         // nasça alinhado com o default do HAL recém-trocado.
 
-        let inputNode = engine.inputNode
-        inputNode.removeTap(onBus: 0)
-        applyVoiceProcessingIfRequested(to: inputNode)
+        engine.removeInputTap()
+        applyVoiceProcessingIfRequested()
 
-        let hwFormat = inputNode.outputFormat(forBus: 0)
+        let hwFormat = engine.inputFormat
 
         guard hwFormat.channelCount > 0, hwFormat.sampleRate > 0 else {
             logger.error("configureAndStartEngine: formato inválido (channels=\(hwFormat.channelCount), sampleRate=\(hwFormat.sampleRate))")
@@ -636,7 +730,7 @@ actor AudioCapture {
         }
 
         let iTap = PerfSignposter.begin(.installTap, metadata: baseMeta)
-        installTap(on: inputNode)
+        installTap()
         PerfSignposter.end(iTap, metadata: baseMeta)
 
         let iPrep = PerfSignposter.begin(.enginePrepare, metadata: baseMeta)
@@ -644,9 +738,10 @@ actor AudioCapture {
         PerfSignposter.end(iPrep, metadata: baseMeta)
 
         let iStart = PerfSignposter.begin(.engineStart, metadata: baseMeta)
+        currentResolvedDeviceUID = deviceUID ?? systemDefaultUIDProvider()
         try engine.start()
         PerfSignposter.end(iStart, metadata: baseMeta)
-        engineStartTimestamp = CFAbsoluteTimeGetCurrent()
+        engineStartTimestamp = now()
     }
 
     /// Chave em UserDefaults para ligar o Voice Processing nativo da Apple
@@ -663,10 +758,10 @@ actor AudioCapture {
     /// Aplica o Voice Processing quando solicitado. Precisa rodar ANTES de ler
     /// o formato do input (o processamento muda o formato do node). Erro não é
     /// fatal — a captura segue crua, como sempre foi.
-    private func applyVoiceProcessingIfRequested(to inputNode: AVAudioInputNode) {
+    private func applyVoiceProcessingIfRequested() {
         guard Self.isVoiceProcessingRequested() else { return }
         do {
-            try inputNode.setVoiceProcessingEnabled(true)
+            try engine.setVoiceProcessingEnabled(true)
             logger.info("Voice Processing habilitado no input")
         } catch {
             logger.error("Voice Processing indisponível: \(error.localizedDescription, privacy: .public)")
@@ -685,7 +780,7 @@ actor AudioCapture {
     /// de áudio antes do primeiro callback, contra ~85 ms com 4096. Corte direto
     /// de ~74 ms na latência percebida até o primeiro sample chegar. Custo: mais
     /// callbacks/s (~94 vs ~12), cada um ainda é barato (RMS via vDSP + resample).
-    private func installTap(on inputNode: AVAudioInputNode) {
+    private func installTap() {
         // Capturas nonisolated dos helpers usados pelo tap — evitam cruzar o actor
         // no hotpath (o tap roda na render thread, não no actor).
         let mainBuffer = samplesBuffer
@@ -697,18 +792,13 @@ actor AudioCapture {
         let firstSampleLatch = firstSampleScheduled
         let firstResampleLatch = firstResampleLogged
         let liveEmitter = liveSampleEmitter
+        let generation = engineGeneration
+        let timestampProvider = now
+        let timedHandler = timedSamplesHandler
 
-        inputNode.installTap(onBus: 0, bufferSize: 512, format: nil) { [weak self] avBuffer, _ in
-            let tapTime = CFAbsoluteTimeGetCurrent()
+        engine.installInputTap { [weak self] avBuffer, audioTime in
+            let tapTime = timestampProvider()
             let recording = recordingFlag.current
-
-            // Marca primeiro tap callback durante gravação ativa. Único hop
-            // permitido aqui: PerfSignposter aloca String para log; aceitável
-            // 1× por sessão (latch setIfZero garante).
-            let isFirstSampleOfSession = recording && firstSampleLatch.setIfZero()
-            if isFirstSampleOfSession {
-                PerfSignposter.mark(.firstTapCallback)
-            }
 
             // Nível de áudio só é publicado durante gravação ativa — evita
             // que a UI (ou qualquer consumidor) veja atividade enquanto o
@@ -728,7 +818,7 @@ actor AudioCapture {
             }
 
             // Mede custo do PRIMEIRO resample (1× por sessão).
-            let measureFirstResample = isFirstSampleOfSession && firstResampleLatch.setIfZero()
+            let measureFirstResample = recording && firstResampleLatch.setIfZero()
             do {
                 let resampled: [Float]
                 if measureFirstResample {
@@ -741,22 +831,31 @@ actor AudioCapture {
                 // Ring de pre-roll é alimentado SEMPRE que o tap roda — serve
                 // tanto para cobrir o gap de abertura quanto para o gap entre
                 // gravações consecutivas dentro da mesma hot window.
-                ringBuffer.append(resampled)
+                guard !resampled.isEmpty else { return }
+                ringBuffer.append(resampled, at: tapTime)
                 if recording {
-                    mainBuffer.append(resampled)
+                    // No modo combinado, a mistura é o único buffer completo:
+                    // não duplica gravações longas em memória no microfone.
+                    if let timedHandler {
+                        let hostStart = audioTime.isHostTimeValid
+                            ? AVAudioTime.seconds(forHostTime: audioTime.hostTime)
+                            : audioHostTime() - Double(resampled.count) / 16_000
+                        timedHandler(TimestampedAudioChunk(startTime: hostStart, samples: resampled))
+                    } else {
+                        mainBuffer.append(resampled)
+                    }
                     liveEmitter.append(resampled)
+                }
+                // Só confirma gravação após converter samples reais. Um tap
+                // vazio/erro de formato não deve desarmar o watchdog.
+                if recording && firstSampleLatch.setIfZero() {
+                    PerfSignposter.mark(.firstTapCallback)
+                    Task { [weak self] in
+                        await self?.markFirstSampleIfNeeded(at: tapTime, generation: generation)
+                    }
                 }
             } catch {
                 errors.increment()
-            }
-
-            // Hop para o actor apenas UMA vez por sessão de gravação. No fast
-            // path (hot window), o latch já foi setado em `start()`, então isso
-            // vira no-op. No cold path, marca o primeiro sample real.
-            if isFirstSampleOfSession, let self {
-                Task { [weak self] in
-                    await self?.markFirstSampleIfNeeded(at: tapTime)
-                }
             }
         }
     }
@@ -764,8 +863,11 @@ actor AudioCapture {
     /// Registra o timestamp do primeiro sample recebido após `engine.start()` e
     /// loga a latência. No-op depois do primeiro sample de cada sessão.
     /// Invoca `onFirstSampleCallback` (fora do actor) para notificar o chamador.
-    private func markFirstSampleIfNeeded(at timestamp: CFAbsoluteTime) {
-        guard firstSampleTimestamp == nil else { return }
+    private func markFirstSampleIfNeeded(at timestamp: CFAbsoluteTime, generation: UUID? = nil) {
+        guard generation == nil || generation == engineGeneration,
+              isRecordingToMain.current,
+              let startedAt = startCalledTimestamp, timestamp >= startedAt,
+              firstSampleTimestamp == nil else { return }
         firstSampleTimestamp = timestamp
         if let start = engineStartTimestamp {
             let delayMs = (timestamp - start) * 1000
@@ -840,7 +942,13 @@ actor AudioCapture {
         preRollBuffer.clear()
         isHotWindowActive = true
         hotWindowDeviceUID = currentDeviceUID
-        lastWarmUpTimestamp = CFAbsoluteTimeGetCurrent()
+        hotWindowResolvedDeviceUID = currentResolvedDeviceUID
+        lastWarmUpTimestamp = now()
+        if timedSamplesHandler != nil {
+            // O tap combinado aponta para a mistura da sessão encerrada; ele
+            // não pode ser reutilizado como tap de uma gravação só de microfone.
+            tearDownHotWindow()
+        }
         return result
     }
 
@@ -887,7 +995,7 @@ actor AudioCapture {
     // MARK: - Observação de configuração do engine
 
     /// Observa mudanças de configuração do AVAudioEngine (device desconectado, route change, etc.)
-    /// Remove tap, reinstala com formato atualizado e reinicia o engine.
+    /// Invalida o engine para recriá-lo com o hardware e formato atuais no próximo start.
     ///
     /// IMPORTANTE: o observer é vinculado ao `engine` via `object:`, então precisa
     /// ser reinstalado sempre que recriamos o engine (em `start()` cold path e
@@ -897,14 +1005,15 @@ actor AudioCapture {
             NotificationCenter.default.removeObserver(observer)
         }
 
+        let generation = engineGeneration
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
-            object: engine,
+            object: engine.configurationChangeSource,
             queue: nil
         ) { [weak self] _ in
             guard let self else { return }
             Task {
-                await self.handleConfigurationChange()
+                await self.handleConfigurationChange(generation: generation)
             }
         }
     }
@@ -913,15 +1022,12 @@ actor AudioCapture {
     /// Não tenta reinstalar tap — installTap lança NSException (não capturável em Swift)
     /// se o formato for incompatível após config change. O fluxo do AppState trata
     /// amostras vazias como "áudio curto" e volta para idle.
-    private func handleConfigurationChange() {
+    private func handleConfigurationChange(generation: UUID? = nil) {
+        guard generation == nil || generation == engineGeneration else { return }
         // Se o engine foi derrubado pelo sistema durante hot window (sem
         // gravação ativa), desmonta o hot — a próxima gravação cai no cold
         // path. É mais seguro que tentar reinstalar tap com formato antigo.
         if isHotWindowActive && !isRecordingToMain.current {
-            guard !engine.isRunning else {
-                logger.debug("handleConfigurationChange: ignorado (hot window ativo e engine rodando)")
-                return
-            }
             tearDownHotWindow()
             logger.debug("handleConfigurationChange: hot window derrubado pelo HAL, desmontando")
             return
@@ -937,13 +1043,13 @@ actor AudioCapture {
         // porque o tap nunca chega a receber o primeiro buffer. Regressão
         // intermitente introduzida na Onda 1 (reinstalação do observer em
         // warmUp expôs mais esses callbacks benignos).
-        guard firstSampleTimestamp != nil else {
+        guard firstSampleTimestamp != nil || !engine.isRunning else {
             logger.debug("handleConfigurationChange: ignorado (pré-primeiro-sample, HAL estabilizando)")
             return
         }
 
         engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
+        engine.removeInputTap()
         isRunning = false
         isRecordingToMain.set(false)
         audioLevelMonitor.reset()
@@ -951,6 +1057,7 @@ actor AudioCapture {
         if isHotWindowActive {
             isHotWindowActive = false
             hotWindowDeviceUID = nil
+            hotWindowResolvedDeviceUID = nil
             preRollBuffer.clear()
         }
     }
@@ -992,7 +1099,10 @@ actor AudioCapture {
         }
 
         try setDefaultInputDeviceID(deviceID)
-        originalDefaultInputDeviceID = current
+        if originalDefaultInputDeviceID == nil || current != overriddenDefaultInputDeviceID {
+            originalDefaultInputDeviceID = current
+        }
+        overriddenDefaultInputDeviceID = deviceID
 
         // A troca do default propaga ASSÍNCRONO no HAL. Criar o AVAudioEngine
         // antes dela assentar liga o inputNode no device ANTIGO — a gravação
@@ -1012,14 +1122,32 @@ actor AudioCapture {
     /// Restaura o default input device ao valor salvo em `originalDefaultInputDeviceID`.
     /// Idempotente — no-op se nada foi salvo.
     private func restoreSystemDefaultInput() {
-        guard let original = originalDefaultInputDeviceID else { return }
-        defer { originalDefaultInputDeviceID = nil }
+        defer {
+            originalDefaultInputDeviceID = nil
+            overriddenDefaultInputDeviceID = nil
+        }
+        // Não desfaz uma escolha feita pelo usuário/macOS após a nossa troca
+        // temporária (por exemplo, conectar ou retirar os AirPods).
+        guard let original = Self.restorationDeviceID(
+            original: originalDefaultInputDeviceID,
+            overridden: overriddenDefaultInputDeviceID,
+            current: currentDefaultInputDeviceID()
+        ) else { return }
         do {
             try setDefaultInputDeviceID(original)
             logger.debug("restoreSystemDefaultInput: restaurado para deviceID=\(original)")
         } catch {
             logger.error("restoreSystemDefaultInput: falhou restaurar para deviceID=\(original) erro=\(String(describing: error), privacy: .public)")
         }
+    }
+
+    nonisolated static func restorationDeviceID(
+        original: AudioDeviceID?, overridden: AudioDeviceID?, current: AudioDeviceID?
+    ) -> AudioDeviceID? {
+        guard let original, original != kAudioObjectUnknown,
+              let overridden, overridden != kAudioObjectUnknown,
+              current == overridden else { return nil }
+        return original
     }
 
     private func currentDefaultInputDeviceID() -> AudioDeviceID? {

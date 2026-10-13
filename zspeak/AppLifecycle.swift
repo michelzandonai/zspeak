@@ -297,6 +297,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         withObservationTracking {
             _ = appState.state
             _ = appState.recordingStartedAt
+            _ = appState.recordingController.recordingSourceLabel
             _ = appState.isModelReady
             _ = appState.microphoneManager.permissionState
             // Modo compacto: o texto ao vivo aparece no próprio item do tray.
@@ -331,7 +332,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 maxWidth: TrayLivePreview.maxWidth()
             )
         TrayLivePreview.apply(itemPresentation, to: statusItem)
-        statusItem.button?.toolTip = statusText
+        statusItem.button?.toolTip = "\(statusText) · \(appState.recordingController.recordingSourceLabel)"
+        infoPanel.overlayModel.sourceLabel = appState.isRecordingOrPreparing ? appState.recordingController.recordingSourceLabel : nil
 
         // Mini-overlay sob a barra de menu com a cauda recente do texto.
         if infoOverlayVisible {
@@ -354,6 +356,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
 
         addItem(title: statusText, symbolName: statusIconName, enabled: false)
+        addItem(title: "Fonte: \(appState.recordingController.recordingSourceLabel)", symbolName: "waveform", enabled: false)
+        addItem(title: "Alternar computador / minha voz", symbolName: "arrow.triangle.2.circlepath", action: #selector(toggleRecordingSource))
         menu.addItem(.separator())
 
         if promptModeManager.isEnabled {
@@ -477,6 +481,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func toggleSelectionLookupMode() {
         appState.toggleSelectionLookupMode()
+        rebuildMenu()
+    }
+
+    @objc private func toggleRecordingSource() {
+        appState.toggleRecordingSource()
+        updateButton()
         rebuildMenu()
     }
 

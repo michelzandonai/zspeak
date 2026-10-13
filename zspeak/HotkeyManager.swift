@@ -15,6 +15,7 @@ private let defaultTranslateSelectionShortcut = KeyboardShortcuts.Shortcut(
 )
 
 extension KeyboardShortcuts.Name {
+    static let toggleRecordingSource = Self("toggleRecordingSource", default: .init(.a, modifiers: [.control, .option]))
     static let togglePromptMode = Self("togglePromptMode")
     static let toggleSelectionLookupMode = Self("toggleSelectionLookupMode")
     static let translateSelection = Self(
@@ -49,6 +50,8 @@ final class HotkeyManager {
     private(set) var isEventTapActive: Bool = false
 
     // Callbacks
+    private var onToggleRecordingSource: (@MainActor () -> Void)?
+    private var lastSourceShortcutAt: Date?
     private var onToggle: (@MainActor () -> Void)?
     private var onStartRecording: (@MainActor () -> Void)?
     private var onStopRecording: (@MainActor () -> Void)?
@@ -86,8 +89,10 @@ final class HotkeyManager {
         onStopRecording: @escaping @MainActor () -> Void,
         onCancelRecording: @escaping @MainActor () -> Void,
         onTranslateSelection: @escaping @MainActor () -> Void,
-        onToggleSelectionLookupMode: @escaping @MainActor () -> Void
+        onToggleSelectionLookupMode: @escaping @MainActor () -> Void,
+        onToggleRecordingSource: @escaping @MainActor () -> Void = {}
     ) {
+        self.onToggleRecordingSource = onToggleRecordingSource
         self.onToggle = onToggle
         self.onStartRecording = onStartRecording
         self.onStopRecording = onStopRecording
@@ -111,6 +116,10 @@ final class HotkeyManager {
         // customizáveis gravados pelo KeyboardShortcuts.Recorder.
         KeyboardShortcuts.onKeyDown(for: .translateSelection) { [weak self] in
             self?.triggerTranslateSelection(source: "KeyboardShortcuts")
+        }
+
+        KeyboardShortcuts.onKeyDown(for: .toggleRecordingSource) { [weak self] in
+            self?.triggerRecordingSourceSwitch()
         }
 
         KeyboardShortcuts.onKeyDown(for: .toggleSelectionLookupMode) { [weak self] in
@@ -212,6 +221,12 @@ final class HotkeyManager {
                 }
 
                 if !isAutoRepeat,
+                   matchesKeyboardShortcut(keyCode: keyCode, flags: flags, name: .toggleRecordingSource) {
+                    triggerRecordingSourceSwitch()
+                    return
+                }
+
+                if !isAutoRepeat,
                    matchesKeyboardShortcut(keyCode: keyCode, flags: flags, name: .translateSelection) {
                     triggerTranslateSelection(source: "CGEvent")
                     return
@@ -222,6 +237,13 @@ final class HotkeyManager {
                 handleFlagsChanged(keyCode: keyCode, flags: flags)
             }
         }
+    }
+
+    private func triggerRecordingSourceSwitch() {
+        let now = Date()
+        guard lastSourceShortcutAt.map({ now.timeIntervalSince($0) >= 0.45 }) ?? true else { return }
+        lastSourceShortcutAt = now
+        onToggleRecordingSource?()
     }
 
     private func triggerTranslateSelection(source: String) {

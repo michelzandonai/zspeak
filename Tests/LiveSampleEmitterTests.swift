@@ -49,6 +49,21 @@ struct LiveSampleEmitterTests {
 
         #expect(collector.chunks.isEmpty)
     }
+
+    @Test("Buffer grande após parcial emite cada sample em ordem, exatamente uma vez")
+    func largeBurstAfterPartialKeepsSampleOrder() {
+        let emitter = LiveSampleEmitter(chunkSampleCount: 4_000)
+        let collector = ChunkCollector()
+        emitter.reset { collector.append($0) }
+        let samples = (0..<480_007).map { Float($0) }
+        emitter.append(Array(samples.prefix(7)))
+        emitter.append(Array(samples.dropFirst(7)))
+        emitter.flush()
+        #expect(collector.chunks.count == 121)
+        #expect(collector.chunks.dropLast().allSatisfy { $0.count == 4_000 })
+        #expect(collector.chunks.last?.count == 7)
+        #expect(collector.chunks.flatMap { $0 } == samples)
+    }
 }
 
 private final class ChunkCollector: @unchecked Sendable {

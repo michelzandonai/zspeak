@@ -63,6 +63,9 @@ final class OverlayController {
         withObservationTracking {
             _ = appState.state
             _ = appState.recordingStartedAt
+            _ = appState.recordingController.recordingSourceLabel
+            _ = appState.recordingController.recordingIncludesSystemAudio
+            _ = appState.recordingController.recordingIncludesMicrophone
             _ = appState.isApplyingPrompt
             _ = appState.lastLLMResult
             _ = appState.lastLLMPromptName
@@ -99,6 +102,8 @@ final class OverlayController {
         // Sincroniza modelo in-place — SwiftUI reage via @Observable sem recriar views
         model.state = appState.state
         model.recordingStartedAt = appState.recordingStartedAt
+        model.includesSystemAudio = appState.recordingController.recordingIncludesSystemAudio
+        model.includesMicrophone = appState.recordingController.recordingIncludesMicrophone
         model.isModelReady = appState.isModelReady
         model.isApplyingPrompt = appState.isApplyingPrompt
         model.promptModeEnabled = promptModeManager.isEnabled
@@ -324,7 +329,8 @@ struct ZSpeakApp: App {
                 }
             },
             onTranslateSelection: { state.translateSelection() },
-            onToggleSelectionLookupMode: { state.toggleSelectionLookupMode() }
+            onToggleSelectionLookupMode: { state.toggleSelectionLookupMode() },
+            onToggleRecordingSource: { state.toggleRecordingSource() }
         )
 
         // Carrega modelos no startup

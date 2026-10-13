@@ -8,12 +8,37 @@ import SwiftUI
 /// usados — nem quando são o padrão do sistema). O toggle "Usar padrão do
 /// sistema" alterna entre seguir o macOS e a ordem de prioridade própria.
 struct MicrophonePage: View {
+    @Environment(AppState.self) private var appState
+    @AppStorage(RecordingAudioCapture.microphoneWithSystemAudioKey) private var includeMicrophone = false
     @Environment(MicrophoneManager.self) private var microphoneManager
+    @AppStorage(RecordingAudioCapture.systemAudioEnabledKey) private var captureSystemAudio = false
+
+    init(defaults: UserDefaults? = nil) {
+        _includeMicrophone = AppStorage(wrappedValue: false, RecordingAudioCapture.microphoneWithSystemAudioKey, store: defaults)
+        _captureSystemAudio = AppStorage(wrappedValue: false, RecordingAudioCapture.systemAudioEnabledKey, store: defaults)
+    }
 
     var body: some View {
         @Bindable var mic = microphoneManager
 
         Form {
+            Section {
+                Toggle(isOn: $captureSystemAudio) {
+                    ZSRowLabel("Capturar áudio do computador", systemImage: "speaker.wave.2.fill", color: .blue,
+                               subtitle: "Transcreve vídeos, reuniões e outros apps, mesmo usando fones")
+                }
+                if captureSystemAudio {
+                    Toggle("Incluir meu microfone", isOn: $includeMicrophone)
+                    Label(includeMicrophone ? "Microfone + áudio do computador" : "Somente áudio do computador", systemImage: "waveform")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Fontes da gravação")
+            } footer: {
+                Text("Use o mesmo atalho para iniciar e parar. A opção vale para a próxima gravação. Para ouvir nos AirPods sem abrir o microfone, deixe “Incluir meu microfone” desligado. Tudo é transcrito localmente.")
+            }
+
             Section {
                 Toggle(isOn: $mic.useSystemDefault) {
                     ZSRowLabel("Usar padrão do sistema", systemImage: "mic.fill", color: .red, subtitle: "Segue o microfone escolhido no macOS")
@@ -52,6 +77,12 @@ struct MicrophonePage: View {
         .navigationTitle("Microfone")
         .navigationSubtitle("Padrão do sistema, prioridade e bloqueio")
         .animation(.default, value: microphoneManager.useSystemDefault)
+        .onChange(of: captureSystemAudio) { _, _ in
+            Task { await appState.warmUpAudioCapture() }
+        }
+        .onChange(of: includeMicrophone) { _, _ in
+            Task { await appState.warmUpAudioCapture() }
+        }
     }
 
     // MARK: - Linha

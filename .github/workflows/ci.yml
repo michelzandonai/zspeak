@@ -83,7 +83,21 @@ jobs:
         # em Tests/*.swift. Ver comentário no topo deste arquivo para a lista.
         # A execução serial evita crashes do runner Swift ao combinar em paralelo
         # suites AppKit/áudio que compartilham estado global do processo.
-        run: swift test
+        run: swift test --no-parallel
+
+      - name: Capture performance (Release, no hardware)
+        run: ./scripts/perf_capture_bench.sh --seconds 60 --trials 3 --check > capture-performance.json
+
+      - name: Speech preparation (Release, identical samples)
+        run: ./scripts/perf_speech_preparation.sh > speech-preparation.json
+
+      - name: Capture performance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: capture-performance
+          path: |
+            capture-performance.json
+            speech-preparation.json
 
   lint:
     name: Lint (swift-format, best-effort)

@@ -158,6 +158,66 @@ struct LiveTranscriptionTests {
         #expect(cut >= 1)
         #expect(cut <= samples.count)
     }
+
+    @Test("Stop espera a inferência cancelada e não publica resultado atrasado")
+    func finishDrainsActiveInferenceWithoutPublishing() async throws {
+        let gate = ControlledPreviewInference()
+        let collector = LiveTranscriptionUpdateCollector()
+        let session = CumulativeLiveTranscriptionSession(
+            transcribePreview: { _ in await gate.transcribe() },
+            onUpdate: { collector.append($0) }
+        )
+        await session.append([Float](repeating: 0.05, count: 16_000))
+        try await waitUntil { await gate.isActive }
+        let completed = AtomicInt()
+        let finishing = Task { _ = try await session.finish(); completed.increment() }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(completed.current == 0, "Batch final deve aguardar a prediction ainda ativa")
+        await session.append([Float](repeating: 0.05, count: 12_000))
+        await gate.release()
+        try await finishing.value
+        #expect(completed.current == 1)
+        #expect(await gate.callCount == 1, "Audio da cauda não deve disparar outro preview no stop")
+        #expect(collector.texts.isEmpty)
+    }
+
+    @Test("Preview e commit enviam exatamente os mesmos samples e padding da versão anterior")
+    func previewAndCommitKeepExactAudio() async throws {
+        let collector = PreviewSignalCollector()
+        let signal = (0..<208_000).map { Float($0 % 23 - 11) / 200 }
+        let session = CumulativeLiveTranscriptionSession(
+            transcribePreview: { samples in collector.add(samples); return "fala" },
+            onUpdate: { _ in }
+        )
+        await session.append(signal)
+        try await waitUntil { collector.buffers.count >= 2 }
+        let cut = CumulativeLiveTranscriptionSession.commitCutIndex(samples: signal, searchStart: 128_000, windowSize: 3_840)
+        let expectedCommit = SpeechPreparationReference.padded(Array(signal[..<cut]), leading: 0, trailing: 3_200, minimumCount: 16_000)
+        let expectedPreview = SpeechPreparationReference.padded(Array(signal[cut...]), leading: 0, trailing: 3_200, minimumCount: 16_000)
+        #expect(collector.buffers == [expectedCommit, expectedPreview])
+        _ = try await session.finish()
+    }
+}
+
+private final class PreviewSignalCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [[Float]] = []
+    var buffers: [[Float]] { lock.withLock { values } }
+    func add(_ samples: [Float]) { lock.withLock { values.append(samples) } }
+}
+
+private actor ControlledPreviewInference {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var isActive = false
+    private(set) var callCount = 0
+    func transcribe() async -> String {
+        callCount += 1
+        isActive = true
+        await withCheckedContinuation { continuation = $0 }
+        isActive = false
+        return "preview atrasado"
+    }
+    func release() { continuation?.resume(); continuation = nil }
 }
 
 /// Registra o tamanho dos buffers passados ao transcritor de preview.

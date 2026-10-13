@@ -146,6 +146,8 @@ final class TrayInfoOverlayModel {
     /// Perfil visual determinístico para harnesses.
     var waveformLevelsOverride: [Float]?
 
+    var sourceLabel: String?
+
     var presentationState: AppState.RecordingState { presentation.state }
 }
 
@@ -231,7 +233,7 @@ struct TrayInfoOverlayView: View {
         HStack(spacing: ZSTrayTheme.inlineSpacing) {
             HStack(spacing: 7) {
                 statusGlyph
-                Text(TrayInfoOverlay.statusLabel(for: model.presentationState))
+                Text(model.sourceLabel ?? TrayInfoOverlay.statusLabel(for: model.presentationState))
                     .font(.system(size: 11, weight: .bold))
                     .tracking(0.8)
             }
@@ -316,6 +318,7 @@ struct TrayInfoOverlayView: View {
     private var accessibilityLabel: String {
         [
             TrayInfoOverlay.statusLabel(for: model.presentationState),
+            model.sourceLabel ?? "",
             model.presentation.text,
             TrayInfoOverlay.supportingHint(for: model.presentationState),
         ]

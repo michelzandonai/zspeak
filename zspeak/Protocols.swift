@@ -29,6 +29,23 @@ protocol AudioCapturing: Actor {
         onSamples: (@Sendable ([Float]) -> Void)?
     ) async throws
 
+    /// A fonte é congelada no atalho, antes de qualquer suspensão: mudar a
+    /// preferência durante o preparo só pode afetar a próxima gravação.
+    func start(
+        deviceUID: String?, onFirstSample: (@Sendable () -> Void)?,
+        onSamples: (@Sendable ([Float]) -> Void)?, includesSystemAudio: Bool
+    ) async throws
+
+    /// Permite capturar a saída sem abrir o microfone ou alterar sua rota.
+    func start(
+        deviceUID: String?, onFirstSample: (@Sendable () -> Void)?,
+        onSamples: (@Sendable ([Float]) -> Void)?, includesSystemAudio: Bool,
+        includesMicrophone: Bool
+    ) async throws
+
+    /// Troca exclusiva entre computador e microfone preservando a sessão.
+    func switchSource(deviceUID: String?, includesSystemAudio: Bool) async throws
+
     /// Para a captura, drena buffers em voo e devolve os samples acumulados
     /// (16 kHz mono float32). Preserva o hot window quando ativo.
     func stop() async -> [Float]
@@ -40,6 +57,54 @@ protocol AudioCapturing: Actor {
     /// Fecha o hot window: desliga o engine, apaga o indicador do mic e
     /// limpa o pre-roll. No-op se não estava hot ou se há gravação ativa.
     func coolDown() async
+
+    /// Verifica I/O e chegada recente de samples, para encerrar uma gravação
+    /// interrompida sem deixar o overlay preso em "gravando".
+    func isReceivingAudio() async -> Bool
+}
+
+protocol TimestampedMicrophoneCapturing: AudioCapturing {
+    func startTimestamped(
+        deviceUID: String?, onFirstSample: (@Sendable () -> Void)?,
+        onChunk: @escaping @Sendable (TimestampedAudioChunk) -> Void
+    ) async throws
+}
+
+enum RecordingSourceSwitchError: LocalizedError {
+    case noActiveSession
+    case unsupported
+    var errorDescription: String? {
+        switch self {
+        case .noActiveSession: return "Não há gravação ativa para trocar a fonte."
+        case .unsupported: return "Esta captura não permite trocar a fonte durante a gravação."
+        }
+    }
+}
+
+extension AudioCapturing {
+    func switchSource(deviceUID: String?, includesSystemAudio: Bool) async throws {
+        throw RecordingSourceSwitchError.unsupported
+    }
+
+    func start(
+        deviceUID: String?, onFirstSample: (@Sendable () -> Void)?,
+        onSamples: (@Sendable ([Float]) -> Void)?, includesSystemAudio: Bool,
+        includesMicrophone: Bool
+    ) async throws {
+        try await start(deviceUID: deviceUID, onFirstSample: onFirstSample,
+                        onSamples: onSamples, includesSystemAudio: includesSystemAudio)
+    }
+
+    // Fakes sem I/O mantêm o comportamento anterior; testes de interrupção
+    // implementam explicitamente a saúde do dispositivo.
+    func isReceivingAudio() -> Bool { true }
+
+    func start(
+        deviceUID: String?, onFirstSample: (@Sendable () -> Void)?,
+        onSamples: (@Sendable ([Float]) -> Void)?, includesSystemAudio: Bool
+    ) async throws {
+        try await start(deviceUID: deviceUID, onFirstSample: onFirstSample, onSamples: onSamples)
+    }
 }
 
 /// Transcrição de áudio para texto via Parakeet TDT.
@@ -98,7 +163,7 @@ protocol LLMCorrecting: Actor {
 
 // MARK: - Conformâncias dos tipos concretos
 
-extension AudioCapture: AudioCapturing {}
+extension AudioCapture: TimestampedMicrophoneCapturing {}
 extension Transcriber: Transcribing {}
 extension TextInserter: TextInserting {}
 extension LLMCorrectionManager: LLMCorrecting {}

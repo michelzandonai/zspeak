@@ -430,6 +430,63 @@ struct VisualSnapshotTests {
         )
     }
 
+    @Test("Settings mostra captura combinada ativada")
+    func testSettingsCombinedAudioSnapshot() throws {
+        let suiteName = "snapshot-system-audio-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: RecordingAudioCapture.systemAudioEnabledKey)
+        defaults.set(true, forKey: RecordingAudioCapture.microphoneWithSystemAudioKey)
+        let context = makeSettingsContext()
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-combined-audio",
+            of: settingsEnvironment(MicrophonePage(defaults: defaults), context: context),
+            size: CGSize(width: 980, height: 720)
+        )
+    }
+
+    @Test("Settings mostra captura somente do computador para ouvir nos fones")
+    func testSettingsSystemOnlySnapshot() throws {
+        let suiteName = "snapshot-system-only-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: RecordingAudioCapture.systemAudioEnabledKey)
+        let context = makeSettingsContext()
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-system-only",
+            of: settingsEnvironment(MicrophonePage(defaults: defaults), context: context),
+            size: CGSize(width: 980, height: 720)
+        )
+    }
+
+    @Test("Settings mostra permissão de áudio do computador pendente")
+    func testSettingsSystemAudioPermissionSnapshot() throws {
+        let suiteName = "snapshot-system-audio-permission-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: RecordingAudioCapture.systemAudioEnabledKey)
+        let context = makeSettingsContext()
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "settings-system-audio-permission",
+            of: settingsEnvironment(PermissionsPage(refreshOnAppear: false, defaults: defaults, systemAudioPermissionGranted: false), context: context),
+            size: CGSize(width: 980, height: 980)
+        )
+    }
+
+    @Test("Overview não mostra pronto quando falta permissão do áudio do computador")
+    func testOverviewSystemAudioPermissionSnapshot() throws {
+        let suiteName = "snapshot-system-audio-overview-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: RecordingAudioCapture.systemAudioEnabledKey)
+        let context = makeSettingsContext()
+        try SnapshotTestHelpers.assertSnapshot(
+            named: "overview-system-audio-permission",
+            of: settingsEnvironment(OverviewPage(defaults: defaults, systemAudioPermissionGranted: false), context: context),
+            size: CGSize(width: 980, height: 760)
+        )
+    }
+
     @Test("Settings general permanece estável")
     func testSettingsGeneralSnapshot() throws {
         try SnapshotTestHelpers.assertSnapshot(

@@ -12,8 +12,8 @@ import Testing
 )
 struct TrayInfoOverlaySnapshotTests {
 
-    @Test("Gravação preserva a faixa aprovada")
-    func recordingDesign() throws {
+    @Test("Gravação preserva a faixa aprovada", arguments: ["", "Computador", "Microfone", "Trocando fonte…"])
+    func recordingDesign(source: String) throws {
         let model = TrayInfoOverlayModel()
         model.presentation = TrayLivePreview.presentation(
             state: .recording,
@@ -21,6 +21,7 @@ struct TrayInfoOverlaySnapshotTests {
             enabled: true,
             maxWidth: TrayLivePreview.defaultMaxWidth
         )
+        model.sourceLabel = source.isEmpty ? nil : source
         model.isShown = true
         model.typingEnabled = false
         model.reduceMotionOverride = true
@@ -46,7 +47,7 @@ struct TrayInfoOverlaySnapshotTests {
         let image = try #require(renderer.nsImage, "Falha ao renderizar o tray")
 
         try SnapshotTestHelpers.assertSnapshot(
-            named: "tray-info-overlay-recording",
+            named: "tray-info-overlay-recording" + (source.isEmpty ? "" : "-" + source),
             image: image
         )
     }

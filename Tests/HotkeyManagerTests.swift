@@ -1,4 +1,5 @@
 import Foundation
+import KeyboardShortcuts
 import Testing
 @testable import zspeak
 
@@ -61,5 +62,14 @@ struct HotkeyManagerTests {
 
         // Manager criado sem crashes — intervalo interno está configurado
         #expect(manager.isEventTapActive == false)
+    }
+}
+
+@Suite("Recording source shortcut")
+struct RecordingSourceShortcutTests {
+    @Test("Atalho padrão usa Control Option A e é independente da tecla de gravar")
+    func defaultSourceShortcut() {
+        #expect(KeyboardShortcuts.Name.toggleRecordingSource.defaultShortcut == KeyboardShortcuts.Shortcut(.a, modifiers: [.control, .option]))
+        #expect(KeyboardShortcuts.Name.toggleRecordingSource != .translateSelection)
     }
 }

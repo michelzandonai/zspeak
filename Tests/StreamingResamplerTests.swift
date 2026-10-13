@@ -122,4 +122,57 @@ struct StreamingResamplerTests {
         #expect(!output.isEmpty)
         #expect(output.allSatisfy { $0.isFinite })
     }
+
+    @Test("Buffers de tamanhos diferentes preservam sinal contínuo e arrays já emitidos")
+    func varyingBuffersKeepContinuityAndIndependentOutput() throws {
+        let format = try #require(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
+        let resampler = StreamingResampler()
+        var inputCount = 0
+        var output: [Float] = []
+        var firstOutput: [Float] = []
+        var firstSnapshot: [Float] = []
+        for _ in 0..<10 {
+            for size in [512, 4_096, 128, 8_192, 256, 32] {
+                let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(size)))
+                for frame in 0..<size {
+                    buffer.floatChannelData![0][frame] = Float(sin(Double(inputCount + frame) * 2 * .pi * 440 / 48_000)) * 0.5
+                }
+                inputCount += size
+                buffer.frameLength = AVAudioFrameCount(size)
+                let converted = try resampler.process(buffer)
+                if firstOutput.isEmpty {
+                    firstOutput = converted
+                    firstSnapshot = converted.map { $0 }
+                }
+                output.append(contentsOf: converted)
+            }
+        }
+        #expect(abs(output.count - inputCount / 3) < 256)
+        #expect(firstOutput == firstSnapshot, "Reutilizar storage nativo não pode mudar samples emitidos")
+        var maxDelta: Float = 0
+        for index in 129..<output.count {
+            maxDelta = max(maxDelta, abs(output[index] - output[index - 1]))
+        }
+        #expect(maxDelta < 0.2, "Tamanho menor após buffer grande não deve inserir transientes")
+    }
+
+    @Test("Reset e troca de formato não herdam samples da sessão anterior")
+    func resetAndFormatChangesDiscardPreviousAudio() throws {
+        let resampler = StreamingResampler()
+        for rate in [48_000.0, 24_000.0, 44_100.0, 48_000.0] {
+            let format = try #require(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false))
+            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_096))
+            for index in 0..<4_096 { buffer.floatChannelData![0][index] = 0.25 }
+            buffer.frameLength = 4_096
+            let output = try resampler.process(buffer)
+            #expect(!output.isEmpty)
+            #expect(output.suffix(300).allSatisfy { abs($0 - 0.25) < 0.02 })
+        }
+        resampler.reset()
+        let silence = try #require(AVAudioPCMBuffer(pcmFormat: AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!, frameCapacity: 4_096))
+        silence.frameLength = 4_096
+        for index in 0..<4_096 { silence.floatChannelData![0][index] = 0 }
+        let output = try resampler.process(silence)
+        #expect(!output.isEmpty && output.allSatisfy { $0 == 0 })
+    }
 }

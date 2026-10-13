@@ -31,19 +31,27 @@ final class LiveSampleEmitter: @unchecked Sendable {
         let chunks: [[Float]]
         let currentHandler: Handler?
         lock.lock()
-        buffer.append(contentsOf: samples)
         currentHandler = handler
-
-        if currentHandler == nil || buffer.count < chunkSampleCount {
+        guard currentHandler != nil else {
+            lock.unlock()
+            return
+        }
+        buffer.append(contentsOf: samples)
+        if buffer.count < chunkSampleCount {
             lock.unlock()
             return
         }
 
         var emitted: [[Float]] = []
-        while buffer.count >= chunkSampleCount {
-            emitted.append(Array(buffer.prefix(chunkSampleCount)))
-            buffer.removeFirst(chunkSampleCount)
+        let chunkCount = buffer.count / chunkSampleCount
+        emitted.reserveCapacity(chunkCount)
+        // Percorre uma vez e desloca apenas a cauda. removeFirst por bloco
+        // copiava o restante repetidamente quando chegava um buffer grande.
+        let emittedSampleCount = chunkCount * chunkSampleCount
+        for offset in stride(from: 0, to: emittedSampleCount, by: chunkSampleCount) {
+            emitted.append(Array(buffer[offset..<(offset + chunkSampleCount)]))
         }
+        buffer.removeFirst(emittedSampleCount)
         chunks = emitted
         lock.unlock()
 

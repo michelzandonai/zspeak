@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreGraphics
 
 /// Página de Permissões.
 ///
@@ -11,10 +12,17 @@ struct PermissionsPage: View {
     @Environment(AccessibilityManager.self) private var accessibilityManager
 
     @State private var isRunningSetup = false
+    @AppStorage(RecordingAudioCapture.microphoneWithSystemAudioKey) private var includeMicrophone = false
+    private var needsMicrophone: Bool { !captureSystemAudio || includeMicrophone }
+    @AppStorage(RecordingAudioCapture.systemAudioEnabledKey) private var captureSystemAudio = false
+    @State private var systemAudioPermissionGranted: Bool
     private let refreshOnAppear: Bool
 
-    init(refreshOnAppear: Bool = true) {
+    init(refreshOnAppear: Bool = true, defaults: UserDefaults? = nil, systemAudioPermissionGranted: Bool? = nil) {
         self.refreshOnAppear = refreshOnAppear
+        _includeMicrophone = AppStorage(wrappedValue: false, RecordingAudioCapture.microphoneWithSystemAudioKey, store: defaults)
+        _captureSystemAudio = AppStorage(wrappedValue: false, RecordingAudioCapture.systemAudioEnabledKey, store: defaults)
+        _systemAudioPermissionGranted = State(initialValue: systemAudioPermissionGranted ?? CGPreflightScreenCaptureAccess())
     }
 
     var body: some View {
@@ -73,6 +81,22 @@ struct PermissionsPage: View {
                 Text("Microfone")
             } footer: {
                 Text(microphonePermissionFooter)
+            }
+
+            if captureSystemAudio {
+                Section {
+                    permissionRow(
+                        title: "Áudio do computador", icon: "speaker.wave.2.fill", tint: .blue,
+                        granted: systemAudioPermissionGranted,
+                        action: systemAudioPermissionGranted ? nil : PermissionAction(label: "Conceder") {
+                            requestSystemAudioPermission()
+                        }
+                    )
+                } header: {
+                    Text("Áudio do computador")
+                } footer: {
+                    Text("O macOS chama esta permissão de Gravação de tela e áudio do sistema. O zspeak captura apenas áudio durante a gravação. Se o macOS pedir para reabrir o app, aceite e tente novamente.")
+                }
             }
 
             Section {
@@ -143,13 +167,19 @@ struct PermissionsPage: View {
             guard refreshOnAppear else { return }
             microphoneManager.refreshPermissionState()
             accessibilityManager.refreshPermissionState()
+            systemAudioPermissionGranted = CGPreflightScreenCaptureAccess()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard refreshOnAppear else { return }
+            systemAudioPermissionGranted = CGPreflightScreenCaptureAccess()
         }
     }
 
     private var pendingCount: Int {
         var count = 0
-        if !microphoneManager.isPermissionGranted { count += 1 }
+        if needsMicrophone && !microphoneManager.isPermissionGranted { count += 1 }
         if !accessibilityManager.isGranted { count += 1 }
+        if captureSystemAudio && !systemAudioPermissionGranted { count += 1 }
         return count
     }
 
@@ -206,22 +236,36 @@ struct PermissionsPage: View {
         microphoneManager.refreshPermissionState()
         accessibilityManager.refreshPermissionState()
 
-        switch microphoneManager.permissionState {
-        case .notDetermined:
-            _ = await microphoneManager.requestPermissionIfNeeded()
-        case .denied, .restricted:
-            microphoneManager.openSystemSettings()
-        case .authorized, .unavailable:
-            break
+        if needsMicrophone {
+            switch microphoneManager.permissionState {
+            case .notDetermined:
+                _ = await microphoneManager.requestPermissionIfNeeded()
+            case .denied, .restricted:
+                microphoneManager.openSystemSettings()
+            case .authorized, .unavailable:
+                break
+            }
         }
-
         if !accessibilityManager.isGranted {
             accessibilityManager.startGuidedPermissionFlow()
+        }
+        if captureSystemAudio && !systemAudioPermissionGranted {
+            requestSystemAudioPermission()
         }
 
         try? await Task.sleep(for: .milliseconds(500))
         microphoneManager.refreshPermissionState()
         accessibilityManager.refreshPermissionState()
+        systemAudioPermissionGranted = CGPreflightScreenCaptureAccess()
+    }
+
+    private func requestSystemAudioPermission() {
+        _ = CGRequestScreenCaptureAccess()
+        systemAudioPermissionGranted = CGPreflightScreenCaptureAccess()
+        if !systemAudioPermissionGranted,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     private var microphoneAction: PermissionAction? {
@@ -251,6 +295,7 @@ struct PermissionsPage: View {
     // MARK: - Strings específicas de microfone
 
     private var microphonePermissionFooter: String {
+        if !needsMicrophone { return "Opcional: o modo somente áudio do computador não usa o microfone." }
         switch microphoneManager.permissionState {
         case .authorized:
             return "Obrigatório para capturar sua voz e iniciar a transcrição."

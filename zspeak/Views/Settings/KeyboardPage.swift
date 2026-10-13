@@ -45,6 +45,14 @@ struct KeyboardPage: View {
             }
 
             Section {
+                recorderRow("Alternar computador / minha voz", systemImage: "arrow.triangle.2.circlepath", color: .blue, name: .toggleRecordingSource)
+            } header: {
+                Text("Fonte da gravação")
+            } footer: {
+                Text("Troca a fonte na mesma gravação, preservando o áudio anterior. O atalho de iniciar e parar continua igual.")
+            }
+
+            Section {
                 recorderRow("Modo Prompt", systemImage: "sparkles", color: .purple, name: .togglePromptMode)
                 recorderRow("Modo Tradução", systemImage: "character.bubble.fill", color: .indigo, name: .toggleSelectionLookupMode)
                 recorderRow("Traduzir seleção", systemImage: "globe", color: .blue, name: .translateSelection)

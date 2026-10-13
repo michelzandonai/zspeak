@@ -69,13 +69,14 @@ final class OverlayModel {
     /// Fallback não-reativo usado apenas em previews/testes quando não há manager.
     /// Em produção, `microphoneManager` é sempre setado e esta propriedade é ignorada.
     var microphoneName: String = ""
+    var includesSystemAudio = false
+    var includesMicrophone = true
 
     /// Nome efetivo do mic: prioriza a fonte reativa do manager; cai para o fallback.
     var effectiveMicrophoneName: String {
-        if let manager = microphoneManager {
-            return manager.activeMicrophoneName
-        }
-        return microphoneName
+        if includesSystemAudio && !includesMicrophone { return "Áudio do computador" }
+        let name = microphoneManager?.activeMicrophoneName ?? microphoneName
+        return includesSystemAudio ? "\(name) + áudio do computador" : name
     }
     /// Closure para ler audioLevel direto do AudioCapture. SÍNCRONA de
     /// propósito: o `AudioLevelMonitor` já é thread-safe e a amostragem roda a

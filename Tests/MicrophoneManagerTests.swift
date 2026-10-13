@@ -360,4 +360,47 @@ struct MicrophoneManagerTests {
         // Máquina de dev sempre tem ao menos o mic embutido como entrada.
         #expect(uid?.isEmpty == false, "HAL deveria expor um device de entrada padrão")
     }
+
+    @Test("Nome do microfone padrão acompanha o HAL ao conectar AirPods")
+    func defaultNameTracksHALRoute() {
+        let suiteName = "mic-hal-name-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let manager = MicrophoneManager(defaults: defaults)
+        manager.microphones = [
+            MicrophoneInfo(id: "macbook", name: "MacBook", isConnected: true),
+            MicrophoneInfo(id: "airpods", name: "AirPods Pro 3", isConnected: true),
+        ]
+        manager.systemDefaultUIDProvider = { "macbook" }
+        #expect(manager.activeMicrophoneName == "MacBook")
+        manager.systemDefaultUIDProvider = { "airpods" }
+        #expect(manager.activeMicrophoneName == "AirPods Pro 3")
+    }
+
+    @Test("Reconectar preserva prioridade e bloqueios do microfone")
+    func refreshPreservesPreferencesAcrossReconnect() {
+        let suiteName = "mic-reconnect-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(["airpods", "macbook"], forKey: "microphonePriorityOrder")
+        let manager = MicrophoneManager(defaults: defaults)
+        manager.useSystemDefault = false
+        manager.systemDefaultUIDProvider = { "macbook" }
+        manager.setBlocked("airpods", blocked: true)
+        manager.connectedDevicesProvider = {
+            [MicrophoneInfo(id: "macbook", name: "MacBook", isConnected: true)]
+        }
+        manager.refreshDevices()
+        #expect(manager.microphones.first?.isConnected == false)
+
+        manager.connectedDevicesProvider = {
+            [MicrophoneInfo(id: "macbook", name: "MacBook", isConnected: true),
+             MicrophoneInfo(id: "airpods", name: "AirPods Pro 3", isConnected: true)]
+        }
+        manager.refreshDevices()
+        #expect(manager.microphones.prefix(2).map(\.id) == ["airpods", "macbook"])
+        #expect(manager.microphones.first?.isConnected == true)
+        #expect(manager.isBlocked("airpods"))
+        #expect(manager.recordingCandidateUIDs() == ["macbook", nil])
+    }
 }

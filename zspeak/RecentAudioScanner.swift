@@ -178,8 +178,9 @@ final class RecentAudioScanner {
         time.dateFormat = "HH:mm"
         let clock = time.string(from: date)
 
-        if calendar.isDateInToday(date) { return "Hoje \(clock)" }
-        if calendar.isDateInYesterday(date) { return "Ontem \(clock)" }
+        if calendar.isDate(date, inSameDayAs: now) { return "Hoje \(clock)" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(date, inSameDayAs: yesterday) { return "Ontem \(clock)" }
 
         let day = DateFormatter()
         day.locale = locale

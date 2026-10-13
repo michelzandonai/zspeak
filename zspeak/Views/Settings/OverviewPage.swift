@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreGraphics
 
 /// Página de Overview — "dashboard" do estado do app.
 ///
@@ -13,9 +14,21 @@ struct OverviewPage: View {
     @Environment(TranscriptionStore.self) private var store
 
     @AppStorage("settings.initialPage") private var initialPage: String = "overview"
+    @AppStorage(RecordingAudioCapture.microphoneWithSystemAudioKey) private var includeMicrophone = false
+    private var needsMicrophone: Bool { !captureSystemAudio || includeMicrophone }
+    @AppStorage(RecordingAudioCapture.systemAudioEnabledKey) private var captureSystemAudio = false
+    @State private var systemAudioPermissionGranted: Bool
+    private let refreshSystemAudioPermission: Bool
 
     @State private var llmState: LLMCorrectionManager.ModelState = .notDownloaded
     @State private var selectedLLMModel = LLMModelOption.defaultModel
+
+    init(defaults: UserDefaults? = nil, systemAudioPermissionGranted: Bool? = nil) {
+        _includeMicrophone = AppStorage(wrappedValue: false, RecordingAudioCapture.microphoneWithSystemAudioKey, store: defaults)
+        _captureSystemAudio = AppStorage(wrappedValue: false, RecordingAudioCapture.systemAudioEnabledKey, store: defaults)
+        _systemAudioPermissionGranted = State(initialValue: systemAudioPermissionGranted ?? CGPreflightScreenCaptureAccess())
+        refreshSystemAudioPermission = systemAudioPermissionGranted == nil
+    }
 
     var body: some View {
         Form {
@@ -123,6 +136,12 @@ struct OverviewPage: View {
         .formStyle(.grouped)
         .zsAppSurface()
         .navigationTitle("Visão Geral")
+        .onAppear {
+            if refreshSystemAudioPermission { systemAudioPermissionGranted = CGPreflightScreenCaptureAccess() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if refreshSystemAudioPermission { systemAudioPermissionGranted = CGPreflightScreenCaptureAccess() }
+        }
         .task(id: llmStateTaskID) {
             selectedLLMModel = await appState.selectedLLMModel()
             llmState = await appState.llmModelState()
@@ -199,8 +218,9 @@ struct OverviewPage: View {
 
     private var pendingPermissions: [String] {
         var list: [String] = []
-        if !microphoneManager.isPermissionGranted { list.append("Microfone") }
+        if needsMicrophone && !microphoneManager.isPermissionGranted { list.append("Microfone") }
         if !accessibilityManager.isGranted { list.append("Acessibilidade") }
+        if captureSystemAudio && !systemAudioPermissionGranted { list.append("Áudio do computador") }
         return list
     }
 

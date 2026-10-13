@@ -1,0 +1,639 @@
+{
+  "version": "1.0.64",
+  "measured_at_utc": "2026-10-12T23:59:15.676722+00:00",
+  "hardware": "Apple M5 Pro",
+  "scope": "Código real de captura compilado com swiftc -O; sem ASR, UI ou I/O físico; duração simulada. Os consumidores leem todos os samples para evitar eliminação pelo otimizador.",
+  "source_sha256": {
+    "StreamingResampler.swift": "2a8705eb49b4daa3131cb562c1ed9fbcf96758ffb0c5b400daa88bc94e322244",
+    "LiveSampleEmitter.swift": "414b9bce3e4d0fe1f75c01f8a900413da57e938f89a7d7ff257c84645daa710a",
+    "AudioTimelineMixer.swift": "a92ec90f5b48e053b4d6a05db3a31071470a75fc9a8030974c12eae43ff0a281"
+  },
+  "baseline_sha256": {
+    "StreamingResampler.swift": "b3eac454f3a0b3872810995ed76ccd4e4bbb7a6a1f58173ba2de10629e12143f",
+    "LiveSampleEmitter.swift": "24f42a0cb8ddcbcac705895d9c629759681e288e81e4a7d5a42ef30e3a83b0ef",
+    "AudioTimelineMixer.swift": "cfe39fc77a88a4428bc1ccc71b8781ebc76c6770bf5779fe683fbbe789980f36"
+  },
+  "runs": {
+    "600": {
+      "before": {
+        "memory_bytes": 68719476736,
+        "os": "Version 26.6.2 (Build 25G83)",
+        "processors": 18,
+        "rows": [
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 140.325375,
+            "max_callback_us": 65.25,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 2.125,
+            "p95_callback_us": 3,
+            "peak_process_bytes": 11075584,
+            "samples": 9600000,
+            "signal_energy": 295093.0217092053,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 49.152167,
+            "max_callback_us": 2375,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.416,
+            "p95_callback_us": 2.292,
+            "peak_process_bytes": 99827712,
+            "samples": 9600000,
+            "stop_ms": 0.005375,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 3.485125,
+            "max_callback_us": 3484.583,
+            "name": "live_burst_30s",
+            "p50_callback_us": 3484.583,
+            "p95_callback_us": 3484.583,
+            "peak_process_bytes": 103743488,
+            "samples": 480000,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 137.94575,
+            "max_callback_us": 64.583,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 2.125,
+            "p95_callback_us": 2.75,
+            "peak_process_bytes": 104448000,
+            "samples": 9600000,
+            "signal_energy": 295093.0217092053,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 40.870792,
+            "max_callback_us": 490.709,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.416,
+            "p95_callback_us": 1.375,
+            "peak_process_bytes": 107347968,
+            "samples": 9600000,
+            "stop_ms": 0.001,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 2.171792,
+            "max_callback_us": 2171.292,
+            "name": "live_burst_30s",
+            "p50_callback_us": 2171.292,
+            "p95_callback_us": 2171.292,
+            "peak_process_bytes": 107659264,
+            "samples": 480000,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 158.041125,
+            "max_callback_us": 704.5,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 2.167,
+            "p95_callback_us": 3.25,
+            "peak_process_bytes": 107659264,
+            "samples": 9600000,
+            "signal_energy": 295093.0217092053,
+            "trial": 2
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 44.767042,
+            "max_callback_us": 564.083,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.458,
+            "p95_callback_us": 0.834,
+            "peak_process_bytes": 108363776,
+            "samples": 9600000,
+            "stop_ms": 0.000375,
+            "trial": 2
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 2.614,
+            "max_callback_us": 2613.083,
+            "name": "live_burst_30s",
+            "p50_callback_us": 2613.083,
+            "p95_callback_us": 2613.083,
+            "peak_process_bytes": 110395392,
+            "samples": 480000,
+            "trial": 2
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 161.355167,
+            "max_callback_us": 84.416,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 2.375,
+            "p95_callback_us": 3.292,
+            "peak_process_bytes": 110411776,
+            "samples": 9600000,
+            "signal_energy": 295093.0217092053,
+            "trial": 3
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 46.687833,
+            "max_callback_us": 521.792,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.458,
+            "p95_callback_us": 1.375,
+            "peak_process_bytes": 110428160,
+            "samples": 9600000,
+            "stop_ms": 0.00075,
+            "trial": 3
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 2.609084,
+            "max_callback_us": 2608.334,
+            "name": "live_burst_30s",
+            "p50_callback_us": 2608.334,
+            "p95_callback_us": 2608.334,
+            "peak_process_bytes": 110428160,
+            "samples": 480000,
+            "trial": 3
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 151.524333,
+            "max_callback_us": 65.458,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 2.292,
+            "p95_callback_us": 3.084,
+            "peak_process_bytes": 110444544,
+            "samples": 9600000,
+            "signal_energy": 295093.0217092053,
+            "trial": 4
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 40.46025,
+            "max_callback_us": 472.917,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.417,
+            "p95_callback_us": 0.75,
+            "peak_process_bytes": 110444544,
+            "samples": 9600000,
+            "stop_ms": 0.000917,
+            "trial": 4
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 2.479666,
+            "max_callback_us": 2479.125,
+            "name": "live_burst_30s",
+            "p50_callback_us": 2479.125,
+            "p95_callback_us": 2479.125,
+            "peak_process_bytes": 110444544,
+            "samples": 480000,
+            "trial": 4
+          }
+        ],
+        "seconds": 600,
+        "trials": 5
+      },
+      "after": {
+        "memory_bytes": 68719476736,
+        "os": "Version 26.6.2 (Build 25G83)",
+        "processors": 18,
+        "rows": [
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 115.369708,
+            "max_callback_us": 57.667,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 1.709,
+            "p95_callback_us": 2.5,
+            "peak_process_bytes": 10944512,
+            "samples": 9600000,
+            "signal_energy": 295093.0217092053,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 37.242208,
+            "max_callback_us": 90.208,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.25,
+            "p95_callback_us": 0.542,
+            "peak_process_bytes": 88817664,
+            "samples": 9600000,
+            "stop_ms": 4.159708,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 0.524083,
+            "max_callback_us": 523.167,
+            "name": "live_burst_30s",
+            "p50_callback_us": 523.167,
+            "p95_callback_us": 523.167,
+            "peak_process_bytes": 90767360,
+            "samples": 480000,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 114.533542,
+            "max_callback_us": 64.333,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 1.709,
+            "p95_callback_us": 2.5,
+            "peak_process_bytes": 90767360,
+            "samples": 9600000,
+            "signal_energy": 295093.0217092053,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 33.155375,
+            "max_callback_us": 59.125,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.25,
+            "p95_callback_us": 0.542,
+            "peak_process_bytes": 93126656,
+            "samples": 9600000,
+            "stop_ms": 2.4635,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 0.685625,
+            "max_callback_us": 685.208,
+            "name": "live_burst_30s",
+            "p50_callback_us": 685.208,
+            "p95_callback_us": 685.208,
+            "peak_process_bytes": 93126656,
+            "samples": 480000,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 127.9695,
+            "max_callback_us": 2040.125,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 1.833,
+            "p95_callback_us": 2.583,
+            "peak_process_bytes": 93143040,
+            "samples": 9600000,
+            "signal_energy": 295093.0217092053,
+            "trial": 2
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 33.772792,
+            "max_callback_us": 76.542,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.25,
+            "p95_callback_us": 0.583,
+            "peak_process_bytes": 93814784,
+            "samples": 9600000,
+            "stop_ms": 0.888792,
+            "trial": 2
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 0.464959,
+            "max_callback_us": 464.334,
+            "name": "live_burst_30s",
+            "p50_callback_us": 464.334,
+            "p95_callback_us": 464.334,
+            "peak_process_bytes": 93913088,
+            "samples": 480000,
+            "trial": 2
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 131.3985,
+            "max_callback_us": 75.625,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 1.917,
+            "p95_callback_us": 2.625,
+            "peak_process_bytes": 93913088,
+            "samples": 9600000,
+            "signal_energy": 295093.0217092053,
+            "trial": 3
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 34.67425,
+            "max_callback_us": 64.625,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.25,
+            "p95_callback_us": 0.625,
+            "peak_process_bytes": 97402880,
+            "samples": 9600000,
+            "stop_ms": 1.22575,
+            "trial": 3
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 0.407833,
+            "max_callback_us": 407.625,
+            "name": "live_burst_30s",
+            "p50_callback_us": 407.625,
+            "p95_callback_us": 407.625,
+            "peak_process_bytes": 97402880,
+            "samples": 480000,
+            "trial": 3
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 119.769875,
+            "max_callback_us": 73.834,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 1.792,
+            "p95_callback_us": 2.417,
+            "peak_process_bytes": 97402880,
+            "samples": 9600000,
+            "signal_energy": 295093.0217092053,
+            "trial": 4
+          },
+          {
+            "audio_seconds": 600,
+            "elapsed_ms": 30.591083,
+            "max_callback_us": 56.208,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.25,
+            "p95_callback_us": 0.5,
+            "peak_process_bytes": 98566144,
+            "samples": 9600000,
+            "stop_ms": 0.968125,
+            "trial": 4
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 0.478,
+            "max_callback_us": 477.584,
+            "name": "live_burst_30s",
+            "p50_callback_us": 477.584,
+            "p95_callback_us": 477.584,
+            "peak_process_bytes": 98566144,
+            "samples": 480000,
+            "trial": 4
+          }
+        ],
+        "seconds": 600,
+        "trials": 5
+      }
+    },
+    "3600": {
+      "before": {
+        "memory_bytes": 68719476736,
+        "os": "Version 26.6.2 (Build 25G83)",
+        "processors": 18,
+        "rows": [
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 1003.022666,
+            "max_callback_us": 221.25,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 2.542,
+            "p95_callback_us": 3.333,
+            "peak_process_bytes": 13303808,
+            "samples": 57600000,
+            "signal_energy": 1770558.1302087551,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 362.398792,
+            "max_callback_us": 21466.875,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.5,
+            "p95_callback_us": 2.25,
+            "peak_process_bytes": 652034048,
+            "samples": 57600000,
+            "stop_ms": 0.004625,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 3.194083,
+            "max_callback_us": 3193.417,
+            "name": "live_burst_30s",
+            "p50_callback_us": 3193.417,
+            "p95_callback_us": 3193.417,
+            "peak_process_bytes": 654770176,
+            "samples": 480000,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 929.374334,
+            "max_callback_us": 130.708,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 2.333,
+            "p95_callback_us": 3.167,
+            "peak_process_bytes": 654770176,
+            "samples": 57600000,
+            "signal_energy": 1770558.1302087551,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 259.27775,
+            "max_callback_us": 10526.875,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.416,
+            "p95_callback_us": 1.333,
+            "peak_process_bytes": 654802944,
+            "samples": 57600000,
+            "stop_ms": 0.003166,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 2.376709,
+            "max_callback_us": 2376.292,
+            "name": "live_burst_30s",
+            "p50_callback_us": 2376.292,
+            "p95_callback_us": 2376.292,
+            "peak_process_bytes": 654868480,
+            "samples": 480000,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 917.122417,
+            "max_callback_us": 115,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 2.209,
+            "p95_callback_us": 3.25,
+            "peak_process_bytes": 654868480,
+            "samples": 57600000,
+            "signal_energy": 1770558.1302087551,
+            "trial": 2
+          },
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 291.9285,
+            "max_callback_us": 16576.625,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.417,
+            "p95_callback_us": 1.5,
+            "peak_process_bytes": 655933440,
+            "samples": 57600000,
+            "stop_ms": 0.000542,
+            "trial": 2
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 3.294792,
+            "max_callback_us": 3294.25,
+            "name": "live_burst_30s",
+            "p50_callback_us": 3294.25,
+            "p95_callback_us": 3294.25,
+            "peak_process_bytes": 655949824,
+            "samples": 480000,
+            "trial": 2
+          }
+        ],
+        "seconds": 3600,
+        "trials": 3
+      },
+      "after": {
+        "memory_bytes": 68719476736,
+        "os": "Version 26.6.2 (Build 25G83)",
+        "processors": 18,
+        "rows": [
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 736.050208,
+            "max_callback_us": 105.25,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 1.792,
+            "p95_callback_us": 2.542,
+            "peak_process_bytes": 13254656,
+            "samples": 57600000,
+            "signal_energy": 1770558.1302087551,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 225.431875,
+            "max_callback_us": 78.166,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.25,
+            "p95_callback_us": 0.542,
+            "peak_process_bytes": 486178816,
+            "samples": 57600000,
+            "stop_ms": 22.182291,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 0.478166,
+            "max_callback_us": 477.791,
+            "name": "live_burst_30s",
+            "p50_callback_us": 477.791,
+            "p95_callback_us": 477.791,
+            "peak_process_bytes": 491028480,
+            "samples": 480000,
+            "trial": 0
+          },
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 662.918666,
+            "max_callback_us": 86.667,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 1.708,
+            "p95_callback_us": 2.125,
+            "peak_process_bytes": 491028480,
+            "samples": 57600000,
+            "signal_energy": 1770558.1302087551,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 191.044583,
+            "max_callback_us": 110.166,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.25,
+            "p95_callback_us": 0.542,
+            "peak_process_bytes": 512999424,
+            "samples": 57600000,
+            "stop_ms": 10.124083,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 0.648417,
+            "max_callback_us": 647.708,
+            "name": "live_burst_30s",
+            "p50_callback_us": 647.708,
+            "p95_callback_us": 647.708,
+            "peak_process_bytes": 512999424,
+            "samples": 480000,
+            "trial": 1
+          },
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 715.074792,
+            "max_callback_us": 122.958,
+            "name": "resample_stereo_48k",
+            "p50_callback_us": 1.75,
+            "p95_callback_us": 2.542,
+            "peak_process_bytes": 513015808,
+            "samples": 57600000,
+            "signal_energy": 1770558.1302087551,
+            "trial": 2
+          },
+          {
+            "audio_seconds": 3600,
+            "elapsed_ms": 186.869542,
+            "max_callback_us": 75.917,
+            "name": "mixed_two_sources",
+            "p50_callback_us": 0.25,
+            "p95_callback_us": 0.541,
+            "peak_process_bytes": 515768320,
+            "samples": 57600000,
+            "stop_ms": 5.583667,
+            "trial": 2
+          },
+          {
+            "audio_seconds": 30,
+            "elapsed_ms": 0.378459,
+            "max_callback_us": 377.959,
+            "name": "live_burst_30s",
+            "p50_callback_us": 377.959,
+            "p95_callback_us": 377.959,
+            "peak_process_bytes": 518684672,
+            "samples": 480000,
+            "trial": 2
+          }
+        ],
+        "seconds": 3600,
+        "trials": 3
+      }
+    }
+  },
+  "native_capture": {
+    "first_microphone_ms": 854.72,
+    "stop_ms": 73.28,
+    "asr_ms": 149.22,
+    "audio_seconds": 4.82,
+    "fixture_recognized": true
+  },
+  "tests": {
+    "full": 585,
+    "native_capture": 2,
+    "live_benchmark": 1
+  },
+  "benchmark_harness_sha256": "1d9f8c99a52ea7018b9b8de67b67e8aa6261082f826474ca609401d53dee153e",
+  "live_transcription": {
+    "fixture_audio_seconds": 13.25,
+    "updates": 17,
+    "growing_updates": 16,
+    "first_partial_seconds": 0.88,
+    "max_gap_seconds": 0.85,
+    "passed": true
+  }
+}

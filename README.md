@@ -113,10 +113,36 @@ FluidAudio e o mantém em cache para os próximos usos offline.
 - seleção e prioridade de microfones;
 - Prompt Mode com LLM local opcional;
 - transcrição de arquivos em lote e histórico local;
+- captura opcional do áudio do computador junto com o microfone;
 - lista dos áudios recentes da pasta de downloads, do mais novo para o mais antigo;
 - Serviços do Finder e "Abrir com" para vários arquivos de uma vez;
 - inicialização com o sistema;
 - cancelamento da gravação com `Esc`, quando habilitado.
+
+### Transcrever áudio do computador usando AirPods ou outros fones
+
+Em **Configurações → Microfone**, ative **Capturar áudio do computador** e deixe
+**Incluir meu microfone** desligado. O zspeak captura o som dos apps diretamente,
+sem abrir o microfone, sem pré-aquecê-lo e sem selecionar outro microfone como
+fallback. Mantenha seus fones como saída no macOS. Use o mesmo atalho para
+iniciar, reproduza o vídeo ou áudio e pare para transcrever. O resultado fica
+no histórico local. Também é possível iniciar antes de dar play.
+
+Durante a gravação, **Control + Option + A (⌃⌥A)** alterna entre ouvir o
+computador e ouvir sua voz, mantendo o áudio anterior, o timer e a transcrição
+na mesma sessão. Aperte novamente para voltar. O indicador mostra a fonte ativa.
+Configure outra combinação em **Configurações → Atalhos de Teclado → Fonte da
+gravação**. Fora de uma gravação, o atalho escolhe a fonte da próxima sessão.
+A abertura do novo dispositivo pode causar uma breve transição entre fontes.
+
+Para gravar sua voz junto, ligue **Incluir meu microfone**; as duas fontes são
+misturadas. Nesse modo, use fones para evitar eco. As opções valem para a
+próxima gravação.
+
+O macOS exige autorização em **Privacidade e Segurança → Gravação de tela e
+áudio do sistema**. A captura fica aberta somente durante a gravação e usa
+apenas o áudio. A permissão de microfone é necessária somente nos modos que
+incluem sua voz. Tudo é transcrito localmente.
 
 ### Transcrever áudios do WhatsApp
 

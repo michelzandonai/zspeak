@@ -83,6 +83,16 @@ final class MicrophoneManager {
         MicrophoneManager.halDefaultInputUID() ?? AVCaptureDevice.default(for: .audio)?.uniqueID
     }
 
+    @ObservationIgnored
+    var connectedDevicesProvider: () -> [MicrophoneInfo] = {
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified
+        )
+        return session.devices.map {
+            MicrophoneInfo(id: $0.uniqueID, name: $0.localizedName, isConnected: true)
+        }
+    }
+
     /// UID do device de entrada padrão do HAL (CoreAudio), ou nil se a consulta
     /// falhar (ex.: nenhum device de entrada).
     nonisolated static func halDefaultInputUID() -> String? {
@@ -124,6 +134,9 @@ final class MicrophoneManager {
     @ObservationIgnored
     private nonisolated(unsafe) var observerTokens: [NSObjectProtocol] = []
 
+    @ObservationIgnored
+    private nonisolated(unsafe) var halListeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+
     // Fonte de verdade do nome do microfone mostrado no overlay durante a gravação.
     // Se `activeMicrophoneID` está setado (device específico em uso), resolve pela lista.
     // Caso contrário (toggle "System Default" ligado OU fallback), devolve o nome real do
@@ -133,6 +146,10 @@ final class MicrophoneManager {
         if let id = activeMicrophoneID,
            let mic = microphones.first(where: { $0.id == id }) {
             return mic.name
+        }
+        if let defaultUID = systemDefaultUIDProvider(),
+           let microphone = microphones.first(where: { $0.id == defaultUID && $0.isConnected }) {
+            return microphone.name
         }
         return AVCaptureDevice.default(for: .audio)?.localizedName ?? "System Default"
     }
@@ -227,6 +244,12 @@ final class MicrophoneManager {
         for token in observerTokens {
             center.removeObserver(token)
         }
+        for (storedAddress, listener) in halListeners {
+            var address = storedAddress
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &address, .main, listener
+            )
+        }
     }
 
     // MARK: - Public methods
@@ -237,14 +260,9 @@ final class MicrophoneManager {
     }
 
     func refreshDevices() {
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.microphone, .external],
-            mediaType: .audio,
-            position: .unspecified
-        )
         // Filtra dispositivos agregados internos do CoreAudio (criados por Teams, Zoom, etc.)
-        let connectedDevices = session.devices.filter { device in
-            !device.uniqueID.hasPrefix("CADefaultDeviceAggregate")
+        let connectedDevices = connectedDevicesProvider().filter { device in
+            device.isConnected && !device.id.hasPrefix("CADefaultDeviceAggregate")
         }
 
         let savedOrder = defaults.stringArray(forKey: "microphonePriorityOrder") ?? []
@@ -256,8 +274,8 @@ final class MicrophoneManager {
         // Existing items in saved priority order
         for id in savedOrder {
             seen.insert(id)
-            if let device = connectedDevices.first(where: { $0.uniqueID == id }) {
-                ordered.append(MicrophoneInfo(id: id, name: device.localizedName, isConnected: true))
+            if let device = connectedDevices.first(where: { $0.id == id }) {
+                ordered.append(device)
             } else {
                 // Keep disconnected devices from saved order
                 let existingName = microphones.first(where: { $0.id == id })?.name ?? id
@@ -266,12 +284,8 @@ final class MicrophoneManager {
         }
 
         // New devices not in saved order — append at end
-        for device in connectedDevices where !seen.contains(device.uniqueID) {
-            ordered.append(MicrophoneInfo(
-                id: device.uniqueID,
-                name: device.localizedName,
-                isConnected: true
-            ))
+        for device in connectedDevices where !seen.contains(device.id) {
+            ordered.append(device)
         }
 
         microphones = ordered
@@ -363,6 +377,25 @@ final class MicrophoneManager {
     }
 
     private func observeDeviceChanges() {
+        // Trocas de padrão no HAL podem ocorrer sem connect/disconnect do
+        // AVCaptureDevice (AirPods auto-switch ou detecção de ouvido).
+        for selector in [kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDevices] {
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                Task { @MainActor in self?.refreshDevices() }
+            }
+            let status = AudioObjectAddPropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &address, .main, listener
+            )
+            if status == noErr {
+                halListeners.append((address, listener))
+            } else {
+                logger.error("Não foi possível observar troca de microfone no HAL: \(status)")
+            }
+        }
         let center = NotificationCenter.default
 
         let connectedToken = center.addObserver(

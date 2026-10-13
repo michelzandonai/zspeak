@@ -391,8 +391,7 @@ final class AudioFileTranscriber {
         _ samples: [Float],
         sampleRate: Int = 16000
     ) -> [Float] {
-        guard samples.count < sampleRate else { return samples }
-        return samples + Array(repeating: 0, count: sampleRate - samples.count)
+        AudioSamplePadding.addingSilence(to: samples, minimumCount: sampleRate)
     }
 
     /// Prepara áudio de arquivo/segmento para o ASR priorizando assertividade:
@@ -411,10 +410,9 @@ final class AudioFileTranscriber {
             return padSamplesForASRIfNeeded(samples, sampleRate: sampleRate)
         }
 
-        let padded = Array(repeating: Float(0), count: paddingCount)
-            + samples
-            + Array(repeating: Float(0), count: paddingCount)
-        return padSamplesForASRIfNeeded(padded, sampleRate: sampleRate)
+        return AudioSamplePadding.addingSilence(
+            to: samples, leading: paddingCount, trailing: paddingCount, minimumCount: sampleRate
+        )
     }
 
     nonisolated static func shouldApplyPlainBoundaryPadding(

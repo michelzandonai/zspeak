@@ -28,10 +28,16 @@ final class StreamingResampler: @unchecked Sendable {
     private let lock = NSLock()
     private var converter: AVAudioConverter?
     private var inputFormat: AVAudioFormat?
+    private var outputBuffer: AVAudioPCMBuffer?
+    private let outputFormat: AVAudioFormat?
     private let targetSampleRate: Double
 
     init(targetSampleRate: Double = 16_000) {
         self.targetSampleRate = targetSampleRate
+        outputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: targetSampleRate,
+            channels: 1, interleaved: false
+        )
     }
 
     /// Converte um buffer do tap para 16 kHz mono float32.
@@ -51,12 +57,7 @@ final class StreamingResampler: @unchecked Sendable {
             return Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
         }
 
-        guard let outputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: targetSampleRate,
-            channels: 1,
-            interleaved: false
-        ) else {
+        guard let outputFormat else {
             throw StreamingResamplerError.converterUnavailable
         }
 
@@ -75,9 +76,16 @@ final class StreamingResampler: @unchecked Sendable {
 
         let ratio = targetSampleRate / format.sampleRate
         let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 64
-        guard let outBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
+        // O tap chama este método ~94 vezes/s a 48 kHz. Reaproveita o buffer
+        // nativo sem recriar formato/storage a cada callback. O array devolvido
+        // continua sendo uma cópia independente para consumidores assíncronos.
+        if outputBuffer == nil || outputBuffer!.frameCapacity < capacity {
+            outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity)
+        }
+        guard let outBuffer = outputBuffer else {
             throw StreamingResamplerError.conversionFailed
         }
+        outBuffer.frameLength = 0
 
         // Entrega o buffer uma única vez; `.noDataNow` sinaliza streaming —
         // o conversor devolve o que tem e retém o estado do filtro para o
@@ -110,5 +118,6 @@ final class StreamingResampler: @unchecked Sendable {
         converter?.reset()
         converter = nil
         inputFormat = nil
+        outputBuffer = nil
     }
 }
