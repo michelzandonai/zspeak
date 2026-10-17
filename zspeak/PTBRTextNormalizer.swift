@@ -324,7 +324,9 @@ enum PTBRTextNormalizer {
         case .teen, .ten:
             return openCategory > 2
         case .unit(let value):
-            return openCategory > 1 && value != 0
+            // A unidade exige "e": "vinte uma vez" e "mil uma vezes" não
+            // podem consumir o artigo "uma" como parte do número anterior.
+            return viaE && openCategory > 1 && value != 0
         }
     }
 
@@ -341,9 +343,9 @@ enum PTBRTextNormalizer {
             let token = tokens[index]
 
             // Dígitos já escritos: só interessa para "% / vírgula" adiante
-            if token.isWord, let digits = Int(token.text), digits >= 0 {
+            if token.isWord, isWrittenDigits(token.text) {
                 let consumed = renderDigitContext(
-                    tokens: tokens, index: index, value: digits, into: &output
+                    tokens: tokens, index: index, into: &output
                 )
                 index = consumed
                 continue
@@ -378,7 +380,7 @@ enum PTBRTextNormalizer {
         /// "por cento" logo após o span (índice do 1º token após "cento")
         case percent(endIndex: Int)
         /// "vírgula" + números após o span (fração e índice pós-fração)
-        case decimal(fraction: String, endIndex: Int)
+        case decimal(fraction: String, percent: Bool, endIndex: Int)
         /// "de <mês>" logo após o span
         case dateDay
     }
@@ -410,8 +412,10 @@ enum PTBRTextNormalizer {
                 while next < tokens.count, isSpanSeparator(tokens[next]) { next += 1 }
                 guard next < tokens.count, tokens[next].isWord else { break }
                 let fractionToken = tokens[next]
-                if let digits = Int(fractionToken.text) {
-                    fraction += String(digits)
+                if isWrittenDigits(fractionToken.text) {
+                    // Fração já escrita é texto: Int apagaria zeros iniciais
+                    // ("05" → "5") e rejeitaria precisão além de Int.max.
+                    fraction += fractionToken.text
                     cursor = next + 1
                     continue
                 }
@@ -427,7 +431,10 @@ enum PTBRTextNormalizer {
                 cursor = part.endIndex
             }
             guard !fraction.isEmpty else { return .none }
-            return .decimal(fraction: fraction, endIndex: cursor)
+            if let endIndex = percentEndIndex(tokens: tokens, after: cursor) {
+                return .decimal(fraction: fraction, percent: true, endIndex: endIndex)
+            }
+            return .decimal(fraction: fraction, percent: false, endIndex: cursor)
         }
 
         // "<n 1..31> de <mês>"
@@ -442,6 +449,18 @@ enum PTBRTextNormalizer {
         }
 
         return .none
+    }
+
+    private static func percentEndIndex(tokens: [Token], after start: Int) -> Int? {
+        var index = start
+        while index < tokens.count, isSpanSeparator(tokens[index]) { index += 1 }
+        guard index < tokens.count, tokens[index].isWord,
+              tokens[index].text.lowercased() == "por" else { return nil }
+        index += 1
+        while index < tokens.count, isSpanSeparator(tokens[index]) { index += 1 }
+        guard index < tokens.count, tokens[index].isWord,
+              tokens[index].text.lowercased() == "cento" else { return nil }
+        return index + 1
     }
 
     private static func shouldConvert(_ parsed: ParsedNumber, context: SpanContext) -> Bool {
@@ -480,8 +499,8 @@ enum PTBRTextNormalizer {
         case .percent(let endIndex):
             output += "\(parsed.value)%"
             return endIndex
-        case .decimal(let fraction, let endIndex):
-            output += "\(parsed.value),\(fraction)"
+        case .decimal(let fraction, let percent, let endIndex):
+            output += "\(parsed.value),\(fraction)\(percent ? "%" : "")"
             return endIndex
         case .dateDay, .none:
             output += formatted(parsed.value)
@@ -489,20 +508,26 @@ enum PTBRTextNormalizer {
         }
     }
 
+    /// Reconhece dígitos sem interpretar seu valor: zeros e precisão são
+    /// informação da transcrição, inclusive em identificadores e decimais.
+    private static func isWrittenDigits(_ text: String) -> Bool {
+        !text.isEmpty && text.utf8.allSatisfy { $0 >= 48 && $0 <= 57 }
+    }
+
     /// Contexto de %/vírgula para números que o ASR já emitiu em dígitos
     /// ("50 por cento" → "50%"). Devolve o índice do próximo token.
     private static func renderDigitContext(
         tokens: [Token],
         index: Int,
-        value: Int,
         into output: inout String
     ) -> Int {
+        let digits = tokens[index].text
         switch spanContext(tokens: tokens, endIndex: index + 1) {
         case .percent(let endIndex):
-            output += "\(value)%"
+            output += "\(digits)%"
             return endIndex
-        case .decimal(let fraction, let endIndex):
-            output += "\(value),\(fraction)"
+        case .decimal(let fraction, let percent, let endIndex):
+            output += "\(digits),\(fraction)\(percent ? "%" : "")"
             return endIndex
         case .dateDay, .none:
             output += tokens[index].text

@@ -266,6 +266,70 @@ struct FileTranscriptionQueueTests {
         #expect(queue.items.allSatisfy { $0.status == .cancelled })
     }
 
+    @Test("cancelAll preserva WAV em leitura e limpa apenas após cancelar", arguments: [false, true])
+    func cancelAllDefersActiveFileCleanup(ownsSource: Bool) async throws {
+        try await assertActiveFileCleanup(reset: false, ownsSource: ownsSource)
+    }
+
+    @Test("reset aguarda leitor antes de apagar temporários e preserva original", arguments: [false, true])
+    func resetDefersActiveFileCleanup(ownsSource: Bool) async throws {
+        try await assertActiveFileCleanup(reset: true, ownsSource: ownsSource)
+    }
+
+    private func assertActiveFileCleanup(reset: Bool, ownsSource: Bool) async throws {
+        let dir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = try makeFile(named: "origem.wav", in: dir)
+        let prepared = try makeFile(named: "preparado.wav", in: dir)
+        let queue = FileTranscriptionQueue()
+        let (started, continuation) = AsyncStream<Void>.makeStream()
+        let allowReadToFinish = DispatchSemaphore(value: 0)
+        var transcribeCalled = false
+        let transcriber = AudioFileTranscriber(
+            transcribe: { _ in
+                transcribeCalled = true
+                return "não deveria transcrever"
+            },
+            diarizer: nil,
+            loadSamples: { url in
+                #expect(url == prepared)
+                continuation.yield(())
+                #expect(allowReadToFinish.wait(timeout: .now() + 5) == .success)
+                #expect(FileManager.default.fileExists(atPath: url.path))
+                return [Float](repeating: 0.1, count: 16_000)
+            }
+        )
+        queue.transcribeHandler = { request, onProgress in
+            let result = try await transcriber.transcribe(
+                url: request.url,
+                mode: request.mode,
+                preTranscodedURL: request.preTranscodedURL,
+                onProgress: onProgress
+            )
+            return FileTranscriptionQueue.Outcome(result: result, recordID: nil)
+        }
+        let id = try #require(queue.enqueue(urls: [source], mode: .plain, ownsSourceFiles: ownsSource).first)
+        queue.attach(prepared: prepared, to: id)
+        var iterator = started.makeAsyncIterator()
+        _ = await iterator.next()
+
+        if reset { queue.reset() } else { queue.cancelAll() }
+        #expect(queue.isRunning)
+        #expect(FileManager.default.fileExists(atPath: source.path))
+        #expect(FileManager.default.fileExists(atPath: prepared.path))
+        allowReadToFinish.signal()
+        try await waitUntilIdle(queue)
+
+        #expect(!transcribeCalled)
+        #expect(!FileManager.default.fileExists(atPath: prepared.path))
+        if !reset {
+            #expect(queue.item(id: id)?.status == .cancelled)
+            #expect(FileManager.default.fileExists(atPath: source.path))
+            queue.clearFinished()
+        }
+        #expect(FileManager.default.fileExists(atPath: source.path) == !ownsSource)
+    }
+
     @Test("clearFinished remove só os itens já finalizados")
     func clearFinishedKeepsPending() async throws {
         let dir = try makeTmpDir()

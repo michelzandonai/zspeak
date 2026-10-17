@@ -125,6 +125,19 @@ struct PTBRTextNormalizerNumberTests {
         #expect(itn("cinco de nós") == "cinco de nós")
     }
 
+    @Test("Preserva zeros e precisão dos dígitos, percentuais decimais e artigos")
+    func fidelityRegressionCorpus() {
+        for row in TextPostProcessingRegressionCorpus.numbers {
+            #expect(itn(row.input) == row.expected, "\(row.name)")
+            #expect(itn(row.expected) == row.expected, "\(row.name): idempotência")
+        }
+        #expect(itn("05 vírgula 007 por cento") == "05,007%")
+        #expect(itn("três vírgula zero 05") == "3,005")
+        #expect(itn("vinte e uma vezes") == "21 vezes")
+        #expect(itn("dois mil e um arquivos") == "2001 arquivos")
+        #expect(itn("foram dois mil uma vez") == "foram 2000 uma vez")
+    }
+
     // MARK: - Robustez
 
     @Test("Texto sem números fica idêntico")

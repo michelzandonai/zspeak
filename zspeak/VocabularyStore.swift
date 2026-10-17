@@ -126,88 +126,30 @@ final class VocabularyStore {
         )
     }
 
-    /// Cache das regras compiladas de substituição, por conjunto de categorias
-    /// ativas (na prática só existem 2 combos: global e global+dev). Invalidado
-    /// quando `entries` muda. Sem o cache, `applyReplacements` recompilava ~1
-    /// regex por alias A CADA update da transcrição ao vivo (várias
-    /// vezes/segundo, na main thread) — centenas de compiles/s durante o ditado.
+    /// Plano imutável por conjunto de categorias; recompila só após editar o
+    /// vocabulário, sem centenas de regex durante cada atualização ao vivo.
     @ObservationIgnored
-    private var compiledReplacements: [Set<VocabularyEntryContext>: [(regex: NSRegularExpression, template: String)]] = [:]
+    private var compiledReplacements: [Set<VocabularyEntryContext>: VocabularyReplacements] = [:]
 
-    /// Marca o cache de regex como obsoleto. Chamar em toda mutação de `entries`.
     func invalidateReplacementCache() {
         compiledReplacements.removeAll()
     }
 
-    /// Aplica substituições aliases → term no texto transcrito.
-    ///
-    /// Fallback em Swift para complementar o context biasing nativo do FluidAudio.
-    /// Serve como rede de segurança para aliases exatos no texto final.
-    ///
-    /// - Boundaries via lookaround (`(?<![\p{L}\p{N}])`...`(?![\p{L}\p{N}])`)
-    ///   em vez de `\b`: aliases com símbolo nas bordas (".NET", "C++",
-    ///   "@State") nunca casavam com `\b`, que exige transição word/non-word.
-    /// - Case-insensitive — "Git Pool", "git pool", "GIT POOL" todos viram o term
-    /// - Preserva o casing do term cadastrado pelo usuário
-    /// - Aliases mais longos são aplicados primeiro, evitando que um alias curto "vaze"
-    ///   dentro de um alias mais longo que ainda não foi processado
-    /// - Apenas entradas habilitadas (`isEnabled`) e cujo contexto está entre
-    ///   as `categories` ativas participam (default: todas — comportamento
-    ///   histórico; a gravação passa as categorias do app em foco)
+    /// Fallback literal do context biasing. Cada trecho do texto original é
+    /// substituído no máximo uma vez, sem cascatas entre termos cadastrados.
     func applyReplacements(
         to text: String,
         categories: Set<VocabularyEntryContext> = Set(VocabularyEntryContext.allCases)
     ) -> String {
         guard !text.isEmpty else { return text }
-
-        let rules = compiledReplacementRules(categories: categories)
-        guard !rules.isEmpty else { return text }
-
-        var result = text
-        for rule in rules {
-            let range = NSRange(location: 0, length: (result as NSString).length)
-            result = rule.regex.stringByReplacingMatches(
-                in: result,
-                options: [],
-                range: range,
-                withTemplate: rule.template
-            )
-        }
-        return result
-    }
-
-    private func compiledReplacementRules(
-        categories: Set<VocabularyEntryContext>
-    ) -> [(regex: NSRegularExpression, template: String)] {
+        let plan: VocabularyReplacements
         if let cached = compiledReplacements[categories] {
-            return cached
+            plan = cached
+        } else {
+            plan = VocabularyReplacements(entries: entries, categories: categories)
+            compiledReplacements[categories] = plan
         }
-
-        var pairs: [(alias: String, term: String)] = []
-        for entry in entries where entry.isEnabled && categories.contains(entry.context) {
-            let term = entry.term.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !term.isEmpty else { continue }
-            for alias in entry.aliases {
-                let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { continue }
-                pairs.append((alias: trimmed, term: term))
-            }
-        }
-        pairs.sort { $0.alias.count > $1.alias.count }
-
-        var rules: [(regex: NSRegularExpression, template: String)] = []
-        rules.reserveCapacity(pairs.count)
-        for (alias, term) in pairs {
-            let escapedAlias = NSRegularExpression.escapedPattern(for: alias)
-            let pattern = "(?<![\\p{L}\\p{N}])\(escapedAlias)(?![\\p{L}\\p{N}])"
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-                continue
-            }
-            rules.append((regex: regex, template: NSRegularExpression.escapedTemplate(for: term)))
-        }
-
-        compiledReplacements[categories] = rules
-        return rules
+        return plan.apply(to: text)
     }
 
     // MARK: - Persistência JSON

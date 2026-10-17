@@ -645,6 +645,26 @@ struct VocabularyStoreTests {
         #expect(store.applyReplacements(to: "rodar terra forme agora") == "rodar terra forme agora")
     }
 
+    @Test("Cache acompanha edição inline, importação e remoção de todas as entradas")
+    func testReplacementCacheTracksAllEntryChanges() throws {
+        let tmpDir = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let store = makeStore(in: tmpDir)
+        store.entries = [VocabularyEntry(term: "First", aliases: ["alias"], context: .dev)]
+        #expect(store.applyReplacements(to: "alias", categories: [.global]) == "alias")
+        #expect(store.applyReplacements(to: "alias") == "First")
+        store.entries[0].term = "Edited"
+        store.entries[0].context = .global
+        #expect(store.applyReplacements(to: "alias", categories: [.global]) == "Edited")
+        #expect(store.applyReplacements(to: "alias") == "Edited")
+        store.entries[0].isEnabled = false
+        #expect(store.applyReplacements(to: "alias") == "alias")
+        store.entries = [VocabularyEntry(term: "Imported", aliases: ["other"])]
+        #expect(store.applyReplacements(to: "alias other") == "alias Imported")
+        store.entries.removeAll()
+        #expect(store.applyReplacements(to: "alias other") == "alias other")
+    }
+
     // Regressão: os seeds antigos tinham aliases perigosos — "wave" (palavra
     // real em inglês) virava "WAV", "head"/"opus" idem. Só "uav" (erro fonético
     // real do ASR) deve permanecer como alias de WAV.

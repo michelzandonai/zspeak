@@ -176,6 +176,123 @@ struct AudioFileTranscriberTests {
         #expect(result == [-1, -0.5, 0, 0, 0.5, 1])
     }
 
+    @Test("Sanitização preserva os bits da referência, incluindo zero negativo e subnormais")
+    func sanitizationMatchesFrozenReferenceBits() {
+        let edgeValues: [Float] = [
+            -0.0, 0, -.leastNonzeroMagnitude, .leastNonzeroMagnitude,
+            -.leastNormalMagnitude, .leastNormalMagnitude,
+            -1, 1, (-Float(1)).nextDown, Float(1).nextUp,
+            -.infinity, .infinity, Float(bitPattern: 0x7fc00001), Float(bitPattern: 0xffc00001),
+        ]
+        var state: UInt64 = 0x13f0b7c45678
+        let arbitraryBits = (0..<20_000).map { _ -> Float in
+            state = state &* 6_364_136_223_846_793_005 &+ 1
+            return Float(bitPattern: UInt32(truncatingIfNeeded: state >> 32))
+        }
+        let validValues = edgeValues.filter { $0.isFinite && $0 >= -1 && $0 <= 1 }
+        for samples in [[], validValues, edgeValues, arbitraryBits, validValues + edgeValues] {
+            let actual = AudioFileTranscriber.sanitizeSamples(samples)
+            let reference = AudioSanitizationReference.sanitize(samples)
+            #expect(actual.map(\.bitPattern) == reference.map(\.bitPattern))
+        }
+    }
+
+    @Test("Leitura de arquivo mantém MainActor livre e preserva PCM sanitizado")
+    func fileLoadingDoesNotBlockMainActor() async throws {
+        let (started, continuation) = AsyncStream<Void>.makeStream()
+        let allowReadToFinish = DispatchSemaphore(value: 0)
+        let source = (0..<16_000).map { Float($0 % 13) / 20 } + [-0.0, .nan, 2]
+        let expected = AudioSanitizationReference.sanitize(source)
+        let transcriber = AudioFileTranscriber(
+            transcribe: { _ in "teste" },
+            diarizer: nil,
+            loadSamples: { _ in
+                #expect(!Thread.isMainThread)
+                continuation.yield(())
+                // O MainActor libera a leitura. Se a leitura voltar à UI, esse
+                // prazo expira e a regressão falha em vez de travar a suíte.
+                #expect(allowReadToFinish.wait(timeout: .now() + 5) == .success)
+                return source
+            }
+        )
+        let work = Task {
+            try await transcriber.transcribe(url: URL(fileURLWithPath: "/voice.wav"), mode: .plain) { _ in }
+        }
+        var iterator = started.makeAsyncIterator()
+        _ = await iterator.next()
+        allowReadToFinish.signal()
+        let result = try await work.value
+        #expect(result.samples.map(\.bitPattern) == expected.map(\.bitPattern))
+        #expect(result.text == "teste")
+    }
+
+    @Test("Cancelamento durante leitura aguarda o leitor e não inicia ASR")
+    func cancellingFileLoadDoesNotStartTranscription() async {
+        let (started, continuation) = AsyncStream<Void>.makeStream()
+        let allowReadToFinish = DispatchSemaphore(value: 0)
+        var transcribeCalled = false
+        // Esse estado e a task observadora ficam isolados no MainActor.
+        var workCompleted = false
+        let transcriber = AudioFileTranscriber(
+            transcribe: { _ in
+                transcribeCalled = true
+                return "não deveria transcrever"
+            },
+            diarizer: nil,
+            loadSamples: { _ in
+                continuation.yield(())
+                #expect(allowReadToFinish.wait(timeout: .now() + 5) == .success)
+                return [Float](repeating: 0.1, count: 16_000)
+            }
+        )
+        let work = Task {
+            try await transcriber.transcribe(url: URL(fileURLWithPath: "/voice.wav"), mode: .plain) { _ in }
+        }
+        let completionObserver = Task { @MainActor in
+            _ = await work.result
+            workCompleted = true
+        }
+        var iterator = started.makeAsyncIterator()
+        _ = await iterator.next()
+        work.cancel()
+        try? await Task.sleep(for: .milliseconds(30))
+        // Retornar já permitiria ao defer apagar o WAV ainda em leitura.
+        #expect(!workCompleted)
+        allowReadToFinish.signal()
+        await #expect(throws: CancellationError.self) { try await work.value }
+        await completionObserver.value
+        #expect(workCompleted)
+        #expect(!transcribeCalled)
+    }
+
+    @Test("Cancelamento prevalece sobre erro de leitura posterior")
+    func cancellationTakesPrecedenceOverLateReadFailure() async {
+        let (started, continuation) = AsyncStream<Void>.makeStream()
+        let allowReadToFinish = DispatchSemaphore(value: 0)
+        var transcribeCalled = false
+        let transcriber = AudioFileTranscriber(
+            transcribe: { _ in
+                transcribeCalled = true
+                return "não deveria transcrever"
+            },
+            diarizer: nil,
+            loadSamples: { _ in
+                continuation.yield(())
+                #expect(allowReadToFinish.wait(timeout: .now() + 5) == .success)
+                throw CocoaError(.fileReadUnknown)
+            }
+        )
+        let work = Task {
+            try await transcriber.transcribe(url: URL(fileURLWithPath: "/voice.wav"), mode: .plain) { _ in }
+        }
+        var iterator = started.makeAsyncIterator()
+        _ = await iterator.next()
+        work.cancel()
+        allowReadToFinish.signal()
+        await #expect(throws: CancellationError.self) { try await work.value }
+        #expect(!transcribeCalled)
+    }
+
     @Test("padSamplesForASRIfNeeded completa áudio curto até 1s")
     func padSamplesForASRIfNeededPadsShortAudio() {
         let samples = Array(repeating: Float(0.1), count: 12000)

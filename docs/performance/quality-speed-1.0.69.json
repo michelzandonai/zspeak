@@ -1,0 +1,1036 @@
+{
+  "version": "1.0.69",
+  "build": 169,
+  "recorded_at_utc": "2026-10-17T18:45:48.458156+00:00",
+  "baseline_revision": "4daadce01a08c24a884a7d53d6daea539f030617",
+  "environment": {
+    "cpu": "Apple M5 Pro",
+    "os": "macOS 26.6.2 (25G83)",
+    "xcode": "27.0 (27A266a)"
+  },
+  "scope": "macOS local; isolated stages and synthetic fixtures; no general ASR accuracy or end-to-end speedup claim",
+  "validation": {
+    "quick_suite": "Test run with 628 tests in 75 suites passed after 23.716 seconds.",
+    "real_asr_suite": "Test run with 6 tests in 3 suites passed after 18.448 seconds.",
+    "live": "[LIVE BENCH] audio=13.25s updates=17 growth=16 first=0.91s avgGap=0.77s maxGap=0.86s finalChars=180",
+    "raw_fixture_transcripts_equal_to_baseline": true,
+    "independent_unicode_review": {
+      "single_alias_pairs": 9019,
+      "priority_cases": 70,
+      "unintended_mismatches": 0
+    },
+    "review": "Independent cross-review; confirmed Unicode and cancellation findings fixed before final tests"
+  },
+  "audio_sanitization": {
+    "scope": "valid Float32 PCM only; allocation avoided is not whole-process peak RAM",
+    "rows": [
+      {
+        "audio_seconds": 1,
+        "baseline_ms": [
+          0.0485,
+          0.05375,
+          0.042792,
+          0.0435,
+          0.04275,
+          0.043083,
+          0.04275,
+          0.042875,
+          0.04275
+        ],
+        "candidate_ms": [
+          0.013375,
+          0.014375,
+          0.014583,
+          0.013125,
+          0.0135,
+          0.014459,
+          0.012958,
+          0.015916,
+          0.013834
+        ],
+        "baseline_median_ms": 0.042875,
+        "candidate_median_ms": 0.013834,
+        "reduction_percent": 67.73411078717201,
+        "avoided_output_copy_bytes": 64000,
+        "bit_exact": true,
+        "reuses_input_buffer": true
+      },
+      {
+        "audio_seconds": 8,
+        "baseline_ms": [
+          0.331292,
+          0.273625,
+          0.236167,
+          0.235833,
+          0.259,
+          0.219541,
+          0.232584,
+          0.236125,
+          0.235667
+        ],
+        "candidate_ms": [
+          0.07675,
+          0.063958,
+          0.046792,
+          0.046875,
+          0.066458,
+          0.069916,
+          0.045875,
+          0.068083,
+          0.0455
+        ],
+        "baseline_median_ms": 0.236125,
+        "candidate_median_ms": 0.063958,
+        "reduction_percent": 72.91349920592907,
+        "avoided_output_copy_bytes": 512000,
+        "bit_exact": true,
+        "reuses_input_buffer": true
+      },
+      {
+        "audio_seconds": 60,
+        "baseline_ms": [
+          2.277166,
+          1.926125,
+          1.873334,
+          1.951167,
+          1.914167,
+          1.937291,
+          2.023833,
+          1.949166,
+          2.27475
+        ],
+        "candidate_ms": [
+          0.425292,
+          0.38375,
+          0.462167,
+          0.390792,
+          0.506042,
+          0.368083,
+          0.416,
+          0.432291,
+          0.373542
+        ],
+        "baseline_median_ms": 1.949166,
+        "candidate_median_ms": 0.416,
+        "reduction_percent": 78.65753866012439,
+        "avoided_output_copy_bytes": 3840000,
+        "bit_exact": true,
+        "reuses_input_buffer": true
+      },
+      {
+        "audio_seconds": 600,
+        "baseline_ms": [
+          22.446375,
+          22.460833,
+          20.821416,
+          17.432833,
+          20.553875,
+          22.857084,
+          22.823666,
+          21.5385,
+          21.887625
+        ],
+        "candidate_ms": [
+          4.253208,
+          4.159625,
+          4.6845,
+          4.770833,
+          5.069083,
+          5.396458,
+          4.334083,
+          4.410458,
+          4.8685
+        ],
+        "baseline_median_ms": 21.887625,
+        "candidate_median_ms": 4.6845,
+        "reduction_percent": 78.59749515993626,
+        "avoided_output_copy_bytes": 38400000,
+        "bit_exact": true,
+        "reuses_input_buffer": true
+      },
+      {
+        "audio_seconds": 3600,
+        "baseline_ms": [
+          131.284208,
+          114.91575,
+          116.157791,
+          121.505208,
+          127.835459,
+          128.715708,
+          128.912042,
+          162.664541,
+          125.561625
+        ],
+        "candidate_ms": [
+          24.175292,
+          23.131542,
+          22.251,
+          24.234916,
+          25.271208,
+          25.908209,
+          27.494333,
+          28.731334,
+          25.880875
+        ],
+        "baseline_median_ms": 127.835459,
+        "candidate_median_ms": 25.271208,
+        "reduction_percent": 80.23145675097861,
+        "avoided_output_copy_bytes": 230400000,
+        "bit_exact": true,
+        "reuses_input_buffer": true
+      }
+    ]
+  },
+  "vocabulary": {
+    "baseline_revision": "4daadce01a08c24a884a7d53d6daea539f030617",
+    "measurements": [
+      {
+        "aliases": 128,
+        "baseline_median_ms": 58.663292,
+        "baseline_ms": [
+          55.989583,
+          58.028334,
+          59.433833,
+          60.318125,
+          59.933375,
+          59.014792,
+          58.023666,
+          58.663292,
+          58.652667
+        ],
+        "cache": "cold",
+        "candidate_median_ms": 1.112542,
+        "candidate_ms": [
+          1.4555,
+          0.9765,
+          1.201792,
+          1.112542,
+          1.283625,
+          0.870291,
+          1.001583,
+          1.027125,
+          1.150791
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 47,
+        "iterations_per_trial": 1,
+        "name": "short-no-match",
+        "non_ascii_aliases": 0,
+        "speedup": 52.729058318697184
+      },
+      {
+        "aliases": 128,
+        "baseline_median_ms": 0.09936500000000001,
+        "baseline_ms": [
+          0.10023958000000001,
+          0.10251042,
+          0.10052791,
+          0.09791833,
+          0.09936500000000001,
+          0.09389291,
+          0.09686208,
+          0.09184958,
+          0.11359375
+        ],
+        "cache": "warm",
+        "candidate_median_ms": 0.0034612500000000004,
+        "candidate_ms": [
+          0.0036925,
+          0.0034808400000000002,
+          0.0036825,
+          0.00323166,
+          0.00542709,
+          0.0034612500000000004,
+          0.00285458,
+          0.00278875,
+          0.0029649999999999998
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 47,
+        "iterations_per_trial": 100,
+        "name": "short-no-match",
+        "non_ascii_aliases": 0,
+        "speedup": 28.707836764174793
+      },
+      {
+        "aliases": 128,
+        "baseline_median_ms": 66.255833,
+        "baseline_ms": [
+          64.340292,
+          69.269583,
+          69.477583,
+          68.579709,
+          62.152667,
+          63.233875,
+          87.856625,
+          66.255833,
+          64.432417
+        ],
+        "cache": "cold",
+        "candidate_median_ms": 1.298166,
+        "candidate_ms": [
+          1.158542,
+          1.287666,
+          1.466792,
+          1.306292,
+          1.297375,
+          1.296417,
+          1.298166,
+          1.404333,
+          1.309959
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 72,
+        "iterations_per_trial": 1,
+        "name": "short-technical",
+        "non_ascii_aliases": 0,
+        "speedup": 51.03802826449006
+      },
+      {
+        "aliases": 128,
+        "baseline_median_ms": 0.15065167000000002,
+        "baseline_ms": [
+          0.15065167000000002,
+          0.14909333,
+          0.153645,
+          0.16208208,
+          0.15004166,
+          0.15178540999999998,
+          0.14576917,
+          0.14166083000000002,
+          0.15085041999999999
+        ],
+        "cache": "warm",
+        "candidate_median_ms": 0.01652542,
+        "candidate_ms": [
+          0.017535000000000002,
+          0.01749541,
+          0.01527958,
+          0.01652542,
+          0.01880959,
+          0.01374167,
+          0.01952417,
+          0.01555167,
+          0.01412083
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 72,
+        "iterations_per_trial": 100,
+        "name": "short-technical",
+        "non_ascii_aliases": 0,
+        "speedup": 9.116359523691381
+      },
+      {
+        "aliases": 128,
+        "baseline_median_ms": 60.023417,
+        "baseline_ms": [
+          67.296,
+          61.831416,
+          60.519375,
+          58.339208,
+          60.023417,
+          57.629834,
+          57.061333,
+          57.547875,
+          60.171167
+        ],
+        "cache": "cold",
+        "candidate_median_ms": 2.168958,
+        "candidate_ms": [
+          2.316,
+          2.25075,
+          2.168958,
+          2.220417,
+          2.004334,
+          1.884042,
+          2.008833,
+          2.020333,
+          2.202708
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 7200,
+        "iterations_per_trial": 1,
+        "name": "long-technical",
+        "non_ascii_aliases": 0,
+        "speedup": 27.673849378365098
+      },
+      {
+        "aliases": 128,
+        "baseline_median_ms": 5.8045333,
+        "baseline_ms": [
+          5.7418875,
+          5.9879207999999995,
+          5.9582709000000005,
+          5.8702708999999995,
+          5.8045333,
+          5.6134,
+          5.4212541000000005,
+          5.7358875,
+          5.97545
+        ],
+        "cache": "warm",
+        "candidate_median_ms": 1.1330958,
+        "candidate_ms": [
+          1.1602542,
+          1.1633958,
+          1.1426375,
+          1.1103875,
+          1.1197915999999999,
+          1.1330958,
+          1.0628792,
+          1.0717667,
+          1.1722833
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 7200,
+        "iterations_per_trial": 10,
+        "name": "long-technical",
+        "non_ascii_aliases": 0,
+        "speedup": 5.122720691401381
+      },
+      {
+        "aliases": 1024,
+        "baseline_median_ms": 429.368083,
+        "baseline_ms": [
+          503.717041,
+          493.530708,
+          452.344208,
+          429.368083,
+          432.506333,
+          423.152959,
+          403.74825,
+          410.706,
+          415.563458
+        ],
+        "cache": "cold",
+        "candidate_median_ms": 3.982083,
+        "candidate_ms": [
+          4.519167,
+          4.845416,
+          4.532209,
+          4.40425,
+          3.718,
+          3.982083,
+          3.310542,
+          3.470292,
+          3.071916
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 72,
+        "iterations_per_trial": 1,
+        "name": "large-vocabulary",
+        "non_ascii_aliases": 0,
+        "speedup": 107.82499586271808
+      },
+      {
+        "aliases": 1024,
+        "baseline_median_ms": 1.01458668,
+        "baseline_ms": [
+          0.9433183599999999,
+          1.01583668,
+          0.99794832,
+          0.98374168,
+          0.9558233199999999,
+          1.03654832,
+          1.03104832,
+          1.0539100000000001,
+          1.01458668
+        ],
+        "cache": "warm",
+        "candidate_median_ms": 0.05471,
+        "candidate_ms": [
+          0.05471,
+          0.05213664,
+          0.05528832,
+          0.05370668,
+          0.06546164,
+          0.05465,
+          0.05013668,
+          0.07323,
+          0.060593320000000006
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 72,
+        "iterations_per_trial": 25,
+        "name": "large-vocabulary",
+        "non_ascii_aliases": 0,
+        "speedup": 18.544812282946445
+      },
+      {
+        "aliases": 128,
+        "baseline_median_ms": 55.703875,
+        "baseline_ms": [
+          55.666583,
+          58.238084,
+          58.374375,
+          57.5725,
+          56.746625,
+          55.703875,
+          55.349917,
+          53.925542,
+          54.486042
+        ],
+        "cache": "cold",
+        "candidate_median_ms": 4.16375,
+        "candidate_ms": [
+          4.230041,
+          3.83725,
+          4.767958,
+          4.16375,
+          3.76025,
+          4.721458,
+          4.101458,
+          4.884792,
+          3.658584
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 104,
+        "iterations_per_trial": 1,
+        "name": "accented-vocabulary",
+        "non_ascii_aliases": 128,
+        "speedup": 13.378294806364453
+      },
+      {
+        "aliases": 128,
+        "baseline_median_ms": 0.35490666,
+        "baseline_ms": [
+          0.35195832000000005,
+          0.35490666,
+          0.36877082,
+          0.360065,
+          0.3668075,
+          0.35915582,
+          0.3473075,
+          0.34263584,
+          0.34393915999999997
+        ],
+        "cache": "warm",
+        "candidate_median_ms": 0.13528916000000002,
+        "candidate_ms": [
+          0.13782584,
+          0.1294025,
+          0.14217000000000002,
+          0.1411525,
+          0.14270834000000002,
+          0.1351825,
+          0.13528916000000002,
+          0.12599832,
+          0.13416084
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 104,
+        "iterations_per_trial": 50,
+        "name": "accented-vocabulary",
+        "non_ascii_aliases": 128,
+        "speedup": 2.623319266672954
+      },
+      {
+        "aliases": 128,
+        "baseline_median_ms": 60.631584,
+        "baseline_ms": [
+          60.805042,
+          60.631584,
+          64.912333,
+          62.75025,
+          58.429208,
+          58.883583,
+          58.130792,
+          61.472292,
+          58.806625
+        ],
+        "cache": "cold",
+        "candidate_median_ms": 6.589042,
+        "candidate_ms": [
+          6.8285,
+          6.589042,
+          7.705,
+          7.211042,
+          6.298125,
+          6.524792,
+          6.624084,
+          6.13625,
+          6.015167
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 2080,
+        "iterations_per_trial": 1,
+        "name": "accented-long-text",
+        "non_ascii_aliases": 128,
+        "speedup": 9.201881548182573
+      },
+      {
+        "aliases": 128,
+        "baseline_median_ms": 4.5432041,
+        "baseline_ms": [
+          4.4298875,
+          4.5062333,
+          4.5432041,
+          4.6890084000000005,
+          5.0282165999999995,
+          4.7560875000000005,
+          4.5601167,
+          4.524558300000001,
+          4.343333299999999
+        ],
+        "cache": "warm",
+        "candidate_median_ms": 2.4713292,
+        "candidate_ms": [
+          2.3941375000000003,
+          2.32985,
+          2.4709791,
+          2.4713292,
+          2.6456792,
+          2.6180667,
+          2.480775,
+          2.6252958,
+          2.3265208
+        ],
+        "identical_utf8": true,
+        "input_utf8_bytes": 2080,
+        "iterations_per_trial": 10,
+        "name": "accented-long-text",
+        "non_ascii_aliases": 128,
+        "speedup": 1.8383645934341728
+      }
+    ],
+    "os": "Version 26.6.2 (Build 25G83)",
+    "regressions": [
+      {
+        "after": "alpha omega",
+        "before": "omega omega",
+        "expected": "alpha omega",
+        "input": "start here alpha",
+        "name": "cascade",
+        "stage": "vocabulary"
+      },
+      {
+        "after": "foo bar e baz",
+        "before": "foo baz e baz",
+        "expected": "foo bar e baz",
+        "input": "fubar e bar",
+        "name": "inserted-term-part",
+        "stage": "vocabulary"
+      },
+      {
+        "after": "posh_name name_posh push",
+        "before": "push_name name_push push",
+        "expected": "posh_name name_posh push",
+        "input": "posh_name name_posh posh",
+        "name": "snake-case",
+        "stage": "vocabulary"
+      },
+      {
+        "after": "café Coffee",
+        "before": "Coffeé Coffee",
+        "expected": "café Coffee",
+        "input": "café cafe",
+        "name": "combining-mark-boundary",
+        "stage": "vocabulary"
+      },
+      {
+        "after": "abrir Codex",
+        "before": "abrir códex",
+        "expected": "abrir Codex",
+        "input": "abrir códex",
+        "name": "canonical-unicode-alias",
+        "stage": "vocabulary"
+      },
+      {
+        "after": "3,05",
+        "before": "3,5",
+        "expected": "3,05",
+        "input": "três vírgula 05",
+        "name": "fraction-leading-zero",
+        "stage": "number-normalization"
+      },
+      {
+        "after": "1,05%",
+        "before": "1,5%",
+        "expected": "1,05%",
+        "input": "1,05 por cento",
+        "name": "written-decimal-percent",
+        "stage": "number-normalization"
+      },
+      {
+        "after": "0,5%",
+        "before": "0,5 por cento",
+        "expected": "0,5%",
+        "input": "zero vírgula cinco por cento",
+        "name": "spoken-decimal-percent",
+        "stage": "number-normalization"
+      },
+      {
+        "after": "0,001234567890123456789012345",
+        "before": "zero vírgula 001234567890123456789012345",
+        "expected": "0,001234567890123456789012345",
+        "input": "zero vírgula 001234567890123456789012345",
+        "name": "fraction-precision",
+        "stage": "number-normalization"
+      },
+      {
+        "after": "paguei 20 uma vez",
+        "before": "paguei 21 vez",
+        "expected": "paguei 20 uma vez",
+        "input": "paguei vinte uma vez",
+        "name": "article-after-number",
+        "stage": "number-normalization"
+      }
+    ],
+    "scope": "post-processing only; synthetic vocabulary; no ASR accuracy or end-to-end latency claim"
+  },
+  "live_preview_backlog": {
+    "audio_bit_exact": true,
+    "audio_seconds": 40,
+    "benchmark": "live-preview-backlog",
+    "candidate_cut_search_ms": 8.11425,
+    "candidate_inference_calls": 5,
+    "candidate_max_inference_samples_with_padding": 133120,
+    "checksum": 45392340,
+    "iterations": 60,
+    "reference_cut_search_ms": 65.276666,
+    "reference_first_commit_samples_with_padding": 629760,
+    "scope": "synthetic cut search; no ASR inference"
+  },
+  "asr_quality": {
+    "baseline_version": "1.0.64",
+    "rows": [
+      {
+        "audio_seconds": 2.784625,
+        "baseline_asr_ms": [
+          85.514625,
+          89.717875,
+          89.163958
+        ],
+        "baseline_cer": 0,
+        "baseline_wer": 0,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          84.26,
+          86.460875,
+          90.566125
+        ],
+        "candidate_cer": 0,
+        "candidate_wer": 0,
+        "case": "pt-short",
+        "same_text": true
+      },
+      {
+        "audio_seconds": 13.24525,
+        "baseline_asr_ms": [
+          151.393417,
+          150.672166,
+          152.213958
+        ],
+        "baseline_cer": 0.017045454545454544,
+        "baseline_wer": 0.06451612903225806,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          143.317834,
+          142.147459,
+          155.003166
+        ],
+        "candidate_cer": 0.017045454545454544,
+        "candidate_wer": 0.06451612903225806,
+        "case": "pt-technical",
+        "same_text": true
+      },
+      {
+        "audio_seconds": 2.784625,
+        "baseline_asr_ms": [
+          102.662291,
+          98.77775,
+          101.206791
+        ],
+        "baseline_cer": 0,
+        "baseline_wer": 0,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          100.791958,
+          98.093708,
+          99.605041
+        ],
+        "candidate_cer": 0,
+        "candidate_wer": 0,
+        "case": "quiet-speech",
+        "same_text": true
+      },
+      {
+        "audio_seconds": 2.784625,
+        "baseline_asr_ms": [
+          93.824167,
+          96.6885,
+          94.009042
+        ],
+        "baseline_cer": 0,
+        "baseline_wer": 0,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          95.5635,
+          92.466084,
+          93.0975
+        ],
+        "candidate_cer": 0,
+        "candidate_wer": 0,
+        "case": "rumble-speech",
+        "same_text": true
+      },
+      {
+        "audio_seconds": 3.984625,
+        "baseline_asr_ms": [
+          88.321458,
+          90.070916,
+          91.372416
+        ],
+        "baseline_cer": 0.08333333333333333,
+        "baseline_wer": 0.16666666666666666,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          87.276625,
+          89.929375,
+          88.586917
+        ],
+        "candidate_cer": 0.08333333333333333,
+        "candidate_wer": 0.16666666666666666,
+        "case": "padded-speech",
+        "same_text": true
+      },
+      {
+        "audio_seconds": 5,
+        "baseline_asr_ms": [
+          0.000416,
+          4.2e-05,
+          4.1e-05
+        ],
+        "baseline_cer": 0,
+        "baseline_wer": 0,
+        "bit_exact": true,
+        "candidate_asr_ms": [
+          8.3e-05,
+          4.2e-05,
+          4.2e-05
+        ],
+        "candidate_cer": 0,
+        "candidate_wer": 0,
+        "case": "silence",
+        "same_text": true
+      }
+    ]
+  },
+  "capture_gate": {
+    "passed": true,
+    "audio_seconds": 60,
+    "trials": 5,
+    "rows": [
+      {
+        "audio_seconds": 60,
+        "elapsed_ms": 13.1785,
+        "max_callback_us": 89.125,
+        "name": "resample_stereo_48k",
+        "p50_callback_us": 1.917,
+        "p95_callback_us": 2.542,
+        "peak_process_bytes": 10469376,
+        "samples": 960000,
+        "signal_energy": 29509.302171091083,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 60,
+        "elapsed_ms": 3.534542,
+        "max_callback_us": 39,
+        "name": "mixed_two_sources",
+        "p50_callback_us": 0.25,
+        "p95_callback_us": 0.5,
+        "peak_process_bytes": 18317312,
+        "samples": 960000,
+        "stop_ms": 0.326,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 30,
+        "elapsed_ms": 0.628542,
+        "max_callback_us": 627.833,
+        "name": "live_burst_30s",
+        "p50_callback_us": 627.833,
+        "p95_callback_us": 627.833,
+        "peak_process_bytes": 22233088,
+        "samples": 480000,
+        "trial": 0
+      },
+      {
+        "audio_seconds": 60,
+        "elapsed_ms": 12.3745,
+        "max_callback_us": 85.959,
+        "name": "resample_stereo_48k",
+        "p50_callback_us": 1.917,
+        "p95_callback_us": 2.5,
+        "peak_process_bytes": 22233088,
+        "samples": 960000,
+        "signal_energy": 29509.302171091083,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 60,
+        "elapsed_ms": 3.196792,
+        "max_callback_us": 33.625,
+        "name": "mixed_two_sources",
+        "p50_callback_us": 0.25,
+        "p95_callback_us": 0.5,
+        "peak_process_bytes": 22233088,
+        "samples": 960000,
+        "stop_ms": 0.096208,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 30,
+        "elapsed_ms": 0.616042,
+        "max_callback_us": 615.5,
+        "name": "live_burst_30s",
+        "p50_callback_us": 615.5,
+        "p95_callback_us": 615.5,
+        "peak_process_bytes": 22233088,
+        "samples": 480000,
+        "trial": 1
+      },
+      {
+        "audio_seconds": 60,
+        "elapsed_ms": 12.280416,
+        "max_callback_us": 90.834,
+        "name": "resample_stereo_48k",
+        "p50_callback_us": 1.916,
+        "p95_callback_us": 2.5,
+        "peak_process_bytes": 22233088,
+        "samples": 960000,
+        "signal_energy": 29509.302171091083,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 60,
+        "elapsed_ms": 3.231458,
+        "max_callback_us": 51.583,
+        "name": "mixed_two_sources",
+        "p50_callback_us": 0.25,
+        "p95_callback_us": 0.583,
+        "peak_process_bytes": 22249472,
+        "samples": 960000,
+        "stop_ms": 0.0865,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 30,
+        "elapsed_ms": 0.630375,
+        "max_callback_us": 629.542,
+        "name": "live_burst_30s",
+        "p50_callback_us": 629.542,
+        "p95_callback_us": 629.542,
+        "peak_process_bytes": 24166400,
+        "samples": 480000,
+        "trial": 2
+      },
+      {
+        "audio_seconds": 60,
+        "elapsed_ms": 12.218334,
+        "max_callback_us": 63.75,
+        "name": "resample_stereo_48k",
+        "p50_callback_us": 1.875,
+        "p95_callback_us": 2.375,
+        "peak_process_bytes": 24182784,
+        "samples": 960000,
+        "signal_energy": 29509.302171091083,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 60,
+        "elapsed_ms": 3.424917,
+        "max_callback_us": 65.834,
+        "name": "mixed_two_sources",
+        "p50_callback_us": 0.25,
+        "p95_callback_us": 0.625,
+        "peak_process_bytes": 24215552,
+        "samples": 960000,
+        "stop_ms": 0.083708,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 30,
+        "elapsed_ms": 0.409458,
+        "max_callback_us": 408.708,
+        "name": "live_burst_30s",
+        "p50_callback_us": 408.708,
+        "p95_callback_us": 408.708,
+        "peak_process_bytes": 24264704,
+        "samples": 480000,
+        "trial": 3
+      },
+      {
+        "audio_seconds": 60,
+        "elapsed_ms": 12.1715,
+        "max_callback_us": 70.166,
+        "name": "resample_stereo_48k",
+        "p50_callback_us": 1.916,
+        "p95_callback_us": 2.375,
+        "peak_process_bytes": 24526848,
+        "samples": 960000,
+        "signal_energy": 29509.302171091083,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 60,
+        "elapsed_ms": 3.881667,
+        "max_callback_us": 60.25,
+        "name": "mixed_two_sources",
+        "p50_callback_us": 0.25,
+        "p95_callback_us": 1.084,
+        "peak_process_bytes": 28016640,
+        "samples": 960000,
+        "stop_ms": 0.093458,
+        "trial": 4
+      },
+      {
+        "audio_seconds": 30,
+        "elapsed_ms": 0.417292,
+        "max_callback_us": 416.75,
+        "name": "live_burst_30s",
+        "p50_callback_us": 416.75,
+        "p95_callback_us": 416.75,
+        "peak_process_bytes": 28164096,
+        "samples": 480000,
+        "trial": 4
+      }
+    ]
+  },
+  "speech_preparation_gate": {
+    "passed": true,
+    "rows": 112,
+    "all_bit_exact": true
+  },
+  "sources_sha256": {
+    "Tests/AudioFileTranscriberTests.swift": "4bd5bc3a33209cc31ab5eca110a91227efbfb153fc9a5d0f048ebed2a512f390",
+    "Tests/FileTranscriptionQueueTests.swift": "6985388739db98f842492a15e2e86eeca0b04eca8fe7e4b73ae047a72bd8b7c7",
+    "Tests/LiveTranscriptionTests.swift": "6b4e7411b35469f2039ba42d971dfc3a7df501b737d058cc83fe445ad6999d1c",
+    "Tests/PTBRTextNormalizerTests.swift": "1ac05606598812b94410f6d6b235a59e37b138f049b22036aba1028152a20ead",
+    "Tests/Support/AudioSanitizationReference.swift": "d2b5cc89c8c8bb5fe858edc128064e5d767eac4641c4df0e56657d0509aa0c71",
+    "Tests/Support/TextPostProcessingRegressionCorpus.swift": "cd3b79d7220627800711975f0249621f704f50262ff7f29582e529dbbc733981",
+    "Tests/Support/VocabularyReplacementReference.swift": "03237311fda285520a0bc7163a40cfb08c029023a7f4b199f8c2be368ff04b27",
+    "Tests/VocabularyReplacementsTests.swift": "39389f6e12b84ec51eb5eb45667b6edfc0628ee2d23279c2e09d32aacee0f37f",
+    "Tests/VocabularyStoreTests.swift": "3abcfa23b918de84eb1618b16af41bd448c474bd97cbc8c508a5a677dab4a131",
+    "scripts/benchmarks/AudioSanitizationBenchmark.swift": "9e9760876a27d391d783913fa58b988a377301f2e0da280fa5ba7657879e9003",
+    "scripts/benchmarks/LivePreviewBacklogBenchmark.swift": "4f315dde6a91c1829a893eaaec17482e9a719edc4f15f063edabdd145d00bd16",
+    "scripts/benchmarks/VocabularyBenchmark.swift": "ed93c14cff76dab86d5dc3037203400909214c8de79be74854f40b8de1d7c55e",
+    "scripts/perf_audio_sanitization.sh": "1e7cbbfc10733ab714cbaca6296efa17922d0cf0b1b302edfd5159f26c6c31cf",
+    "scripts/perf_live_preview_backlog.sh": "1d3a020482c34853b1e2f38511eb8f45319ac473e34924cb95adc13c51478e0a",
+    "scripts/perf_vocabulary.sh": "11d07c0bd3e6d291387f5a4b5e8b7bb1dd24fc82ce5ae7cb0763b30152622dd1",
+    "zspeak/AudioFileTranscriber.swift": "0d81b19764a82de3be56077e2d7e34972ee8baf38b8fd0dc5bdbd9e61fa866ae",
+    "zspeak/AudioSampleSanitizer.swift": "8c3c5f570fa9054c0f33005b610c8f90d73bcec9d1dcd7aaea05534ef22d7085",
+    "zspeak/FileTranscriptionQueue.swift": "add199c9d706e8f5b1971eac855bd4d85e999a6b1c8fffd32cd37232634fd6b9",
+    "zspeak/LiveTranscription.swift": "d228fa4248d7bc43232fac34af1379cc9263505781c3e903715d3ff92fe6a815",
+    "zspeak/PTBRTextNormalizer.swift": "9d9fca472208c6c7ecf374a67bca3b06a358b439d15eceff7e92dea05d909c88",
+    "zspeak/VocabularyReplacements.swift": "c465ce543a0672bde67ca292135589bfafcb84ccfe5979023ea3536c3926a971",
+    "zspeak/VocabularyStore.swift": "701fabf6029debd0b80dadc2b58904507635892a254486c24ccf72fd90ce8993"
+  },
+  "limitations": [
+    "No physical microphone/AirPods test in this run",
+    "Backlog memory is not bounded under indefinite overload",
+    "Synchronous file conversion finishes before cancellation cleanup",
+    "Raw ASR error rates unchanged on fixtures; accuracy improvements are deterministic text corrections"
+  ]
+}
