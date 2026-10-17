@@ -41,6 +41,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # O benchmark de normalização usa uma revisão anterior fixa como referência.
+          fetch-depth: 0
 
       - name: Select Xcode 16 (Swift 6)
         uses: maxim-lobanov/setup-xcode@v1
@@ -91,6 +94,15 @@ jobs:
       - name: Speech preparation (Release, identical samples)
         run: ./scripts/perf_speech_preparation.sh > speech-preparation.json
 
+      - name: Audio sanitization (Release, identical samples)
+        run: ./scripts/perf_audio_sanitization.sh > audio-sanitization.json
+
+      - name: Vocabulary fidelity and performance (Release)
+        run: ./scripts/perf_vocabulary.sh > vocabulary-performance.json
+
+      - name: Live preview backlog (bounded inference, identical samples)
+        run: ./scripts/perf_live_preview_backlog.sh > live-preview-backlog.json
+
       - name: Capture performance evidence
         uses: actions/upload-artifact@v4
         with:
@@ -98,6 +110,9 @@ jobs:
           path: |
             capture-performance.json
             speech-preparation.json
+            audio-sanitization.json
+            vocabulary-performance.json
+            live-preview-backlog.json
 
   lint:
     name: Lint (swift-format, best-effort)

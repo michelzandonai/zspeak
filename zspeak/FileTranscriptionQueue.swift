@@ -107,6 +107,10 @@ final class FileTranscriptionQueue {
     private var runnerTask: Task<Void, Never>?
     private var activeTask: Task<Outcome, Error>?
     private var prefetchTask: Task<Void, Never>?
+    /// Arquivos emprestados à task ativa. Reset pode tirar os itens da UI,
+    /// mas só libera esses recursos depois que a leitura realmente termina.
+    private var activeFileURLs: Set<URL> = []
+    private var deferredCleanupURLs: Set<URL> = []
 
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.zspeak",
@@ -286,6 +290,7 @@ final class FileTranscriptionQueue {
             items[index].status = .running
             items[index].phase = .loadingSamples
             activeItemID = item.id
+            activeFileURLs = [item.url]
 
             // Enquanto este item ocupa o ANE, o próximo já é transcodificado na CPU.
             schedulePrefetch()
@@ -299,6 +304,11 @@ final class FileTranscriptionQueue {
             let outcome = await task.result
             activeTask = nil
             activeItemID = nil
+            activeFileURLs.removeAll()
+            for url in deferredCleanupURLs {
+                try? FileManager.default.removeItem(at: url)
+            }
+            deferredCleanupURLs.removeAll()
 
             guard let currentIndex = items.firstIndex(where: { $0.id == itemID }) else { continue }
             discardPrepared(at: currentIndex)
@@ -341,6 +351,7 @@ final class FileTranscriptionQueue {
 
         // Relê o item: o prefetch pode ter anexado o WAV depois do enfileiramento.
         let prepared = items.first { $0.id == item.id }?.preparedURL
+        if let prepared { activeFileURLs.insert(prepared) }
         let request = Request(
             url: item.url,
             preTranscodedURL: prepared,
@@ -382,7 +393,8 @@ final class FileTranscriptionQueue {
         }
     }
 
-    private func attach(prepared: URL, to itemID: UUID) {
+    /// Entrega a posse do WAV preparado à fila; testável sem executar ffmpeg.
+    func attach(prepared: URL, to itemID: UUID) {
         guard let index = items.firstIndex(where: { $0.id == itemID }),
               !items[index].status.isFinished else {
             FFmpegTranscoder.shared.cleanup(prepared)
@@ -393,13 +405,21 @@ final class FileTranscriptionQueue {
 
     private func discardSourceIfOwned(at index: Int) {
         guard index < items.count, items[index].ownsSourceFile else { return }
-        try? FileManager.default.removeItem(at: items[index].url)
+        discardTemporaryURL(items[index].url)
     }
 
     private func discardPrepared(at index: Int) {
         guard index < items.count, let prepared = items[index].preparedURL else { return }
-        FFmpegTranscoder.shared.cleanup(prepared)
+        discardTemporaryURL(prepared)
         items[index].preparedURL = nil
+    }
+
+    private func discardTemporaryURL(_ url: URL) {
+        if activeFileURLs.contains(url) {
+            deferredCleanupURLs.insert(url)
+        } else {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     nonisolated static func needsTranscoding(_ url: URL) -> Bool {

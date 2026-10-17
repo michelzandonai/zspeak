@@ -184,6 +184,31 @@ e limites de páginas no mixer, emissão grande sem perda/duplicação no emitte
 | Benchmark otimizado | Apple Silicon, toolchain Swift, fontes atuais | Executar 10 min e 1 h simulados, antes/depois | Preservar samples e manter folga para tempo real; assertions no runner e gate do CI |
 | Latência nativa | Microfone/captura autorizados, fixture local | Iniciar captura combinada, reproduzir WAV, parar e transcrever | Primeiro sample antes de 2 s e fixture reconhecida; `SystemAudioCaptureIntegrationTests` registra início/stop/ASR |
 
+### Acurácia e velocidade — 1.0.69
+
+```bash
+CI=1 ZSPEAK_SKIP_SLOW=1 swift test --no-parallel --filter 'AudioFileTranscriberTests|FileTranscriptionQueueTests|LiveTranscriptionTests|VocabularyStoreTests|VocabularyReplacementsTests|PTBRTextNormalizer'
+./scripts/perf_audio_sanitization.sh
+./scripts/perf_vocabulary.sh
+./scripts/perf_live_preview_backlog.sh
+```
+
+Regressões: vocabulário sem cascatas, Unicode e identificadores preservados;
+zeros/precisão decimal; leitura de arquivos fora da UI; cancelamento inclusive
+com erro de I/O tardio; temporários preservados até terminar o leitor;
+preview limitado por inferência com samples em ordem e fechamento sem backlog.
+
+| Validação | Entrada / pré-condição | Ação | Resultado esperado / automação |
+|---|---|---|---|
+| Pós-processamento | Corpus determinístico e revisão `4daadce` disponível | Executar benchmark e testes do vocabulário/ITN | Defeitos anteriores reproduzidos; saídas corretas; texto comum idêntico |
+| PCM | Buffers válidos, inválidos e bits arbitrários | Sanitizar pela referência e implementação | Float32 bit a bit idêntico; benchmark mede reutilização do buffer |
+| UI e cancelamento | Leitor bloqueado injetado | Cancelar a leitura, limpar/resetar a fila | MainActor livre, ASR não executado e arquivos preservados até leitor encerrar |
+| Preview atrasado | 40 s de áudio com silêncio apenas no fim | Processar backlog, parar/cancelar | Inferência de até 12 s + padding; sinal integral em ordem; nenhum trabalho novo após fechar |
+
+Os benchmarks medem etapas isoladas, não o ASR completo. O A/B real permanece
+em `SpeechQualityPerformanceTests`; resultados e limites estão em
+[`docs/performance-speech-quality.md`](../docs/performance-speech-quality.md).
+
 ### Otimização sem perda de qualidade
 
 ```bash

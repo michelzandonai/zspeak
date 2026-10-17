@@ -108,7 +108,7 @@ final class AudioFileTranscriber {
         supportedNativeExtensions.union(ffmpegExtensions)
     }
 
-    private let audioConverter = AudioConverter()
+    private let loadSamples: @Sendable (URL) throws -> [Float]
     private let ffmpeg = FFmpegTranscoder.shared
     private let transcribe: ([Float]) async throws -> String
     private let diarizer: DiarizationManager?
@@ -118,10 +118,14 @@ final class AudioFileTranscriber {
     ///   - diarizer: manager de diarização — necessário apenas para modo `.meeting`
     init(
         transcribe: @escaping ([Float]) async throws -> String,
-        diarizer: DiarizationManager?
+        diarizer: DiarizationManager?,
+        loadSamples: @escaping @Sendable (URL) throws -> [Float] = { url in
+            try AudioConverter().resampleAudioFile(url)
+        }
     ) {
         self.transcribe = transcribe
         self.diarizer = diarizer
+        self.loadSamples = loadSamples
     }
 
     /// Valida se a extensão do arquivo é suportada
@@ -182,14 +186,15 @@ final class AudioFileTranscriber {
 
         // Fase 2: carrega samples 16 kHz mono float32
         onProgress(.loadingSamples)
-        let loadedSamples: [Float]
+        let samples: [Float]
         do {
-            loadedSamples = try audioConverter.resampleAudioFile(workingURL)
+            samples = try await Self.loadSamplesOffMainActor(from: workingURL, using: loadSamples)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw TranscriberError.audioLoadFailed(error.localizedDescription)
         }
 
-        let samples = Self.sanitizeSamples(loadedSamples)
         guard samples.count > 8000 else {  // Menos de 0.5s
             throw TranscriberError.emptyAudio
         }
@@ -379,9 +384,38 @@ final class AudioFileTranscriber {
 
     /// Garante amostras finitas dentro do intervalo esperado por CoreML.
     nonisolated static func sanitizeSamples(_ samples: [Float]) -> [Float] {
-        samples.map { sample in
-            guard sample.isFinite else { return 0 }
-            return min(1, max(-1, sample))
+        AudioSampleSanitizer.sanitize(samples)
+    }
+
+    /// Leitura, resampling e sanitização podem percorrer arquivos de horas.
+    /// O conversor pertence à task de trabalho; nenhum estado não-Sendable
+    /// atravessa atores e a UI continua livre para progresso/cancelamento.
+    nonisolated static func loadSamplesOffMainActor(
+        from url: URL,
+        using loader: @escaping @Sendable (URL) throws -> [Float]
+    ) async throws -> [Float] {
+        try Task.checkCancellation()
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let loaded = try loader(url)
+            try Task.checkCancellation()
+            let sanitized = sanitizeSamples(loaded)
+            try Task.checkCancellation()
+            return sanitized
+        }
+        return try await withTaskCancellationHandler {
+            do {
+                let samples = try await task.value
+                try Task.checkCancellation()
+                return samples
+            } catch {
+                // O leitor pode falhar em I/O depois de receber cancelamento.
+                // Preserva a intenção de cancelar, sem marcar a fila como erro.
+                try Task.checkCancellation()
+                throw error
+            }
+        } onCancel: {
+            task.cancel()
         }
     }
 

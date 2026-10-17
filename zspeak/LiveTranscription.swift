@@ -100,7 +100,8 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
             let cut = Self.commitCutIndex(
                 samples: samples,
                 searchStart: Self.commitSearchStartSamples,
-                windowSize: Self.commitCutWindowSamples
+                windowSize: Self.commitCutWindowSamples,
+                searchEnd: Self.commitWindowSamples
             )
             let commitChunk = AudioSamplePadding.addingSilence(
                 to: samples[0..<cut], trailing: Self.trailingPaddingSamples,
@@ -198,14 +199,20 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
     }
 
     /// Encontra o índice de corte para o commit: o centro da janela de menor
-    /// energia RMS entre `searchStart` e o fim do buffer. Cortar no trecho
+    /// energia RMS entre `searchStart` e `searchEnd`. Cortar no trecho
     /// mais silencioso minimiza a chance de dividir uma palavra entre o texto
-    /// confirmado e a janela seguinte.
-    static func commitCutIndex(samples: [Float], searchStart: Int, windowSize: Int) -> Int {
-        let start = max(0, min(searchStart, samples.count - 1))
+    /// confirmado e a janela seguinte. O limite evita que áudio acumulado
+    /// durante uma inferência lenta transforme o commit em outra inferência
+    /// de toda a sessão; o restante continua na fila, sem descartar amostras.
+    static func commitCutIndex(
+        samples: [Float], searchStart: Int, windowSize: Int, searchEnd: Int? = nil
+    ) -> Int {
+        let end = max(0, min(searchEnd ?? samples.count, samples.count))
+        guard end > 0 else { return 0 }
+        let start = max(0, min(searchStart, end - 1))
         let window = max(1, windowSize)
-        guard samples.count - start > window else {
-            return max(1, min(searchStart, samples.count))
+        guard end - start > window else {
+            return max(1, min(searchStart, end))
         }
 
         let hop = max(1, window / 3)
@@ -213,7 +220,7 @@ actor CumulativeLiveTranscriptionSession: LiveTranscriptionSession {
         var quietestEnergy = Float.greatestFiniteMagnitude
         var index = start
 
-        while index + window <= samples.count {
+        while index <= end - window {
             var sum: Float = 0
             for sample in samples[index..<(index + window)] {
                 sum += sample * sample

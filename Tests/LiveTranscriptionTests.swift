@@ -81,6 +81,59 @@ struct LiveTranscriptionTests {
         #expect(maxTranscribed < totalSamples, "maior chamada=\(maxTranscribed), total=\(totalSamples)")
     }
 
+    @Test("Backlog mantém cada inferência em 12 s e preserva todas as amostras")
+    func backlogKeepsBoundedInferenceWithoutDroppingAudio() async throws {
+        let collector = PreviewSignalCollector()
+        let updates = LiveTranscriptionUpdateCollector()
+        // O silêncio só no fim forçava o algoritmo anterior a commitar quase
+        // os 40 s de uma vez, apesar da janela declarada de 12 s.
+        var signal = [Float](repeating: 0.25, count: 40 * 16_000)
+        signal.replaceSubrange((39 * 16_000)..<signal.count, with: repeatElement(0, count: 16_000))
+        let session = CumulativeLiveTranscriptionSession(
+            transcribePreview: { samples in collector.add(samples); return "trecho" },
+            onUpdate: { updates.append($0) }
+        )
+
+        await session.append(signal)
+        try await waitUntil { !updates.texts.isEmpty }
+        _ = try await session.finish()
+
+        let buffers = collector.buffers
+        #expect(buffers.count > 2, "O backlog deve ser processado em commits limitados")
+        #expect(buffers.allSatisfy { $0.count <= 12 * 16_000 + 3_200 })
+        // Cada commit entrega um prefixo e o último preview entrega a cauda;
+        // retirando somente o padding, a sequência precisa ser bit a bit igual.
+        let delivered = buffers.flatMap { $0.dropLast(3_200).map(\.bitPattern) }
+        #expect(delivered == signal.map(\.bitPattern))
+        #expect(buffers.allSatisfy { $0.suffix(3_200).allSatisfy { $0.bitPattern == 0 } })
+    }
+
+    @Test("Áudio que chega durante inferência lenta não ultrapassa o limite do próximo commit")
+    func slowInferenceDoesNotCreateAnUnboundedCommit() async throws {
+        let gate = ControlledPreviewInference()
+        let collector = PreviewSignalCollector()
+        let updates = LiveTranscriptionUpdateCollector()
+        let session = CumulativeLiveTranscriptionSession(
+            transcribePreview: { samples in
+                collector.add(samples)
+                if collector.buffers.count == 1 { return await gate.transcribe() }
+                return "trecho"
+            },
+            onUpdate: { updates.append($0) }
+        )
+
+        await session.append([Float](repeating: 0.25, count: 16_000))
+        try await waitUntil { await gate.isActive }
+        await session.append([Float](repeating: 0.25, count: 38 * 16_000))
+        await session.append([Float](repeating: 0, count: 16_000))
+        #expect(collector.buffers.count == 1, "Só pode existir uma inferência ativa")
+        await gate.release()
+        try await waitUntil { updates.texts.count >= 2 }
+        _ = try await session.finish()
+
+        #expect(collector.buffers.allSatisfy { $0.count <= 12 * 16_000 + 3_200 })
+    }
+
     // Regressão do bug "texto some e volta" no overlay: ao estourar a janela,
     // o commit publicava só o texto confirmado — o preview da janela corrente
     // sumia da tela e era redigitado logo depois, praticamente igual.
@@ -159,8 +212,33 @@ struct LiveTranscriptionTests {
         #expect(cut <= samples.count)
     }
 
-    @Test("Stop espera a inferência cancelada e não publica resultado atrasado")
-    func finishDrainsActiveInferenceWithoutPublishing() async throws {
+    @Test("Busca de silêncio ignora região fora da janela máxima")
+    func commitCutIndexDoesNotSearchPastWindow() {
+        var samples = [Float](repeating: 0.25, count: 40 * 16_000)
+        samples.replaceSubrange((39 * 16_000)..<samples.count, with: repeatElement(0, count: 16_000))
+        let unboundedCut = CumulativeLiveTranscriptionSession.commitCutIndex(
+            samples: samples, searchStart: 128_000, windowSize: 3_840
+        )
+        let boundedCut = CumulativeLiveTranscriptionSession.commitCutIndex(
+            samples: samples, searchStart: 128_000, windowSize: 3_840, searchEnd: 192_000
+        )
+        #expect(unboundedCut > 39 * 16_000, "A fixture reproduz o corte além da janela")
+        #expect(boundedCut == 129_920, "Empates preservam a primeira janela silenciosa")
+    }
+
+    @Test("Busca limitada trata buffer vazio e limite além do áudio")
+    func commitCutIndexClampsSearchEnd() {
+        #expect(CumulativeLiveTranscriptionSession.commitCutIndex(
+            samples: [], searchStart: 128_000, windowSize: 3_840, searchEnd: 192_000
+        ) == 0)
+        let samples = [Float](repeating: 0.25, count: 1_000)
+        #expect(CumulativeLiveTranscriptionSession.commitCutIndex(
+            samples: samples, searchStart: 128_000, windowSize: 3_840, searchEnd: 192_000
+        ) == samples.count)
+    }
+
+    @Test("Stop e cancel esperam a inferência sem processar backlog ou publicar atraso", arguments: [false, true])
+    func finishDrainsActiveInferenceWithoutPublishing(cancel: Bool) async throws {
         let gate = ControlledPreviewInference()
         let collector = LiveTranscriptionUpdateCollector()
         let session = CumulativeLiveTranscriptionSession(
@@ -169,8 +247,13 @@ struct LiveTranscriptionTests {
         )
         await session.append([Float](repeating: 0.05, count: 16_000))
         try await waitUntil { await gate.isActive }
+        await session.append([Float](repeating: 0.05, count: 40 * 16_000))
         let completed = AtomicInt()
-        let finishing = Task { _ = try await session.finish(); completed.increment() }
+        let finishing = Task {
+            if cancel { await session.cancel() }
+            else { _ = try await session.finish() }
+            completed.increment()
+        }
         try await Task.sleep(for: .milliseconds(30))
         #expect(completed.current == 0, "Batch final deve aguardar a prediction ainda ativa")
         await session.append([Float](repeating: 0.05, count: 12_000))
