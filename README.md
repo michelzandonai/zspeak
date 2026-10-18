@@ -198,7 +198,7 @@ zspeak/
 ├── windows/                # aplicativo Windows independente
 ├── Tests/                  # testes e fixtures do macOS
 ├── docs/                   # decisões, handoffs e guias
-├── site/                   # site estático oficial
+├── site/                   # site React e API de acesso aos downloads
 ├── scripts/                # empacotamento macOS
 ├── Package.swift
 └── AGENTS.md
