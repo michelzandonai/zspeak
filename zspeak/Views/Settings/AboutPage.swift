@@ -56,7 +56,7 @@ struct AboutPage: View {
             }
 
             Section("Tecnologia") {
-                LabeledContent("Modelo ASR", value: "Parakeet TDT 0.6B V3")
+                LabeledContent("Modelo ASR", value: Transcriber.modelName)
                 LabeledContent("Motor", value: "FluidAudio (CoreML / ANE)")
                 LabeledContent("Processamento", value: "No dispositivo")
             }

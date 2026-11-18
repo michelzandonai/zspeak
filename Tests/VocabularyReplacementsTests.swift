@@ -46,6 +46,13 @@ struct VocabularyReplacementsTests {
         #expect(VocabularyReplacements(entries: entries).apply(to: input) == expected)
     }
 
+    @Test("Aliases em prosa funcionam e preservam os mesmos tokens dentro de código")
+    func preservesTechnicalLiterals() {
+        let plan = VocabularyReplacements(entries: [VocabularyEntry(term: "Codex", aliases: ["códex"])])
+        let input = "`códex` https://códex.exemplo.com ./códex --códex=a códex, 😀 códex"
+        #expect(plan.apply(to: input) == "`códex` https://códex.exemplo.com ./códex --códex=a Codex, 😀 Codex")
+    }
+
     @Test("Case folding e acentos não alteram bytes fora dos matches")
     func unicodeBytesAndCaseFolding() {
         let entries = [VocabularyEntry(term: "Street", aliases: ["straße"]),

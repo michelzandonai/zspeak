@@ -41,6 +41,8 @@ struct VocabularyStoreTests {
         #expect(gitPull.aliases.contains("get pull"))
         #expect(gitPull.aliases.contains("get pool"))
         #expect(gitPull.isEnabled == true)
+        #expect(gitPull.context == .dev)
+        #expect(claude.context == .global)
 
         let branch = try #require(store.entries.first { $0.term == "branch" })
         #expect(branch.aliases.isEmpty)
@@ -813,6 +815,38 @@ struct VocabularyStoreTests {
             == "sobe Terraform e kubectl")
     }
 
+    @Test("Upgrade limita comandos padrão a desenvolvimento e preserva escolhas do usuário")
+    func migratesOnlyUneditedDefaultCommands() throws {
+        let directory = try makeTmpDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let old = makeStore(in: directory)
+        old.entries = [
+            .init(term: "git pull", aliases: ["git pool", "gitpool", "get pull", "get pool"], weight: 10),
+            .init(term: "git push", aliases: ["envia o código"], weight: 12),
+            .init(term: "git status", aliases: ["get status"], weight: 12, isEnabled: false),
+            .init(term: "pull request", aliases: ["pool request"], weight: 12)
+        ]
+        old.save()
+        _ = makeStore(in: directory) // Drena a fila e deixa os marcadores da instalação anterior.
+        try FileManager.default.removeItem(at: directory.appendingPathComponent(".vocab_dev_scope_v7"))
+
+        let migrated = makeStore(in: directory)
+        let general: Set<VocabularyEntryContext> = [.global]
+        let codex = FocusedAppContext.categories(forBundleID: "com.openai.codex")
+        #expect(migrated.applyReplacements(to: "get pull e purequest", categories: general) == "get pull e purequest")
+        #expect(migrated.applyReplacements(to: "get pull e purequest", categories: codex) == "git pull e pull request")
+        #expect(migrated.applyReplacements(to: "envia o código e get status", categories: general) == "git push e get status")
+        #expect(migrated.entries.map(\.id) == old.entries.map(\.id))
+
+        let reopened = makeStore(in: directory)
+        #expect(reopened.buildVocabularyContext(categories: general).terms.map(\.text) == ["git push"])
+        let pull = try #require(reopened.entries.firstIndex { $0.term == "git pull" })
+        reopened.entries[pull].context = .global
+        reopened.save()
+        #expect(makeStore(in: directory).entries[pull].context == .global)
+    }
+
     @Test("FocusedAppContext classifica terminais e IDEs como dev")
     func testFocusedAppContextClassification() {
         // Sem bundle (desconhecido) → só global
@@ -825,6 +859,7 @@ struct VocabularyStoreTests {
         #expect(FocusedAppContext.categories(forBundleID: "com.googlecode.iterm2").contains(.dev))
         #expect(FocusedAppContext.categories(forBundleID: "com.microsoft.VSCode").contains(.dev))
         #expect(FocusedAppContext.categories(forBundleID: "com.apple.dt.Xcode").contains(.dev))
+        #expect(FocusedAppContext.categories(forBundleID: "com.openai.codex") == [.global, .dev])
         // Prefixo cobre a família JetBrains inteira
         #expect(FocusedAppContext.categories(forBundleID: "com.jetbrains.WebStorm").contains(.dev))
         // Prefixo não pode casar substring no meio do bundle

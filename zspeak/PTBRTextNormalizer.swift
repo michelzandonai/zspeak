@@ -110,7 +110,7 @@ enum PTBRTextNormalizer {
         let isWord: Bool  // letras/dígitos (inclui acentos); resto é separador
     }
 
-    private static func tokenize(_ text: String) -> [Token] {
+    private static func tokenize(_ text: Substring) -> [Token] {
         var tokens: [Token] = []
         var current = ""
         var currentIsWord: Bool?
@@ -332,8 +332,44 @@ enum PTBRTextNormalizer {
 
     // MARK: - Conversão
 
+    private static let portPrefix = try! NSRegularExpression(
+        pattern: #"\bporta(?:[ \t]+(?:tcp|udp|do[ \t]+servidor))?(?:[ \t]+é)?(?:[ \t]*:[ \t]*|[ \t]+)\z"#,
+        options: .caseInsensitive
+    )
+    private static let currencySuffix = try! NSRegularExpression(
+        pattern: #"\A[ \t]+(?:reais|real|dólares|dólar|euros?|r\$|us\$)(?!\p{L})"#,
+        options: .caseInsensitive
+    )
+
+    /// O Ultra pode escrever um número de porta com agrupamento de milhares.
+    /// Só altera um token numérico inteiro sob indicação explícita de porta.
+    private static func ungroupedPort(_ literal: Substring, after plainText: Substring, before rest: Substring) -> String? {
+        guard let first = literal.utf8.first, (49...57).contains(first), (5...6).contains(literal.utf8.count) else { return nil }
+        let groups = literal.split(separator: ".", omittingEmptySubsequences: false)
+        guard groups.count == 2, (1...2).contains(groups[0].count), groups[1].count == 3,
+              groups.allSatisfy({ isWrittenDigits(String($0)) }),
+              let port = Int(groups.joined()), (1...65_535).contains(port) else { return nil }
+
+        let prefix = String(plainText.suffix(64))
+        guard portPrefix.firstMatch(in: prefix, range: NSRange(prefix.startIndex..., in: prefix)) != nil else { return nil }
+        let suffix = String(rest.prefix(24))
+        guard currencySuffix.firstMatch(in: suffix, range: NSRange(suffix.startIndex..., in: suffix)) == nil else { return nil }
+        return String(port)
+    }
+
     private static func convertSpokenNumbers(in text: String) -> String {
-        let tokens = tokenize(text)
+        var tokens: [Token] = []
+        var start = text.startIndex
+        for literal in TextLiteralProtection.ranges(in: text) {
+            guard let range = Range(literal, in: text) else { continue }
+            let plainText = text[start..<range.lowerBound]
+            tokens.append(contentsOf: tokenize(plainText))
+            let original = text[range]
+            let value = ungroupedPort(original, after: plainText, before: text[range.upperBound...]) ?? String(original)
+            tokens.append(Token(text: value, isWord: false))
+            start = range.upperBound
+        }
+        tokens.append(contentsOf: tokenize(text[start...]))
         guard !tokens.isEmpty else { return text }
 
         var output = ""
@@ -559,7 +595,20 @@ enum PTBRTextNormalizer {
         var capitalizeNext = true
         var pendingBoundary = false
 
-        for char in text {
+        var literals = TextLiteralProtection.ranges(in: text).lazy.compactMap { Range($0, in: text) }.makeIterator()
+        var literal = literals.next()
+        var index = text.startIndex
+        while index < text.endIndex {
+            if let range = literal, range.lowerBound == index {
+                result += text[range]
+                index = range.upperBound
+                literal = literals.next()
+                capitalizeNext = false
+                pendingBoundary = false
+                continue
+            }
+            let char = text[index]
+            text.formIndex(after: &index)
             if capitalizeNext, char.isLetter {
                 result += String(char).uppercased()
                 capitalizeNext = false

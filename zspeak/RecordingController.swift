@@ -497,6 +497,9 @@ final class RecordingController {
         captureMonitoringTask = nil
         let taskToStop = recordingTask
         let sessionID = recordingSessionID
+        let vocabularyScope: VocabularyEntryContext = FocusedAppContext.categories(
+            forBundleID: TextInserter.previousApp?.bundleIdentifier
+        ).contains(.dev) ? .dev : .global
         state = .processing
 
         Task {
@@ -560,7 +563,7 @@ final class RecordingController {
                     "samples_asr": "\(asrSamples.count)",
                     "trimmed_samples": "\(trimResult.removedSampleCount)",
                 ]) {
-                    try await transcriber.transcribe(asrSamples)
+                    try await transcriber.transcribe(asrSamples, vocabularyScope: vocabularyScope)
                 }
 
                 // Aplica vocabulário customizado (substituições alias → term) via hook
@@ -576,7 +579,7 @@ final class RecordingController {
                 lastTranscription = text
                 let newID = persistTranscription?(
                     text,
-                    "Parakeet TDT 0.6B V3",
+                    Transcriber.modelName,
                     Double(samples.count) / 16000.0,
                     TextInserter.previousApp?.localizedName,
                     samples

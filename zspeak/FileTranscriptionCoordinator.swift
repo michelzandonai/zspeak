@@ -92,8 +92,8 @@ final class FileTranscriptionCoordinator {
 
         let modelName: String = {
             switch mode {
-            case .plain: return "Parakeet TDT (arquivo)"
-            case .meeting: return "Parakeet TDT + Diarizer"
+            case .plain: return "\(Transcriber.modelName) (arquivo)"
+            case .meeting: return "\(Transcriber.modelName) + Diarizer"
             }
         }()
 

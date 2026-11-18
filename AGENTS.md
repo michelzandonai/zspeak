@@ -4,13 +4,13 @@
 
 - **App:** zspeak — transcrição por voz local para devs
 - **Platform:** macOS 14+ (Sonoma), Apple Silicon (M1+)
-- **Language:** Swift 6.0+, SwiftUI
-- **IDE:** Xcode 15+
+- **Language:** Swift 6.1+, SwiftUI
+- **IDE:** Xcode com Swift 6.1 ou mais recente
 
 ## Tech Stack
 
-- **FluidAudio** v0.12.6 (Apache 2.0) — ASR via CoreML/Apple Neural Engine
-- **Parakeet TDT 0.6B V3** — modelo de transcrição (~496 MB, 25 idiomas, PT-BR incluído)
+- **FluidAudio** v0.18.3 (Apache 2.0) — ASR via Core ML e Apple Neural Engine
+- **Parakeet Ultra** — modelo de transcrição no macOS (~630 MB, PT-BR incluído)
 - **AVAudioEngine** — captura de áudio nativa (16kHz mono float32)
 - **CGEvent + NSPasteboard** — inserção de texto no app ativo
 - **KeyboardShortcuts** (sindresorhus) — hotkey global customizável
@@ -28,7 +28,7 @@
 
 - Single process — no sidecar, no WebSocket, no IPC
 - MenuBarExtra (tray app, hidden from Dock)
-- Pipeline: `Mic → AVAudioEngine → Parakeet TDT (CoreML/ANE) → Clipboard → Cmd+V`
+- Pipeline no macOS: `Mic → AVAudioEngine → Parakeet Ultra (Core ML/ANE) → Clipboard → Cmd+V`
 - Models auto-downloaded from HuggingFace on first use
 
 ## Conventions
@@ -78,6 +78,6 @@ zspeak/
 
 - Simplicidade é prioridade — MVP primeiro
 - Mesmo stack do Spokenly (FluidAudio + CoreML)
-- Só Parakeet TDT v3 por enquanto (sem multi-modelo)
+- Modelo de transcrição único por plataforma. Parakeet Ultra no macOS e Parakeet TDT 0.6B v3 no Windows.
 - 100% local — sem cloud, sem API keys
 - PT-BR com termos técnicos em inglês (code-switching nativo do modelo)

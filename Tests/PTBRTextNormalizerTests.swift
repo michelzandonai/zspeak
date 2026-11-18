@@ -162,6 +162,29 @@ struct PTBRTextNormalizerNumberTests {
         #expect(itn("total: vinte e três!") == "total: 23!")
         #expect(itn("(cento e dez)") == "(110)")
     }
+
+    @Test("Portas válidas perdem o agrupador somente no contexto de rede")
+    func ungroupNetworkPorts() {
+        #expect(itn("A porta do servidor é 8.080.") == "A porta do servidor é 8080.")
+        #expect(itn("use a porta TCP: 65.535") == "use a porta TCP: 65535")
+        #expect(itn("a porta UDP é 65.536") == "a porta UDP é 65.536")
+        #expect(itn("IP e porta 8.080.1:443") == "IP e porta 8.080.1:443")
+        #expect(itn("o total foi 8.080 reais; a versão é 8.080") == "o total foi 8.080 reais; a versão é 8.080")
+        #expect(itn("o preço da porta é 8.080 reais") == "o preço da porta é 8.080 reais")
+        #expect(itn("porta 08.080") == "porta 08.080")
+    }
+
+    @Test("URLs, caminhos, flags e código preservam os caracteres originais")
+    func preserveTechnicalLiterals() {
+        #expect(itn("git checkout release/vinte") == "git checkout release/vinte")
+        #expect(itn("acesse https://vinte.exemplo.com/status?key=cinquenta e espere cinco minutos") ==
+                "acesse https://vinte.exemplo.com/status?key=cinquenta e espere cinco minutos")
+        #expect(itn("exporte porta_vinte=vinte e rode --vinte ./trinta/vinte.sql") ==
+                "exporte porta_vinte=vinte e rode --vinte ./trinta/vinte.sql")
+        #expect(itn("execute `porta 8.080` e espere vinte segundos") == "execute `porta 8.080` e espere 20 segundos")
+        #expect(itn("antes ```sh\ngit checkout vinte\n``` espere trinta segundos") ==
+                "antes ```sh\ngit checkout vinte\n``` espere 30 segundos")
+    }
 }
 
 @Suite("PTBRTextNormalizer - capitalização de frases")
@@ -185,6 +208,8 @@ struct PTBRTextNormalizerCapitalizationTests {
     func naoMexeEmPontosInternos() {
         #expect(cap("veja o site.com agora") == "Veja o site.com agora")
         #expect(cap("versão 1.5 saiu") == "Versão 1.5 saiu")
+        #expect(cap("https://vinte.exemplo.com. depois eu confiro") == "https://vinte.exemplo.com. Depois eu confiro")
+        #expect(cap("release/vinte é o nome") == "release/vinte é o nome")
     }
 
     @Test("Texto já capitalizado fica idêntico")

@@ -7,7 +7,7 @@ import Testing
 /// esperado revisado).
 ///
 /// Rodar manualmente (usa modelo ASR real + fixtures locais):
-///   ZSPEAK_RUN_VAD_TRIM_BENCHMARK=1 xcodebuild ... test \
+///   TEST_RUNNER_ZSPEAK_RUN_VAD_TRIM_BENCHMARK=1 xcodebuild ... test \
 ///     -only-testing:'zspeakTests/VADTrimBenchmarkTests'
 ///
 /// Use o resultado para decidir os defaults de `VADTrimSettings` — thresholds
@@ -24,10 +24,8 @@ struct VADTrimBenchmarkTests {
         }
 
         let store = BenchmarkStore()
-        guard !store.fixtures.isEmpty else {
-            print("SKIP: sem fixtures de benchmark — grave fixtures na aba Benchmark antes")
-            return
-        }
+        await store.loadFixturesAsync()
+        try #require(!store.fixtures.isEmpty, "Cadastre amostras na aba Benchmark antes de rodar o A/B")
 
         let transcriber = Transcriber()
         try await transcriber.initialize()

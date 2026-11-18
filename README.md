@@ -2,7 +2,7 @@
 
 Transcrição por voz local para devs, nativa no macOS e no Windows.
 
-O zspeak captura o microfone, transcreve com o Parakeet TDT 0.6B V3 e insere o
+O zspeak captura o microfone, transcreve com o Parakeet e insere o
 texto no aplicativo que estava em foco. Áudio, texto, configurações e histórico
 permanecem na máquina: não há cloud, API key, login ou telemetria.
 
@@ -15,7 +15,7 @@ permanecem na máquina: não há cloud, API key, login ou telemetria.
 | Captura | AVAudioEngine | NAudio/WASAPI |
 | ASR | FluidAudio + CoreML/ANE | sherpa-onnx + ONNX Runtime |
 | Inserção | Clipboard + `Cmd+V` | Clipboard + `Ctrl+V` |
-| Modelo | Parakeet TDT 0.6B V3 | Parakeet TDT 0.6B V3 |
+| Modelo | Parakeet Ultra | Parakeet TDT 0.6B V3 |
 
 - [Guia do macOS](#macos)
 - [Guia do Windows](windows/README.md)
@@ -26,7 +26,7 @@ permanecem na máquina: não há cloud, API key, login ou telemetria.
 ## Como funciona
 
 ```text
-Microfone -> áudio mono 16 kHz -> Parakeet TDT V3 -> Clipboard -> app em foco
+Microfone -> áudio mono 16 kHz -> Parakeet -> Clipboard -> app em foco
 ```
 
 1. Use a hotkey global para começar a gravação.
@@ -74,7 +74,7 @@ Builds, modelos e caches não são commitados no repositório.
 
 - macOS 14 Sonoma ou superior;
 - Apple Silicon (M1 ou mais novo);
-- Xcode 15 ou superior;
+- Xcode com Swift 6.1 ou mais recente;
 - permissões de Microfone e Acessibilidade;
 - internet no primeiro uso para baixar o modelo.
 
@@ -104,8 +104,8 @@ xcodebuild -scheme zspeak -configuration Debug -destination 'platform=macOS' bui
 ```
 
 Na primeira captura, autorize o microfone e a Acessibilidade em
-`System Settings -> Privacy & Security`. O app baixa o modelo de ASR pelo
-FluidAudio e o mantém em cache para os próximos usos offline.
+`System Settings -> Privacy & Security`. O app baixa o Parakeet Ultra pelo
+FluidAudio no primeiro uso e o mantém em cache para os próximos usos offline.
 
 ### Recursos atuais do macOS
 

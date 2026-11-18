@@ -22,6 +22,7 @@ enum FocusedAppContext {
         "co.zeit.hyper",
         // IDEs / editores
         "com.apple.dt.Xcode",
+        "com.openai.codex",
         "com.microsoft.VSCode",
         "com.microsoft.VSCodeInsiders",
         "com.vscodium",

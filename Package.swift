@@ -5,7 +5,7 @@ let package = Package(
     name: "zspeak",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.12.4"),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.18.3"),
         .package(url: "https://github.com/sindresorhus/LaunchAtLogin-Modern.git", from: "1.0.0"),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", from: "2.30.6"),
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts.git", from: "2.0.0"),

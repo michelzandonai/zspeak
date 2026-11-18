@@ -6,10 +6,10 @@ import Testing
 /// Testes de integração "fim-a-fim" do pipeline de transcrição.
 ///
 /// Carregam fixtures reais de áudio (Tests/Fixtures/*.wav) e rodam o modelo
-/// Parakeet TDT v3 via `Transcriber` + `AudioFileTranscriber`.
+/// Parakeet Ultra via `Transcriber` + `AudioFileTranscriber`.
 ///
 /// ATENÇÃO — primeira execução:
-///   O FluidAudio baixa o modelo Parakeet (~496 MB) do HuggingFace na primeira
+///   O FluidAudio baixa o modelo Parakeet Ultra (~630 MB) do HuggingFace na primeira
 ///   vez que `Transcriber.initialize()` é chamado. Isso pode levar vários
 ///   minutos dependendo da conexão. Execuções seguintes usam cache local.
 ///
@@ -96,7 +96,7 @@ struct TranscriberIntegrationTests {
 
         let fileTranscriber = AudioFileTranscriber(
             transcribe: { samples in
-                try await transcriber.transcribe(samples, source: .system)
+                try await transcriber.transcribe(samples, vocabularyScope: .dev)
             },
             diarizer: nil
         )
@@ -112,7 +112,7 @@ struct TranscriberIntegrationTests {
 
     // MARK: - Testes
 
-    /// Timeout generoso: a primeira execução baixa ~496 MB do HuggingFace.
+    /// Timeout generoso: a primeira execução baixa cerca de 630 MB do HuggingFace.
     /// Depois que o modelo está em cache, a transcrição de áudios curtos é <10s.
     @Test(
         "pt-short.wav contém 'olá' ou 'teste'",
@@ -174,6 +174,33 @@ struct TranscriberIntegrationTests {
 
         // Duração aproxima do esperado (~13s)
         #expect(result.durationSeconds > 8.0 && result.durationSeconds < 25.0)
+    }
+
+    @Test("Vocabulário conservador carrega no cache do zspeak e preserva fala geral", .timeLimit(.minutes(10)))
+    func conservativeVocabularyLoadsFromAppCache() async throws {
+        guard !Self.shouldSkip else { return }
+
+        let converter = AudioConverter()
+        let plain = try converter.resampleAudioFile(fixtureURL("pt-short.wav"))
+        let technical = try converter.resampleAudioFile(fixtureURL("pt-long.wav"))
+        let transcriber = try await Self.sharedTranscriber.get()
+        let vocabulary = CustomVocabularyContext(terms: [
+            CustomVocabularyTerm(text: "Kubernetes"),
+            CustomVocabularyTerm(text: "PostgreSQL"),
+            CustomVocabularyTerm(text: "Redis"),
+            CustomVocabularyTerm(text: "pull request", aliases: ["pool request"]),
+        ])
+        try await transcriber.configureVocabulary(global: nil, development: vocabulary)
+        let plainWithoutCTC = try await transcriber.transcribe(plain, vocabularyScope: .global)
+        let plainWithCTC = try await transcriber.transcribe(plain, vocabularyScope: .dev)
+        let technicalWithCTC = try await transcriber.transcribe(technical, vocabularyScope: .dev)
+        try await transcriber.configureVocabulary(global: nil, development: nil)
+
+        #expect(plainWithCTC == plainWithoutCTC)
+        #expect(!plainWithCTC.isEmpty)
+        for term in ["deploy", "kubernetes", "postgresql", "redis"] {
+            #expect(technicalWithCTC.localizedCaseInsensitiveContains(term))
+        }
     }
 
     @Test(

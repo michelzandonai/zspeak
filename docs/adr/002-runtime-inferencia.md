@@ -6,7 +6,7 @@ Aceito
 
 ## Contexto
 
-O modelo Parakeet TDT 0.6B V3 precisa de um runtime para rodar no Apple Silicon. Opcoes avaliadas:
+O Parakeet precisa de um runtime para rodar no Apple Silicon. Opcoes avaliadas:
 
 - **FluidAudio** (Swift, CoreML/ANE): lib open source Apache 2.0, mesma usada pelo Spokenly. Auto-download de modelos. SPM.
 - **parakeet-mlx** (Python, MLX/Metal): Nativa Apple Silicon via Metal GPU. Requer Python sidecar.
@@ -31,15 +31,15 @@ Adotamos **FluidAudio** (github.com/FluidInference/FluidAudio) com inferencia vi
 - FluidAudio e a mesma lib usada pelo Spokenly em producao (100k+ usuarios)
 - README do FluidAudio confirma: Spokenly e usuario
 - Provado e validado em producao real
-- v0.12.6, 1.741 stars, push diario, ativamente mantido
+- Versao fixada no macOS: v0.18.3
 
 ### O que vem incluso
 
-- ASR usado pelo app: Parakeet TDT 0.6B v3 via CoreML
+- ASR usado pelo app macOS: Parakeet Ultra via CoreML
 - Diarizacao offline usada no modo Reuniao
 - Utilitarios de audio para leitura/resampling de arquivos
 - Auto-download de modelos do HuggingFace
-- Modelos CoreML pre-convertidos: `FluidInference/parakeet-tdt-0.6b-v3-coreml` (164k downloads)
+- Modelo CoreML: `FluidInference/parakeet-ultra-coreml`
 
 ### Processo unico
 
@@ -51,10 +51,10 @@ Adotamos **FluidAudio** (github.com/FluidInference/FluidAudio) com inferencia vi
 ### API simples (~5 linhas)
 
 ```swift
-let models = try await AsrModels.downloadAndLoad(version: .v3)
-let asrManager = AsrManager(config: .default)
-try await asrManager.initialize(models: models)
-let result = try await asrManager.transcribe(samples)
+let models = try await AsrModels.downloadAndLoad(version: .ultra)
+let asrManager = AsrManager(config: .default, models: models)
+var decoder = try TdtDecoderState(decoderLayers: await asrManager.decoderLayerCount)
+let result = try await asrManager.transcribe(samples, decoderState: &decoder)
 ```
 
 ### Integracao

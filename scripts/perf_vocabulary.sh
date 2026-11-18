@@ -12,6 +12,7 @@ git -C "$TASK_ROOT" show "$BASELINE_REV:zspeak/PTBRTextNormalizer.swift" \
 xcrun swiftc -O -whole-module-optimization -swift-version 6 \
   "$TASK_ROOT/zspeak/VocabularyEntry.swift" \
   "$TASK_ROOT/zspeak/VocabularyReplacements.swift" \
+  "$TASK_ROOT/zspeak/TextLiteralProtection.swift" \
   "$TASK_ROOT/zspeak/PTBRTextNormalizer.swift" \
   "$TASK_TEMP/PTBRTextNormalizerReference.swift" \
   "$TASK_ROOT/Tests/Support/VocabularyReplacementReference.swift" \

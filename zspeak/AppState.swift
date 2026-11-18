@@ -202,7 +202,7 @@ final class AppState {
         )
         self.fileCoordinator = FileTranscriptionCoordinator(
             transcribe: { [asr] samples in
-                try await asr.transcribe(samples, source: .system)
+                try await asr.transcribe(samples, vocabularyScope: .dev)
             },
             textInserter: inserter
         )
@@ -212,11 +212,9 @@ final class AppState {
         )
 
         // Nova gravação invalida a correção LLM em voo: o replace dela
-        // apagaria o texto recém-colado da gravação nova. Também reconfigura o
-        // biasing nativo para as categorias do app em foco (fire-and-forget).
+        // apagaria o texto recém-colado da gravação nova.
         self.recordingController.onRecordingWillStart = { [weak self] in
             self?.llmCoordinator.cancelActiveCorrection()
-            self?.reapplyVocabularyForFocusedApp()
         }
 
         // Pipeline pré-ASR: high-pass (antes do VAD — rumble falseia a
@@ -313,9 +311,6 @@ final class AppState {
         request: FileTranscriptionQueue.Request,
         onProgress: @escaping @MainActor (FileTranscriptionPhase) -> Void
     ) async throws -> FileTranscriptionQueue.Outcome {
-        if isModelReady, let store = vocabularyStore {
-            try? await transcriber.configureVocabulary(store.buildVocabularyContext())
-        }
         let outcome = try await fileCoordinator.transcribeFile(
             url: request.url,
             mode: request.mode,
@@ -475,12 +470,6 @@ final class AppState {
         numSpeakers: Int? = nil,
         onProgress: @escaping @MainActor (FileTranscriptionPhase) -> Void
     ) async throws -> FileTranscriptionResult {
-        // Uma gravação anterior pode ter estreitado o biasing para o app em
-        // foco; arquivo não tem app de destino — volta ao vocabulário completo.
-        // Guard de assinatura no Transcriber torna isso barato quando já está.
-        if isModelReady, let store = vocabularyStore {
-            try? await transcriber.configureVocabulary(store.buildVocabularyContext())
-        }
         let outcome = try await fileCoordinator.transcribeFile(
             url: url,
             mode: mode,
@@ -549,22 +538,9 @@ final class AppState {
 
         guard isModelReady else { return }
 
-        let context = vocabularyStore?.buildVocabularyContext()
-        try await transcriber.configureVocabulary(context)
-    }
-
-    /// Reconfigura o biasing nativo do decoder para as categorias do app em
-    /// foco no momento do start da gravação. Fire-and-forget: fora do caminho
-    /// crítico de latência; o guard de assinatura no `Transcriber` faz disso um
-    /// no-op quando as categorias não mudaram desde a última gravação.
-    private func reapplyVocabularyForFocusedApp() {
-        guard isModelReady, let store = vocabularyStore else { return }
-        let categories = FocusedAppContext.categories(
-            forBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        try await transcriber.configureVocabulary(
+            global: vocabularyStore?.buildVocabularyContext(categories: [.global]),
+            development: vocabularyStore?.buildVocabularyContext()
         )
-        let context = store.buildVocabularyContext(categories: categories)
-        Task { [transcriber] in
-            try? await transcriber.configureVocabulary(context)
-        }
     }
 }

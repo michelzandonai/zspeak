@@ -111,9 +111,16 @@ extension AudioCapturing {
 protocol Transcribing: Actor {
     func initialize() async throws
     func transcribe(_ samples: [Float]) async throws -> String
+    func transcribe(_ samples: [Float], vocabularyScope: VocabularyEntryContext) async throws -> String
     func startLiveTranscription(
         onUpdate: @escaping @Sendable (LiveTranscriptionUpdate) -> Void
     ) async throws -> any LiveTranscriptionSession
+}
+
+extension Transcribing {
+    func transcribe(_ samples: [Float], vocabularyScope: VocabularyEntryContext) async throws -> String {
+        try await transcribe(samples)
+    }
 }
 
 /// Inserção de texto no app em foco (Cmd+V simulado) e operações de clipboard.

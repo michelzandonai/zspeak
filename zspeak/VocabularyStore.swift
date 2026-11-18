@@ -12,6 +12,10 @@ enum VocabularyBiasingProfile {
     static let minSimilarity: Float = 0.60
     static let minCombinedConfidence: Float = 0.58
     static let minTermLength = 3
+    static let thresholds = VocabularyBoostingSession.Thresholds(cbw: 0, minSimilarity: 0.70)
+    // Em listas curtas, o resgate puramente acústico pode inserir um termo
+    // sem candidato semelhante no texto, mesmo com os limiares conservadores.
+    static let rescorerConfig = VocabularyRescorer.Config(spotterRescueEnabled: false)
 }
 
 /// Camada de persistência para vocabulário customizado
@@ -166,7 +170,7 @@ final class VocabularyStore {
     }
 
     /// Captura snapshot no main e enfileira encode+write no background.
-    private func saveJSON() {
+    private func saveJSON(completionMarker: URL? = nil) {
         let snapshot = entries
         let file = vocabularyFile
         persistQueue.async {
@@ -179,8 +183,11 @@ final class VocabularyStore {
                 entries: snapshot
             )
 
-            guard let data = try? encoder.encode(envelope) else { return }
-            try? data.write(to: file, options: .atomic)
+            guard let data = try? encoder.encode(envelope),
+                  (try? data.write(to: file, options: .atomic)) != nil else { return }
+            if let completionMarker {
+                try? Data().write(to: completionMarker, options: .atomic)
+            }
         }
     }
 
@@ -430,6 +437,41 @@ final class VocabularyStore {
             flagName: ".vocab_alias_cleanup_v6",
             in: directory
         )
+        migrateDefaultCommands(toDevelopmentIn: directory)
+    }
+
+    private static func defaultContext(for term: String) -> VocabularyEntryContext {
+        if term.hasPrefix("git ") || term == "origin/main" || term == "stash@{0}" || term == "pull request" {
+            return .dev
+        }
+        return .global
+    }
+
+    private static func defaultAliases(for term: String, previous: [String]) -> [String] {
+        term == "pull request" ? previous + ["purequest"] : previous
+    }
+
+    /// Move somente entradas cujo conteúdo coincide com os defaults anteriores.
+    /// Entradas editadas, desabilitadas ou removidas continuam como o usuário deixou.
+    private func migrateDefaultCommands(toDevelopmentIn directory: URL) {
+        let flag = directory.appendingPathComponent(".vocab_dev_scope_v7")
+        guard !FileManager.default.fileExists(atPath: flag.path) else { return }
+
+        let seeds = Self.defaultEntriesV1 + Self.defaultEntriesV3 + Self.defaultEntriesV4
+        let commands = Dictionary(uniqueKeysWithValues: seeds.filter { Self.defaultContext(for: $0.term) == .dev }
+            .map { ($0.term, (aliases: $0.aliases, weight: $0.weight)) })
+        let aliasUpdates = Dictionary(uniqueKeysWithValues: Self.defaultAliasUpdatesV3.map { ($0.term, $0.aliases) })
+        var migrated = entries
+        for index in migrated.indices {
+            let entry = migrated[index]
+            guard entry.context == .global, entry.isEnabled, let command = commands[entry.term],
+                  entry.weight == command.weight,
+                  Set(entry.aliases) == Set(command.aliases + (aliasUpdates[entry.term] ?? [])) else { continue }
+            migrated[index].context = .dev
+            migrated[index].aliases = Self.defaultAliases(for: entry.term, previous: entry.aliases)
+        }
+        entries = migrated
+        saveJSON(completionMarker: flag)
     }
 
     /// Aliases de seeds antigos que sequestravam palavras reais: "wave",
@@ -456,7 +498,12 @@ final class VocabularyStore {
                 $0.term.caseInsensitiveCompare(def.term) == .orderedSame
             }
             if !alreadyExists {
-                entries.append(VocabularyEntry(term: def.term, aliases: def.aliases, weight: def.weight))
+                entries.append(VocabularyEntry(
+                    term: def.term,
+                    aliases: Self.defaultAliases(for: def.term, previous: def.aliases),
+                    weight: def.weight,
+                    context: Self.defaultContext(for: def.term)
+                ))
                 mutated = true
             }
         }

@@ -76,7 +76,15 @@ struct VocabularyReplacements {
         var result = ""
         result.reserveCapacity(text.utf8.count)
         var cursor = 0
+        let literals = TextLiteralProtection.ranges(in: text)
+        var literalIndex = 0
         for match in matches {
+            while literalIndex < literals.count, NSMaxRange(literals[literalIndex]) <= match.range.location {
+                literalIndex += 1
+            }
+            if literalIndex < literals.count, literals[literalIndex].location < NSMaxRange(match.range) {
+                continue
+            }
             let alias = original.substring(with: match.range)
             guard let replacement = replacement(for: alias) else { continue }
             result += original.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
